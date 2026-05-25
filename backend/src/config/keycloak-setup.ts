@@ -1,0 +1,132 @@
+import logger from '../utils/logger';
+import axios from 'axios';
+
+export class KeycloakSetupService {
+  private isSimulation: boolean;
+
+  constructor() {
+    this.isSimulation =
+      process.env.KEYCLOAK_SIMULATION === 'true' ||
+      process.env.NODE_ENV === 'development' ||
+      !process.env.KEYCLOAK_ADMIN_PASSWORD;
+  }
+
+  async ensureClientAndRolesExist(): Promise<void> {
+    if (this.isSimulation) {
+      logger.info('🔑 Keycloak setup: Running in SIMULATION mode. Auto-configuring atlas-prod client and roles locally in memory.');
+      return;
+    }
+
+    try {
+      logger.info('🔑 Keycloak setup: Contacting Keycloak Admin API to check client and roles...');
+
+      const adminUrl = process.env.KEYCLOAK_ADMIN_URL || 'https://keycloak.bachatt.app';
+      const realm = process.env.VITE_KEYCLOAK_REALM || 'master';
+      const clientId = process.env.KEYCLOAK_ADMIN_CLIENT_ID || 'admin-cli';
+      const username = process.env.KEYCLOAK_ADMIN_USERNAME || 'admin';
+      const password = process.env.KEYCLOAK_ADMIN_PASSWORD;
+
+      // 1. Get Admin Access Token
+      const tokenUrl = `${adminUrl}/realms/${realm}/protocol/openid-connect/token`;
+      const tokenRes = await axios.post(
+        tokenUrl,
+        new URLSearchParams({
+          grant_type: 'password',
+          client_id: clientId,
+          username,
+          password: password || '',
+        }).toString(),
+        {
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        }
+      );
+
+      const accessToken = tokenRes.data.access_token;
+      logger.info('🔑 Keycloak setup: Authenticated with Keycloak Admin API.');
+
+      // 2. Check if client 'atlas-prod' exists
+      const targetClientId = process.env.KEYCLOAK_AUDIENCE || 'atlas-prod';
+      const clientsUrl = `${adminUrl}/admin/realms/${realm}/clients`;
+      const clientsRes = await axios.get(clientsUrl, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        params: { clientId: targetClientId },
+      });
+
+      let clientDbId = '';
+      const existingClient = clientsRes.data.find((c: any) => c.clientId === targetClientId);
+
+      if (existingClient) {
+        clientDbId = existingClient.id;
+        logger.info(`🔑 Keycloak setup: Client '${targetClientId}' already exists.`);
+      } else {
+        // Create Client
+        logger.info(`🔑 Keycloak setup: Client '${targetClientId}' not found. Creating...`);
+        const createRes = await axios.post(
+          clientsUrl,
+          {
+            clientId: targetClientId,
+            enabled: true,
+            publicClient: true,
+            directAccessGrantsEnabled: true,
+            standardFlowEnabled: true,
+            redirectUris: [
+              'https://atlas.bachatt.app/*',
+              'http://localhost:5173/*',
+              'http://localhost:5174/*',
+            ],
+            webOrigins: ['+'],
+          },
+          {
+            headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+          }
+        );
+        logger.info(`🔑 Keycloak setup: Client '${targetClientId}' created successfully.`);
+        
+        // Fetch to get ID
+        const recheckRes = await axios.get(clientsUrl, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+          params: { clientId: targetClientId },
+        });
+        clientDbId = recheckRes.data.find((c: any) => c.clientId === targetClientId)?.id || '';
+      }
+
+      // 3. Ensure Roles Exist
+      const roles = ['atlas_super_admin', 'atlas_group_admin', 'atlas_user'];
+      const rolesUrl = `${adminUrl}/admin/realms/${realm}/roles`;
+
+      for (const roleName of roles) {
+        try {
+          await axios.get(`${rolesUrl}/${roleName}`, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+          logger.info(`🔑 Keycloak setup: Role '${roleName}' already exists.`);
+        } catch (err: any) {
+          if (err.response && err.response.status === 404) {
+            logger.info(`🔑 Keycloak setup: Creating realm role '${roleName}'...`);
+            await axios.post(
+              rolesUrl,
+              { name: roleName, description: `Atlas ${roleName.replace('atlas_', '')} role` },
+              { headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' } }
+            );
+            logger.info(`🔑 Keycloak setup: Role '${roleName}' created.`);
+          } else {
+            throw err;
+          }
+        }
+      }
+
+      logger.info('🔑 Keycloak setup: Configuration complete.');
+    } catch (error: any) {
+      logger.error('🔑 Keycloak setup failed: ' + (error.response?.data?.error_description || error.message));
+      // In development, do not crash if Keycloak is unavailable, fallback to simulation
+      if (process.env.NODE_ENV === 'development') {
+        logger.warn('🔑 Keycloak setup failed in development environment. Continuing with startup...');
+      } else {
+        throw error;
+      }
+    }
+  }
+}
+
+export const keycloakSetupService = new KeycloakSetupService();
+export default keycloakSetupService;

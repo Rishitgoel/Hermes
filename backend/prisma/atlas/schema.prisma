@@ -1,0 +1,213 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL_ATLAS")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ══════════════════════════════════════════
+// GROUPS
+// ══════════════════════════════════════════
+
+model Group {
+  id               String           @id @default(uuid())
+  name             String           @unique            // "Growth", "Retention"
+  slug             String           @unique            // "growth", "retention"
+  description      String                              // What tables/data this gives access to
+  icon             String?                              // Lucide icon name
+  color            String?                              // Hex color for card
+  externalGroupId  String?          @map("external_group_id")  // Redash group ID
+  isActive         Boolean          @default(true) @map("is_active")
+  createdAt        DateTime         @default(now()) @map("created_at")
+  updatedAt        DateTime         @updatedAt @map("updated_at")
+  tables           String[]
+
+  admins           GroupAdmin[]
+  accessRequests   AccessRequest[]
+  userAccesses     UserAccess[]
+
+  @@map("groups")
+}
+
+model GroupAdmin {
+  id               String           @id @default(uuid())
+  groupId          String           @map("group_id")
+  userId           String           @map("user_id")           // Keycloak user ID
+  userName         String           @map("user_name")
+  userEmail        String           @map("user_email")
+  assignedAt       DateTime         @default(now()) @map("assigned_at")
+  assignedBy       String           @map("assigned_by")
+
+  group            Group            @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+  @@map("group_admins")
+}
+
+// ══════════════════════════════════════════
+// ACCESS REQUESTS
+// ══════════════════════════════════════════
+
+model AccessRequest {
+  id               String           @id @default(uuid())
+  groupId          String           @map("group_id")
+
+  // Requester (from Keycloak token)
+  requesterId      String           @map("requester_id")
+  requesterName    String           @map("requester_name")
+  requesterEmail   String           @map("requester_email")
+
+  // Request
+  justification    String
+  duration         AccessDuration   @default(PERMANENT)
+  expiresAt        DateTime?        @map("expires_at")
+
+  // Review
+  status           RequestStatus    @default(PENDING)
+  reviewerId       String?          @map("reviewer_id")
+  reviewerName     String?          @map("reviewer_name")
+  reviewNote       String?          @map("review_note")
+  reviewedAt       DateTime?        @map("reviewed_at")
+
+  // Provisioning
+  provisionedAt    DateTime?        @map("provisioned_at")
+  provisionError   String?          @map("provision_error")
+  revokedAt        DateTime?        @map("revoked_at")
+  revokeReason     String?          @map("revoke_reason")
+
+  createdAt        DateTime         @default(now()) @map("created_at")
+  updatedAt        DateTime         @updatedAt @map("updated_at")
+
+  group            Group            @relation(fields: [groupId], references: [id])
+  auditEntries     AuditEntry[]
+
+  @@index([requesterId])
+  @@index([status])
+  @@index([groupId, status])
+  @@index([expiresAt])
+  @@map("access_requests")
+}
+
+// ══════════════════════════════════════════
+// USER ACCESS (source of truth)
+// ══════════════════════════════════════════
+
+model UserAccess {
+  id               String           @id @default(uuid())
+  userId           String           @map("user_id")
+  userName         String           @map("user_name")
+  userEmail        String           @map("user_email")
+  groupId          String           @map("group_id")
+  externalUserId   String?          @map("external_user_id")  // Redash user ID
+
+  isActive         Boolean          @default(true) @map("is_active")
+  grantedAt        DateTime         @default(now()) @map("granted_at")
+  expiresAt        DateTime?        @map("expires_at")
+  revokedAt        DateTime?        @map("revoked_at")
+
+  grantedBy        String           @map("granted_by")
+  accessRequestId  String?          @map("access_request_id")
+
+  createdAt        DateTime         @default(now()) @map("created_at")
+  updatedAt        DateTime         @updatedAt @map("updated_at")
+
+  group            Group            @relation(fields: [groupId], references: [id])
+
+  @@unique([userId, groupId, isActive])
+  @@index([expiresAt, isActive])
+  @@map("user_accesses")
+}
+
+// ══════════════════════════════════════════
+// NOTIFICATIONS (in-app)
+// ══════════════════════════════════════════
+
+model Notification {
+  id               String           @id @default(uuid())
+  userId           String           @map("user_id")
+  title            String
+  message          String
+  linkUrl          String?          @map("link_url")
+  isRead           Boolean          @default(false) @map("is_read")
+  createdAt        DateTime         @default(now()) @map("created_at")
+
+  @@index([userId, isRead])
+  @@map("notifications")
+}
+
+// ══════════════════════════════════════════
+// AUDIT LOG
+// ══════════════════════════════════════════
+
+model AuditEntry {
+  id               String           @id @default(uuid())
+  action           String                                     // "REQUEST_CREATED", "APPROVED", etc.
+  performerId      String           @map("performer_id")
+  performerName    String           @map("performer_name")
+  targetUserId     String?          @map("target_user_id")
+  targetUserName   String?          @map("target_user_name")
+  groupId          String?          @map("group_id")
+  accessRequestId  String?          @map("access_request_id")
+  details          Json?
+  ipAddress        String?          @map("ip_address")
+  createdAt        DateTime         @default(now()) @map("created_at")
+
+  accessRequest    AccessRequest?   @relation(fields: [accessRequestId], references: [id])
+
+  @@index([performerId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_entries")
+}
+
+// ══════════════════════════════════════════
+// REDASH CACHE (synced from Redash on setup)
+// ══════════════════════════════════════════
+
+model RedashUser {
+  id               Int              @id
+  name             String
+  email            String           @unique
+  isDisabled       Boolean          @default(false) @map("is_disabled")
+  groupIds         Int[]            @map("group_ids")
+  lastSyncedAt     DateTime         @map("last_synced_at")
+  createdAt        DateTime         @default(now()) @map("created_at")
+
+  @@map("redash_users")
+}
+
+model RedashGroup {
+  id               Int              @id
+  name             String
+  type             String
+  memberCount      Int              @default(0) @map("member_count")
+  lastSyncedAt     DateTime         @map("last_synced_at")
+  createdAt        DateTime         @default(now()) @map("created_at")
+
+  @@map("redash_groups")
+}
+
+// ══════════════════════════════════════════
+// ENUMS
+// ══════════════════════════════════════════
+
+enum AccessDuration {
+  ONE_DAY
+  ONE_WEEK
+  ONE_MONTH
+  THREE_MONTHS
+  PERMANENT
+}
+
+enum RequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  PROVISIONING
+  PROVISIONED
+  PROVISION_FAILED
+  EXPIRED
+  REVOKED
+}

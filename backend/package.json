@@ -1,0 +1,41 @@
+{
+  "name": "atlas-backend",
+  "version": "1.0.0",
+  "main": "dist/app.js",
+  "scripts": {
+    "dev": "nodemon --watch 'src/**/*.ts' --exec ts-node src/app.ts",
+    "build": "tsc",
+    "start": "node dist/app.js",
+    "prisma:generate": "prisma generate --schema=prisma/atlas/schema.prisma",
+    "prisma:migrate": "prisma migrate dev --schema=prisma/atlas/schema.prisma --name init",
+    "prisma:seed": "ts-node prisma/atlas/seed.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-secrets-manager": "^3.1053.0",
+    "@prisma/client": "^6.8.2",
+    "axios": "^1.9.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.5.0",
+    "express": "^5.1.0",
+    "express-jwt": "^8.5.1",
+    "express-rate-limit": "^7.1.5",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "jwks-rsa": "^3.2.0",
+    "node-cron": "^4.2.1",
+    "pino": "^9.7.0",
+    "pino-http": "^10.4.0",
+    "pino-pretty": "^13.0.0",
+    "zod": "^3.25.71"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.18",
+    "@types/express": "^5.0.2",
+    "@types/node": "^22.15.19",
+    "@types/node-cron": "^3.0.11",
+    "nodemon": "^3.1.10",
+    "prisma": "^6.8.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.6.3"
+  }
+}

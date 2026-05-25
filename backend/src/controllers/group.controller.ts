@@ -1,0 +1,143 @@
+import { Request, Response, NextFunction } from 'express';
+import BaseController from './base.controller';
+import prisma from '../config/prisma';
+import { RequestStatus } from '@prisma/client';
+
+export class GroupController extends BaseController {
+  // GET /api/groups
+  async getGroups(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const userId = this.getUserId();
+      if (!userId) return;
+
+      const groups = await prisma.group.findMany({
+        where: { isActive: true },
+        include: {
+          admins: true,
+          _count: {
+            select: {
+              userAccesses: { where: { isActive: true } },
+            },
+          },
+        },
+        orderBy: { name: 'asc' },
+      });
+
+      // Get user's active accesses
+      const activeAccesses = await prisma.userAccess.findMany({
+        where: { userId, isActive: true },
+      });
+
+      // Get user's pending requests
+      const pendingRequests = await prisma.accessRequest.findMany({
+        where: { requesterId: userId, status: RequestStatus.PENDING },
+      });
+
+      const enrichedGroups = groups.map(g => {
+        let accessStatus = 'NONE';
+        
+        const hasActive = activeAccesses.some(a => a.groupId === g.id);
+        const hasPending = pendingRequests.some(r => r.groupId === g.id);
+
+        if (hasActive) {
+          accessStatus = 'ACTIVE';
+        } else if (hasPending) {
+          accessStatus = 'PENDING';
+        }
+
+        return {
+          id: g.id,
+          name: g.name,
+          slug: g.slug,
+          description: g.description,
+          icon: g.icon,
+          color: g.color,
+          externalGroupId: g.externalGroupId,
+          tables: g.tables,
+          memberCount: g._count.userAccesses,
+          accessStatus,
+          admins: g.admins.map(adm => ({
+            userId: adm.userId,
+            userName: adm.userName,
+            userEmail: adm.userEmail,
+          })),
+        };
+      });
+
+      this.sendResponse(enrichedGroups, 'Groups retrieved successfully');
+    } catch (error) {
+      this.handleError(error, 'Failed to retrieve groups');
+    }
+  }
+
+  // GET /api/groups/:slug
+  async getGroupDetail(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const slug = this.params.slug as string;
+      const userId = this.getUserId();
+      if (!userId) return;
+
+      const group = await prisma.group.findUnique({
+        where: { slug },
+        include: {
+          admins: true,
+          userAccesses: {
+            where: { isActive: true },
+            orderBy: { grantedAt: 'desc' },
+          },
+        },
+      }) as any;
+
+      if (!group) {
+        this.sendErrorResponse('Group not found', 404);
+        return;
+      }
+
+      // Check current user's status
+      const activeAccess = await prisma.userAccess.findFirst({
+        where: { userId, groupId: group.id, isActive: true },
+      });
+      const pendingRequest = await prisma.accessRequest.findFirst({
+        where: { requesterId: userId, groupId: group.id, status: RequestStatus.PENDING },
+      });
+
+      let accessStatus = 'NONE';
+      if (activeAccess) {
+        accessStatus = 'ACTIVE';
+      } else if (pendingRequest) {
+        accessStatus = 'PENDING';
+      }
+
+      const responseData = {
+        id: group.id,
+        name: group.name,
+        slug: group.slug,
+        description: group.description,
+        icon: group.icon,
+        color: group.color,
+        externalGroupId: group.externalGroupId,
+        tables: group.tables,
+        accessStatus,
+        admins: group.admins.map((adm: any) => ({
+          userId: adm.userId,
+          userName: adm.userName,
+          userEmail: adm.userEmail,
+          assignedAt: adm.assignedAt,
+        })),
+        members: group.userAccesses.map((m: any) => ({
+          id: m.id,
+          userId: m.userId,
+          userName: m.userName,
+          userEmail: m.userEmail,
+          grantedAt: m.grantedAt,
+          expiresAt: m.expiresAt,
+          grantedBy: m.grantedBy,
+        })),
+      };
+
+      this.sendResponse(responseData, 'Group details retrieved successfully');
+    } catch (error) {
+      this.handleError(error, 'Failed to retrieve group details');
+    }
+  }
+}
