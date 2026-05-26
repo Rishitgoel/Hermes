@@ -78,6 +78,34 @@ async function main() {
     console.log(`Upserted group: ${upserted.name} (${upserted.slug})`);
   }
 
+  console.log('Seeding default group admin for Growth...');
+  const growthGroup = await prisma.group.findUnique({
+    where: { slug: 'growth' },
+  });
+  if (growthGroup) {
+    await prisma.groupAdmin.upsert({
+      where: {
+        groupId_userId: {
+          groupId: growthGroup.id,
+          userId: 'group-admin-uuid-2222',
+        },
+      },
+      update: {
+        userName: 'Yogesh_Verma',
+        userEmail: 'yogesh@bachatt.com',
+        assignedBy: 'system',
+      },
+      create: {
+        groupId: growthGroup.id,
+        userId: 'group-admin-uuid-2222',
+        userName: 'Yogesh_Verma',
+        userEmail: 'yogesh@bachatt.com',
+        assignedBy: 'system',
+      },
+    });
+    console.log('Seeded Growth admin: Yogesh Verma');
+  }
+
   console.log('Seeding completed successfully!');
 }
 

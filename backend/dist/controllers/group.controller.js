@@ -34,11 +34,15 @@ class GroupController extends base_controller_1.default {
             const pendingRequests = await prisma_1.default.accessRequest.findMany({
                 where: { requesterId: userId, status: client_1.RequestStatus.PENDING },
             });
+            const isSuperAdmin = this.user?.roles.includes('atlas_super_admin') || false;
             const enrichedGroups = groups.map(g => {
                 let accessStatus = 'NONE';
                 const hasActive = activeAccesses.some(a => a.groupId === g.id);
                 const hasPending = pendingRequests.some(r => r.groupId === g.id);
-                if (hasActive) {
+                if (isSuperAdmin) {
+                    accessStatus = 'ACTIVE';
+                }
+                else if (hasActive) {
                     accessStatus = 'ACTIVE';
                 }
                 else if (hasPending) {
@@ -96,8 +100,12 @@ class GroupController extends base_controller_1.default {
             const pendingRequest = await prisma_1.default.accessRequest.findFirst({
                 where: { requesterId: userId, groupId: group.id, status: client_1.RequestStatus.PENDING },
             });
+            const isSuperAdmin = this.user?.roles.includes('atlas_super_admin') || false;
             let accessStatus = 'NONE';
-            if (activeAccess) {
+            if (isSuperAdmin) {
+                accessStatus = 'ACTIVE';
+            }
+            else if (activeAccess) {
                 accessStatus = 'ACTIVE';
             }
             else if (pendingRequest) {

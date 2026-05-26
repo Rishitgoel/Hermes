@@ -33,13 +33,17 @@ export class GroupController extends BaseController {
         where: { requesterId: userId, status: RequestStatus.PENDING },
       });
 
+      const isSuperAdmin = this.user?.roles.includes('atlas_super_admin') || false;
+
       const enrichedGroups = groups.map(g => {
         let accessStatus = 'NONE';
         
         const hasActive = activeAccesses.some(a => a.groupId === g.id);
         const hasPending = pendingRequests.some(r => r.groupId === g.id);
 
-        if (hasActive) {
+        if (isSuperAdmin) {
+          accessStatus = 'ACTIVE';
+        } else if (hasActive) {
           accessStatus = 'ACTIVE';
         } else if (hasPending) {
           accessStatus = 'PENDING';
@@ -101,8 +105,11 @@ export class GroupController extends BaseController {
         where: { requesterId: userId, groupId: group.id, status: RequestStatus.PENDING },
       });
 
+      const isSuperAdmin = this.user?.roles.includes('atlas_super_admin') || false;
       let accessStatus = 'NONE';
-      if (activeAccess) {
+      if (isSuperAdmin) {
+        accessStatus = 'ACTIVE';
+      } else if (activeAccess) {
         accessStatus = 'ACTIVE';
       } else if (pendingRequest) {
         accessStatus = 'PENDING';
