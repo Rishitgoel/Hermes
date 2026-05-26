@@ -125,30 +125,6 @@ export class ConflictError extends BaseError {
   }
 }
 
-// Rate limit errors (429)
-export class RateLimitError extends BaseError {
-  constructor(
-    message: string = 'Rate limit exceeded',
-    context?: Record<string, unknown>,
-    userId?: string,
-    requestId?: string,
-  ) {
-    super(message, 429, 'RATE_LIMIT_ERROR', true, context, userId, requestId);
-  }
-}
-
-// Database errors (500)
-export class DatabaseError extends BaseError {
-  constructor(
-    message: string,
-    context?: Record<string, unknown>,
-    userId?: string,
-    requestId?: string,
-  ) {
-    super(message, 500, 'DATABASE_ERROR', true, context, userId, requestId);
-  }
-}
-
 // External service errors (502)
 export class ExternalServiceError extends BaseError {
   constructor(
@@ -181,26 +157,6 @@ export class InternalServerError extends BaseError {
       message,
       500,
       'INTERNAL_SERVER_ERROR',
-      false,
-      context,
-      userId,
-      requestId,
-    );
-  }
-}
-
-// Configuration errors (500)
-export class ConfigurationError extends BaseError {
-  constructor(
-    message: string,
-    context?: Record<string, unknown>,
-    userId?: string,
-    requestId?: string,
-  ) {
-    super(
-      message,
-      500,
-      'CONFIGURATION_ERROR',
       false,
       context,
       userId,
@@ -278,59 +234,6 @@ export class ErrorMonitor {
       'Critical error detected - immediate attention required',
     );
   }
-
-  getErrorStats() {
-    const errorCounts = Object.fromEntries(this.errorCounts);
-    const totalErrors = Array.from(this.errorCounts.values()).reduce(
-      (sum, count) => sum + count,
-      0,
-    );
-    const criticalErrorsCount = this.recentErrors.filter(err =>
-      this.isCriticalError(err),
-    ).length;
-
-    return {
-      errorCounts,
-      totalErrors,
-      recentErrorsCount: this.recentErrors.length,
-      criticalErrorsCount,
-    };
-  }
-
-  getRecentErrors(limit = 10): BaseError[] {
-    return this.recentErrors.slice(-limit);
-  }
-
-  clearStats(): void {
-    this.errorCounts.clear();
-    this.recentErrors = [];
-  }
-}
-
-// Utility function to wrap async functions with error handling
-export function withErrorHandling<T extends unknown[], R>(
-  fn: (...args: T) => Promise<R>,
-  context?: Record<string, unknown>,
-): (...args: T) => Promise<R> {
-  return async (...args: T): Promise<R> => {
-    try {
-      return await fn(...args);
-    } catch (error) {
-      const monitor = ErrorMonitor.getInstance();
-
-      if (error instanceof BaseError) {
-        monitor.reportError(error, context);
-        throw error;
-      } else {
-        const wrappedError = new InternalServerError(
-          error instanceof Error ? error.message : 'Unknown error occurred',
-          { ...context, originalError: error },
-        );
-        monitor.reportError(wrappedError);
-        throw wrappedError;
-      }
-    }
-  };
 }
 
 export const errorMonitor = ErrorMonitor.getInstance();

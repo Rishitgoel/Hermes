@@ -1,5 +1,6 @@
 import logger from '../utils/logger';
-import axios from 'axios';
+import config from '../config/config';
+import { createHttpClient } from '../utils/http-client';
 
 export interface RedashUserResponse {
   id: number;
@@ -21,16 +22,13 @@ export class RedashService {
   private isSimulation: boolean;
 
   constructor() {
-    this.baseUrl = process.env.REDASH_BASE_URL || 'https://redash.bachatt.app';
-    this.apiKey = process.env.REDASH_API_KEY || 'dummy-key-for-development';
-    this.isSimulation =
-      process.env.REDASH_SIMULATION === 'true' ||
-      this.apiKey === 'dummy-key-for-development' ||
-      process.env.NODE_ENV === 'development';
+    this.baseUrl = config.redash.baseUrl;
+    this.apiKey = config.redash.apiKey;
+    this.isSimulation = config.redash.isSimulation;
   }
 
   private getClient() {
-    return axios.create({
+    return createHttpClient({
       baseURL: this.baseUrl,
       headers: {
         Authorization: `Key ${this.apiKey}`,
@@ -44,10 +42,10 @@ export class RedashService {
     if (this.isSimulation) {
       logger.info('📊 Redash syncUsers (Simulation): Returning mock users.');
       return [
-        { id: 1, name: 'Ankit Sharma', email: 'ankit@bachatt.com', is_disabled: false, groups: [1, 2] },
-        { id: 2, name: 'Rishi Bachatt', email: 'rishi@bachatt.com', is_disabled: false, groups: [1, 3] },
-        { id: 3, name: 'Growth Lead', email: 'lead@bachatt.com', is_disabled: false, groups: [1, 101] },
-        { id: 4, name: 'Regular Employee', email: 'employee@bachatt.com', is_disabled: false, groups: [1] },
+        { id: 1, name: 'Mayank Aggarwal', email: 'mayank.aggarwal@bachatt.app', is_disabled: false, groups: [1, 2] },
+        { id: 2, name: 'Yogesh Verma', email: 'yogesh.verma@bachatt.app', is_disabled: false, groups: [1, 101] },
+        { id: 3, name: 'Rishit Goel', email: 'rishit.goel@bachatt.app', is_disabled: false, groups: [1] },
+        { id: 4, name: 'Ankit Sharma', email: 'ankit.sharma@bachatt.app', is_disabled: false, groups: [1, 2] },
       ];
     }
 
@@ -102,10 +100,12 @@ export class RedashService {
   async findOrInviteUser(email: string, name: string): Promise<number> {
     if (this.isSimulation) {
       logger.info(`📊 Redash findOrInviteUser (Simulation): Mocking lookup/invite for ${email}`);
+      const lowerEmail = email.toLowerCase();
       // Return a stable mock ID based on the email
-      if (email === 'admin@bachatt.com') return 1;
-      if (email === 'lead@bachatt.com') return 3;
-      if (email === 'employee@bachatt.com') return 4;
+      if (lowerEmail === 'mayank.aggarwal@bachatt.app') return 1;
+      if (lowerEmail === 'yogesh.verma@bachatt.app') return 2;
+      if (lowerEmail === 'rishit.goel@bachatt.app') return 3;
+      if (lowerEmail === 'ankit.sharma@bachatt.app') return 4;
       return Math.floor(Math.random() * 9000) + 1000;
     }
 
@@ -172,23 +172,6 @@ export class RedashService {
     } catch (error: any) {
       logger.error(`Failed to remove user ${redashUserId} from group ${redashGroupId} in Redash:`, error.message);
       throw new Error(`Redash API removeUserFromGroup error: ${error.message}`);
-    }
-  }
-
-  // Disable User
-  async disableUser(redashUserId: number): Promise<void> {
-    if (this.isSimulation) {
-      logger.info(`📊 Redash disableUser (Simulation): Disabled Redash User ID ${redashUserId}`);
-      return;
-    }
-
-    try {
-      const client = this.getClient();
-      await client.delete(`/api/users/${redashUserId}`);
-      logger.info(`📊 Redash: Successfully disabled User ${redashUserId}`);
-    } catch (error: any) {
-      logger.error(`Failed to disable user ${redashUserId} in Redash:`, error.message);
-      throw new Error(`Redash API disableUser error: ${error.message}`);
     }
   }
 }

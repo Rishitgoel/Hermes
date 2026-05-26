@@ -1,22 +1,29 @@
 import prisma from '../config/prisma';
-import redashService from './redash.service';
-import notificationService from './notification.service';
+import provisioningRegistry from './provisioning.registry';
+import eventBus from './event-bus';
 import logger from '../utils/logger';
 import { AccessDuration, RequestStatus } from '@prisma/client';
 import { ValidationError, NotFoundError, ConflictError } from '../utils/errors';
 
 export class AccessWorkflowService {
   private calculateExpiry(duration: AccessDuration): Date | null {
-    const now = new Date();
     switch (duration) {
       case AccessDuration.ONE_DAY:
-        return new Date(now.setDate(now.getDate() + 1));
+        return new Date(Date.now() + 1 * 24 * 60 * 60 * 1000);
       case AccessDuration.ONE_WEEK:
-        return new Date(now.setDate(now.getDate() + 7));
+        return new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
       case AccessDuration.ONE_MONTH:
-        return new Date(now.setMonth(now.getMonth() + 1));
+        {
+          const d = new Date();
+          d.setMonth(d.getMonth() + 1);
+          return d;
+        }
       case AccessDuration.THREE_MONTHS:
-        return new Date(now.setMonth(now.getMonth() + 3));
+        {
+          const d = new Date();
+          d.setMonth(d.getMonth() + 3);
+          return d;
+        }
       case AccessDuration.PERMANENT:
       default:
         return null;
@@ -86,15 +93,19 @@ export class AccessWorkflowService {
       },
     });
 
-    // Notify admins
-    await notificationService.notifyRequestCreated(
-      request.id,
-      groupId,
-      group.name,
-      requester.username,
-      justification,
-      duration
-    );
+    // Notify admins via Event Bus
+    eventBus.emitAccessEvent({
+      type: 'request.created',
+      payload: {
+        requestId: request.id,
+        groupId,
+        groupName: group.name,
+        requesterName: requester.username,
+        justification,
+        duration,
+      },
+      timestamp: new Date(),
+    });
 
     return request;
   }
@@ -142,14 +153,17 @@ export class AccessWorkflowService {
         },
       });
 
-      // Notify user
-      await notificationService.notifyRequestReviewed(
-        request.requesterId,
-        request.group.name,
-        false,
-        reviewer.username,
-        note
-      );
+      // Notify user via Event Bus
+      eventBus.emitAccessEvent({
+        type: 'request.rejected',
+        payload: {
+          requesterId: request.requesterId,
+          groupName: request.group.name,
+          reviewerName: reviewer.username,
+          note,
+        },
+        timestamp: new Date(),
+      });
 
       return updatedRequest;
     }
@@ -170,22 +184,21 @@ export class AccessWorkflowService {
     });
 
     try {
-      // 1. Get or invite Redash user
-      const redashUserId = await redashService.findOrInviteUser(
-        request.requesterEmail,
-        request.requesterName
-      );
-
-      // 2. Add to Redash group
-      const redashGroupId = request.group.externalGroupId
-        ? parseInt(request.group.externalGroupId, 10)
-        : null;
-
-      if (!redashGroupId) {
-        throw new Error(`Group ${request.group.name} has no associated Redash Group ID configured`);
+      const platform = request.group.platform || 'redash';
+      const provisioner = provisioningRegistry.get(platform);
+      
+      const externalGroupId = request.group.externalGroupId;
+      if (!externalGroupId) {
+        throw new Error(`Group ${request.group.name} has no associated External Group ID configured`);
       }
 
-      await redashService.addUserToGroup(redashUserId, redashGroupId);
+      // Provision user and group access using new context shape
+      const result = await provisioner.provision({
+        email: request.requesterEmail,
+        name: request.requesterName,
+        externalGroupId,
+      });
+      const externalUserId = result.externalUserId;
 
       // 3. Save UserAccess record
       const grantedAt = new Date();
@@ -195,7 +208,7 @@ export class AccessWorkflowService {
           userName: request.requesterName,
           userEmail: request.requesterEmail,
           groupId: request.groupId,
-          externalUserId: redashUserId.toString(),
+          externalUserId: externalUserId,
           isActive: true,
           grantedAt,
           expiresAt: request.expiresAt,
@@ -225,21 +238,25 @@ export class AccessWorkflowService {
           accessRequestId: requestId,
           details: {
             userAccessId: userAccess.id,
-            redashUserId,
-            redashGroupId,
+            platform,
+            externalUserId,
+            externalGroupId,
             expiresAt: request.expiresAt,
           },
         },
       });
 
-      // 6. Notify Requester
-      await notificationService.notifyRequestReviewed(
-        request.requesterId,
-        request.group.name,
-        true,
-        reviewer.username,
-        note
-      );
+      // 6. Notify Requester via Event Bus
+      eventBus.emitAccessEvent({
+        type: 'request.approved',
+        payload: {
+          requesterId: request.requesterId,
+          groupName: request.group.name,
+          reviewerName: reviewer.username,
+          note,
+        },
+        timestamp: new Date(),
+      });
 
       return finalRequest;
     } catch (err: any) {
@@ -276,7 +293,8 @@ export class AccessWorkflowService {
   async revokeAccess(
     userAccessId: string,
     revoker: { id: string; username: string },
-    reason?: string
+    reason?: string,
+    force: boolean = false
   ) {
     const access = await prisma.userAccess.findUnique({
       where: { id: userAccessId },
@@ -286,16 +304,20 @@ export class AccessWorkflowService {
     if (!access) throw new NotFoundError('User access grant not found');
     if (!access.isActive) throw new ValidationError('Access is already inactive');
 
-    // 1. Remove from Redash Group
-    const redashUserId = access.externalUserId ? parseInt(access.externalUserId, 10) : null;
-    const redashGroupId = access.group.externalGroupId ? parseInt(access.group.externalGroupId, 10) : null;
+    // 1. Remove from platform Group
+    const externalUserId = access.externalUserId;
+    const externalGroupId = access.group.externalGroupId;
+    const platform = access.group.platform || 'redash';
 
-    if (redashUserId && redashGroupId) {
+    if (externalUserId && externalGroupId) {
       try {
-        await redashService.removeUserFromGroup(redashUserId, redashGroupId);
+        const provisioner = provisioningRegistry.get(platform.toLowerCase());
+        await provisioner.deprovision({ externalUserId, externalGroupId });
       } catch (err: any) {
-        logger.error(`Failed to remove user from Redash group during revocation of ${userAccessId}:`, err.message);
-        // Continue database updates even if Redash client throws, to keep DB states syncable
+        logger.error(`Failed to deprovision user from platform ${platform} during revocation of ${userAccessId}:`, err.message);
+        if (!force) {
+          throw err;
+        }
       }
     }
 
@@ -334,13 +356,17 @@ export class AccessWorkflowService {
       },
     });
 
-    // 5. Notify Requester
-    await notificationService.notifyAccessRevoked(
-      access.userId,
-      access.group.name,
-      revoker.username,
-      reason
-    );
+    // 5. Notify Requester via Event Bus
+    eventBus.emitAccessEvent({
+      type: 'access.revoked',
+      payload: {
+        userId: access.userId,
+        groupName: access.group.name,
+        revokerName: revoker.username,
+        reason,
+      },
+      timestamp: new Date(),
+    });
 
     return updatedAccess;
   }
@@ -356,15 +382,18 @@ export class AccessWorkflowService {
 
     logger.info(`Expiring temporary access grant ${userAccessId} for user ${access.userName} in group ${access.group.name}...`);
 
-    // 1. Remove from Redash Group
-    const redashUserId = access.externalUserId ? parseInt(access.externalUserId, 10) : null;
-    const redashGroupId = access.group.externalGroupId ? parseInt(access.group.externalGroupId, 10) : null;
+    // 1. Remove from platform Group
+    const externalUserId = access.externalUserId;
+    const externalGroupId = access.group.externalGroupId;
+    const platform = access.group.platform || 'redash';
 
-    if (redashUserId && redashGroupId) {
+    if (externalUserId && externalGroupId) {
       try {
-        await redashService.removeUserFromGroup(redashUserId, redashGroupId);
+        const provisioner = provisioningRegistry.get(platform.toLowerCase());
+        await provisioner.deprovision({ externalUserId, externalGroupId });
       } catch (err: any) {
-        logger.error(`Scheduler failed to remove user from Redash group during expiry of ${userAccessId}:`, err.message);
+        logger.error(`Scheduler failed to deprovision user from platform ${platform} during expiry of ${userAccessId}:`, err.message);
+        throw err;
       }
     }
 
@@ -403,8 +432,15 @@ export class AccessWorkflowService {
       },
     });
 
-    // 5. Notify Requester
-    await notificationService.notifyAccessExpired(access.userId, access.group.name);
+    // 5. Notify Requester via Event Bus
+    eventBus.emitAccessEvent({
+      type: 'access.expired',
+      payload: {
+        userId: access.userId,
+        groupName: access.group.name,
+      },
+      timestamp: new Date(),
+    });
   }
 }
 

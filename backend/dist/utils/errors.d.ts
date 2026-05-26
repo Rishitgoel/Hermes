@@ -34,20 +34,11 @@ export declare class NotFoundError extends BaseError {
 export declare class ConflictError extends BaseError {
     constructor(message: string, context?: Record<string, unknown>, userId?: string, requestId?: string);
 }
-export declare class RateLimitError extends BaseError {
-    constructor(message?: string, context?: Record<string, unknown>, userId?: string, requestId?: string);
-}
-export declare class DatabaseError extends BaseError {
-    constructor(message: string, context?: Record<string, unknown>, userId?: string, requestId?: string);
-}
 export declare class ExternalServiceError extends BaseError {
     constructor(message: string, context?: Record<string, unknown>, userId?: string, requestId?: string);
 }
 export declare class InternalServerError extends BaseError {
     constructor(message?: string, context?: Record<string, unknown>, userId?: string, requestId?: string);
-}
-export declare class ConfigurationError extends BaseError {
-    constructor(message: string, context?: Record<string, unknown>, userId?: string, requestId?: string);
 }
 export declare class ErrorMonitor {
     private static instance;
@@ -59,16 +50,5 @@ export declare class ErrorMonitor {
     private logError;
     private isCriticalError;
     private alertCriticalError;
-    getErrorStats(): {
-        errorCounts: {
-            [k: string]: number;
-        };
-        totalErrors: number;
-        recentErrorsCount: number;
-        criticalErrorsCount: number;
-    };
-    getRecentErrors(limit?: number): BaseError[];
-    clearStats(): void;
 }
-export declare function withErrorHandling<T extends unknown[], R>(fn: (...args: T) => Promise<R>, context?: Record<string, unknown>): (...args: T) => Promise<R>;
 export declare const errorMonitor: ErrorMonitor;

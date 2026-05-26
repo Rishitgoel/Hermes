@@ -7,6 +7,7 @@ exports.NotificationController = void 0;
 const base_controller_1 = __importDefault(require("./base.controller"));
 const prisma_1 = __importDefault(require("../config/prisma"));
 const errors_1 = require("../utils/errors");
+const notification_validation_1 = require("../validations/notification.validation");
 class NotificationController extends base_controller_1.default {
     // GET /api/notifications
     async getNotifications(req, res, next) {
@@ -27,7 +28,10 @@ class NotificationController extends base_controller_1.default {
     // PUT /api/notifications/:id/read
     async markAsRead(req, res, next) {
         try {
-            const id = this.params.id;
+            const idResult = this.validateWithZod(notification_validation_1.notificationIdSchema, this.req.params.id, 'Invalid notification ID');
+            if (!idResult.success)
+                return;
+            const id = idResult.data;
             const userId = this.getUserId();
             if (!userId)
                 return;

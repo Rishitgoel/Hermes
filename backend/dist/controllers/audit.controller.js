@@ -7,6 +7,7 @@ exports.AuditController = void 0;
 const base_controller_1 = __importDefault(require("./base.controller"));
 const prisma_1 = __importDefault(require("../config/prisma"));
 const errors_1 = require("../utils/errors");
+const audit_validation_1 = require("../validations/audit.validation");
 class AuditController extends base_controller_1.default {
     // GET /api/audit
     async getAuditLogs(req, res, next) {
@@ -25,7 +26,10 @@ class AuditController extends base_controller_1.default {
             const { pageNo, pageSize } = pagination;
             const skip = (pageNo - 1) * pageSize;
             // Optional filters
-            const { action, search } = this.query;
+            const queryResult = this.validateWithZod(audit_validation_1.auditQuerySchema, this.req.query, 'Invalid query parameters');
+            if (!queryResult.success)
+                return;
+            const { action, search } = queryResult.data;
             const where = {};
             if (action) {
                 where.action = action;

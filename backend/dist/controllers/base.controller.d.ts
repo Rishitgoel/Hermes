@@ -28,10 +28,6 @@ export interface ValidationResult {
 }
 export default abstract class BaseController {
     protected readonly logger: Logger;
-    protected readonly body: Request['body'];
-    protected readonly params: Request['params'];
-    protected readonly query: Request['query'];
-    protected readonly headers: Request['headers'];
     protected readonly user?: AuthenticatedUser;
     protected readonly req: Request;
     protected readonly res: Response;
@@ -40,6 +36,7 @@ export default abstract class BaseController {
     protected createResponse<T>(data?: T, message?: string, metadata?: Partial<ApiResponse<T>['metadata']>): ApiResponse<T>;
     protected createErrorResponse(error: string, metadata?: Partial<ApiResponse['metadata']>): ApiResponse;
     protected sendResponse<T>(data?: T, message?: string, statusCode?: number, metadata?: Partial<ApiResponse<T>['metadata']>): void;
+    protected sendCreated<T>(data?: T, message?: string): void;
     protected sendErrorResponse(error: string, statusCode?: number, metadata?: Partial<ApiResponse['metadata']>): void;
     protected handleError(error: Error | unknown, message: string, statusCode?: number): void;
     protected validateRequiredParams(params: string[]): ValidationResult;

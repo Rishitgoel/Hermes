@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import BaseController from './base.controller';
 import prisma from '../config/prisma';
 import { NotFoundError } from '../utils/errors';
+import { notificationIdSchema } from '../validations/notification.validation';
 
 export class NotificationController extends BaseController {
   // GET /api/notifications
@@ -24,7 +25,10 @@ export class NotificationController extends BaseController {
   // PUT /api/notifications/:id/read
   async markAsRead(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const id = this.params.id as string;
+      const idResult = this.validateWithZod(notificationIdSchema, this.req.params.id, 'Invalid notification ID');
+      if (!idResult.success) return;
+      const id = idResult.data;
+
       const userId = this.getUserId();
       if (!userId) return;
 

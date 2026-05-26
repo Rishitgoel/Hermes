@@ -53,7 +53,7 @@ export declare class AccessWorkflowService {
     revokeAccess(userAccessId: string, revoker: {
         id: string;
         username: string;
-    }, reason?: string): Promise<{
+    }, reason?: string, force?: boolean): Promise<{
         id: string;
         userId: string;
         isActive: boolean;

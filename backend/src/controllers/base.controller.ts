@@ -3,6 +3,7 @@ import { Logger } from 'pino';
 import logger from '../utils/logger';
 import { AuthenticatedUser } from '../middleware/auth.middleware';
 import { ZodTypeAny } from 'zod';
+import { BaseError } from '../utils/errors';
 
 export interface ApiResponse<T = unknown> {
   success: boolean;
@@ -33,10 +34,6 @@ export interface ValidationResult {
 
 export default abstract class BaseController {
   protected readonly logger: Logger;
-  protected readonly body: Request['body'];
-  protected readonly params: Request['params'];
-  protected readonly query: Request['query'];
-  protected readonly headers: Request['headers'];
   protected readonly user?: AuthenticatedUser;
   protected readonly req: Request;
   protected readonly res: Response;
@@ -48,10 +45,6 @@ export default abstract class BaseController {
     this.next = next;
 
     this.logger = (req as any).log ?? logger;
-    this.body = req.body ?? {};
-    this.params = req.params ?? {};
-    this.query = req.query ?? {};
-    this.headers = req.headers ?? {};
     this.user = req.user;
   }
 
@@ -99,6 +92,10 @@ export default abstract class BaseController {
     this.res.status(statusCode).json(response);
   }
 
+  protected sendCreated<T>(data?: T, message?: string): void {
+    this.sendResponse(data, message, 201);
+  }
+
   protected sendErrorResponse(
     error: string,
     statusCode: number = 500,
@@ -115,7 +112,14 @@ export default abstract class BaseController {
     statusCode: number = 500,
   ): void {
     this.logger.error({ err: error }, message);
-    this.sendErrorResponse(message, statusCode);
+    if (error instanceof BaseError) {
+      this.sendErrorResponse(error.message, error.statusCode, {
+        errorCode: error.errorCode,
+        context: error.context,
+      });
+    } else {
+      this.sendErrorResponse(message, statusCode);
+    }
   }
 
   protected validateRequiredParams(params: string[]): ValidationResult {
@@ -124,7 +128,7 @@ export default abstract class BaseController {
     }
 
     const missingParams = params.filter(param => {
-      const value = this.params[param];
+      const value = this.req.params[param];
       return !value || (typeof value === 'string' && value.trim() === '');
     });
 
@@ -145,7 +149,7 @@ export default abstract class BaseController {
     }
 
     const missingFields = fields.filter(field => {
-      const value = this.body[field];
+      const value = this.req.body[field];
       return (
         value === undefined ||
         value === null ||
@@ -165,8 +169,8 @@ export default abstract class BaseController {
   }
 
   protected validatePagination(): PaginationParams | null {
-    const pageNoStr = this.headers['pageno'] as string;
-    const pageSizeStr = this.headers['pagesize'] as string;
+    const pageNoStr = this.req.headers['pageno'] as string;
+    const pageSizeStr = this.req.headers['pagesize'] as string;
 
     const pageNo = pageNoStr ? Number(pageNoStr) : 1;
     const pageSize = pageSizeStr ? Number(pageSizeStr) : 10;

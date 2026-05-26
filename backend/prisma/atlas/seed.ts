@@ -92,18 +92,42 @@ async function main() {
       },
       update: {
         userName: 'Yogesh_Verma',
-        userEmail: 'yogesh@bachatt.com',
+        userEmail: 'yogesh.verma@bachatt.app',
         assignedBy: 'system',
       },
       create: {
         groupId: growthGroup.id,
         userId: 'group-admin-uuid-2222',
         userName: 'Yogesh_Verma',
-        userEmail: 'yogesh@bachatt.com',
+        userEmail: 'yogesh.verma@bachatt.app',
         assignedBy: 'system',
       },
     });
     console.log('Seeded Growth admin: Yogesh Verma');
+
+    await prisma.userAccess.upsert({
+      where: {
+        userId_groupId_isActive: {
+          userId: 'group-admin-uuid-2222',
+          groupId: growthGroup.id,
+          isActive: true,
+        },
+      },
+      update: {
+        userName: 'Yogesh_Verma',
+        userEmail: 'yogesh.verma@bachatt.app',
+        grantedBy: 'system',
+      },
+      create: {
+        userId: 'group-admin-uuid-2222',
+        groupId: growthGroup.id,
+        userName: 'Yogesh_Verma',
+        userEmail: 'yogesh.verma@bachatt.app',
+        isActive: true,
+        grantedBy: 'system',
+      },
+    });
+    console.log('Seeded active UserAccess for Growth admin: Yogesh Verma');
   }
 
   console.log('Seeding completed successfully!');

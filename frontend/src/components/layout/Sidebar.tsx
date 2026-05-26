@@ -6,7 +6,6 @@ import {
   LayoutDashboard, 
   Layers, 
   FileClock, 
-  ShieldCheck, 
   CheckSquare, 
   History, 
   LogOut,
@@ -64,14 +63,6 @@ export const Sidebar: React.FC = () => {
         >
           <FileClock size={20} />
           <span>My Requests</span>
-        </NavLink>
-
-        <NavLink 
-          to="/my-access" 
-          className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
-        >
-          <ShieldCheck size={20} />
-          <span>My Access</span>
         </NavLink>
 
         {showApprovals && (

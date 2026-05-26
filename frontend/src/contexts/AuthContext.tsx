@@ -22,7 +22,7 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 // Setup simulation flags
-const useSimulation = import.meta.env.VITE_KEYCLOAK_SIMULATION === 'true' || import.meta.env.DEV;
+const useSimulation = import.meta.env.VITE_KEYCLOAK_SIMULATION !== 'false';
 
 // Keycloak client singleton (for live mode)
 let keycloakInstance: Keycloak | null = null;
@@ -52,21 +52,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         mockUser = {
           id: 'super-admin-uuid-1111',
           username: 'Mayank_Aggarwal',
-          email: 'mayank@bachatt.com',
+          email: 'mayank.aggarwal@bachatt.app',
           roles: ['atlas_super_admin', 'atlas_user'],
         };
       } else if (mockRole === 'group_admin') {
         mockUser = {
           id: 'group-admin-uuid-2222',
           username: 'Yogesh_Verma',
-          email: 'yogesh@bachatt.com',
-          roles: ['atlas_group_admin', 'atlas_user'],
+          email: 'yogesh.verma@bachatt.app',
+          roles: ['atlas_group_admin', 'atlas_group_admin_growth', 'atlas_user'],
         };
       } else {
         mockUser = {
           id: 'regular-user-uuid-3333',
           username: 'Rishit_Goel',
-          email: 'rishit@bachatt.com',
+          email: 'rishit.goel@bachatt.app',
           roles: ['atlas_user'],
         };
       }

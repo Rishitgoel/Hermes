@@ -1,9 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import apiClient from '../services/apiClient';
 import LoadingSpinner from '../components/common/LoadingSpinner';
-import AccessRequestModal from '../components/access/AccessRequestModal';
 import * as Icons from 'lucide-react';
 
 interface GroupData {
@@ -17,26 +16,47 @@ interface GroupData {
   accessStatus: 'ACTIVE' | 'PENDING' | 'NONE';
 }
 
+interface ActiveAccessData {
+  id: string;
+  userId: string;
+  userName: string;
+  groupId: string;
+  grantedAt: string;
+  expiresAt: string | null;
+  grantedBy: string;
+  group: {
+    name: string;
+    slug: string;
+    description: string;
+    color: string | null;
+    icon: string | null;
+  };
+}
+
 export const Dashboard: React.FC = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
   
   const [groups, setGroups] = useState<GroupData[]>([]);
+  const [accesses, setAccesses] = useState<ActiveAccessData[]>([]);
   const [pendingReviewCount, setPendingReviewCount] = useState<number>(0);
   const [isLoading, setIsLoading] = useState(true);
   
-  // Modal states
-  const [selectedGroup, setSelectedGroup] = useState<{ id: string; name: string } | null>(null);
+  const activeAccessRef = useRef<HTMLDivElement>(null);
 
   const isAdmin = user?.roles.includes('atlas_super_admin') || user?.roles.includes('atlas_group_admin');
 
   const fetchData = async () => {
     try {
-      // 1. Fetch groups with statuses
+      // 1. Fetch active accesses
+      const accessesRes = await apiClient.get('/api/user-access/me');
+      setAccesses(accessesRes.data);
+
+      // 2. Fetch groups with statuses
       const groupsRes = await apiClient.get('/api/groups');
       setGroups(groupsRes.data);
 
-      // 2. Fetch pending reviews if admin
+      // 3. Fetch pending reviews if admin
       if (isAdmin) {
         const pendingRes = await apiClient.get('/api/access-requests/pending');
         setPendingReviewCount(pendingRes.data.length);
@@ -58,12 +78,24 @@ export const Dashboard: React.FC = () => {
 
   // Calculate statistics
   const totalGroups = groups.length;
-  const activeAccessCount = groups.filter((g) => g.accessStatus === 'ACTIVE').length;
+  const activeAccessCount = accesses.length;
   const pendingRequestCount = groups.filter((g) => g.accessStatus === 'PENDING').length;
 
-  const renderIcon = (iconName: string | null, color: string | null) => {
-    const LucideIcon = (Icons as any)[iconName || 'HelpCircle'] || Icons.HelpCircle;
-    return <LucideIcon size={24} style={{ color: color || 'var(--primary)' }} />;
+  const formatDate = (isoString: string) => {
+    return new Date(isoString).toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
+  };
+
+  const renderIcon = (iconName: string | null, color: string | null, size = 24) => {
+    const LucideIcon = (Icons as any)[iconName || 'ShieldCheck'] || Icons.ShieldCheck;
+    return <LucideIcon size={size} style={{ color: color || 'var(--primary)' }} />;
+  };
+
+  const getRedashUrl = () => {
+    return import.meta.env.VITE_REDASH_URL || 'https://redash.bachatt.app';
   };
 
   return (
@@ -90,7 +122,11 @@ export const Dashboard: React.FC = () => {
 
       {/* Statistics Row */}
       <div className="stats-grid">
-        <div className="stat-card" onClick={() => navigate('/my-access')} style={{ cursor: 'pointer' }}>
+        <div 
+          className="stat-card" 
+          onClick={() => activeAccessRef.current?.scrollIntoView({ behavior: 'smooth' })} 
+          style={{ cursor: 'pointer' }}
+        >
           <div className="stat-icon-wrapper">
             <Icons.ShieldCheck size={26} />
           </div>
@@ -133,81 +169,103 @@ export const Dashboard: React.FC = () => {
         )}
       </div>
 
-      {/* Groups List */}
-      <div className="section-header">
-        <h3 className="section-title">Available Data Groups</h3>
-        <button className="btn btn-outline" onClick={() => navigate('/groups')}>
-          View All Groups <Icons.ArrowRight size={16} />
-        </button>
+      {/* My Active Access */}
+      <div className="section-header" ref={activeAccessRef} style={{ scrollMarginTop: '20px' }}>
+        <h3 className="section-title">My Active Access</h3>
+        <span style={{ fontSize: '13px', color: 'var(--text-muted)', fontWeight: 700 }}>
+          {accesses.length} Active Grants
+        </span>
       </div>
 
-      <div className="cards-grid">
-        {groups.map((group) => (
-          <div 
-            key={group.id} 
-            className="group-card" 
-            style={{ '--card-accent-color': group.color || 'var(--primary)' } as React.CSSProperties}
-          >
-            <div className="group-card-header">
-              <div className="group-icon-box">
-                {renderIcon(group.icon, group.color)}
-              </div>
-              <h4 className="group-card-title">{group.name}</h4>
-            </div>
-
-            <p className="group-card-desc">{group.description}</p>
-
-            <div className="group-card-footer">
-              <span className="group-members-count">
-                <Icons.Users size={16} />
-                {group.memberCount} active members
-              </span>
-
-              {group.accessStatus === 'ACTIVE' && (
-                <button 
-                  className="btn btn-secondary" 
-                  onClick={() => navigate(`/groups/${group.slug}`)}
-                  style={{ gap: '6px' }}
-                >
-                  <Icons.CheckCircle size={14} /> Active
-                </button>
-              )}
-
-              {group.accessStatus === 'PENDING' && (
-                <button 
-                  className="btn btn-outline" 
-                  onClick={() => navigate(`/groups/${group.slug}`)}
-                  style={{ color: 'var(--status-pending-text)', borderColor: 'var(--status-pending-text)', backgroundColor: 'var(--status-pending-bg)' }}
-                >
-                  Pending
-                </button>
-              )}
-
-              {group.accessStatus === 'NONE' && (
-                <button 
-                  className="btn btn-primary" 
-                  onClick={() => setSelectedGroup({ id: group.id, name: group.name })}
-                >
-                  Request Access
-                </button>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* Request Access Modal */}
-      {selectedGroup && (
-        <AccessRequestModal
-          isOpen={!!selectedGroup}
-          onClose={() => setSelectedGroup(null)}
-          groupId={selectedGroup.id}
-          groupName={selectedGroup.name}
-          onSuccess={() => {
-            fetchData();
-            // Show custom alert if needed, or simply let data refresh
-          }}
-        />
+      {accesses.length === 0 ? (
+        <div className="empty-state">
+          <Icons.ShieldCheck size={44} className="empty-state-icon" />
+          <h3 className="empty-state-title">No Active Access</h3>
+          <p className="empty-state-desc">You do not currently hold active permissions for any data groups. Browse data groups to submit access requests.</p>
+          <button className="btn btn-primary" onClick={() => navigate('/groups?platform=redash')}>
+            Browse Groups
+          </button>
+        </div>
+      ) : (
+        <div className="table-container">
+          <table className="atlas-table">
+            <thead>
+              <tr>
+                <th style={{ padding: '12px 24px' }}>Group Name</th>
+                <th style={{ width: '220px', padding: '12px 24px' }}>Expiry Status</th>
+                <th style={{ width: '180px', textAlign: 'right', padding: '12px 24px' }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {accesses.map((access) => (
+                <tr key={access.id}>
+                  <td style={{ padding: '12px 24px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <div className="group-icon-box" style={{ width: '32px', height: '32px', borderRadius: '6px', flexShrink: 0, background: 'var(--primary-light)' }}>
+                        {renderIcon(access.group.icon, access.group.color, 18)}
+                      </div>
+                      <span 
+                        style={{ 
+                          fontWeight: 700, 
+                          color: 'var(--text-main)', 
+                          cursor: 'pointer',
+                          fontSize: '15px'
+                        }}
+                        onClick={() => navigate(`/groups/${access.group.slug}`)}
+                      >
+                        {access.group.name}
+                      </span>
+                      
+                      <div className="info-tooltip-container">
+                        <Icons.Info size={14} />
+                        <div className="info-tooltip">
+                          <strong style={{ display: 'block', marginBottom: '4px', fontSize: '13px', color: 'var(--primary-light)' }}>
+                            Access Details
+                          </strong>
+                          <div style={{ marginBottom: '6px' }}>{access.group.description}</div>
+                          <div style={{ fontSize: '11px', color: 'var(--text-light)', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '6px', marginTop: '6px' }}>
+                            Granted by: <strong>{access.grantedBy}</strong> on {formatDate(access.grantedAt)}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </td>
+                  <td style={{ padding: '12px 24px' }}>
+                    {access.expiresAt ? (
+                      <span className="badge badge-pending" style={{ gap: '4px', backgroundColor: 'hsl(38, 92%, 94%)', color: 'hsl(32, 85%, 33%)', padding: '4px 8px', fontSize: '12px' }}>
+                        <Icons.Clock size={12} /> Expires {formatDate(access.expiresAt)}
+                      </span>
+                    ) : (
+                      <span className="badge badge-approved" style={{ gap: '4px', padding: '4px 8px', fontSize: '12px' }}>
+                        <Icons.CheckCircle2 size={12} /> Permanent Access
+                      </span>
+                    )}
+                  </td>
+                  <td style={{ textAlign: 'right', padding: '12px 24px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                      <button 
+                        className="btn btn-outline"
+                        style={{ padding: '4px 10px', fontSize: '11px', height: '30px' }}
+                        onClick={() => navigate(`/groups/${access.group.slug}`)}
+                      >
+                        Details
+                      </button>
+                      <a 
+                        href={getRedashUrl()} 
+                        target="_blank" 
+                        rel="noreferrer" 
+                        className="btn btn-primary"
+                        style={{ padding: '4px 10px', fontSize: '11px', gap: '4px', height: '30px', display: 'inline-flex', alignItems: 'center' }}
+                      >
+                        Redash <Icons.ExternalLink size={11} />
+                      </a>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );

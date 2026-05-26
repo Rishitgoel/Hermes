@@ -3,6 +3,8 @@ import { expressjwt, GetVerificationKey } from 'express-jwt';
 import jwksRsa from 'jwks-rsa';
 import logger from '../utils/logger';
 
+import config from '../config/config';
+
 export interface AuthenticatedUser {
   id: string; // Keycloak 'sub'
   username: string; // Keycloak 'preferred_username'
@@ -22,11 +24,11 @@ const checkJwtLive = expressjwt({
     cache: true,
     rateLimit: true,
     jwksRequestsPerMinute: 5,
-    jwksUri: process.env.KEYCLOAK_JWKS_URI || 'https://keycloak.bachatt.app/realms/master/protocol/openid-connect/certs',
+    jwksUri: config.keycloak.jwksUri,
   }) as GetVerificationKey,
   algorithms: ['RS256'],
-  issuer: process.env.KEYCLOAK_ISSUER || 'https://keycloak.bachatt.app/realms/master',
-  audience: process.env.KEYCLOAK_AUDIENCE || 'atlas-prod',
+  issuer: config.keycloak.issuer,
+  ...(config.keycloak.audience ? { audience: config.keycloak.audience } : {}),
 });
 
 // Middleware for Live mapping
@@ -60,22 +62,22 @@ const checkJwtSimulated = (req: Request, res: Response, next: NextFunction) => {
     req.user = {
       id: 'super-admin-uuid-1111',
       username: 'Mayank_Aggarwal',
-      email: 'mayank@bachatt.com',
+      email: 'mayank.aggarwal@bachatt.app',
       roles: ['atlas_super_admin', 'atlas_user'],
     };
   } else if (token === 'group_admin') {
     req.user = {
       id: 'group-admin-uuid-2222',
       username: 'Yogesh_Verma',
-      email: 'yogesh@bachatt.com',
-      roles: ['atlas_group_admin', 'atlas_user'],
+      email: 'yogesh.verma@bachatt.app',
+      roles: ['atlas_group_admin', 'atlas_group_admin_growth', 'atlas_user'],
     };
   } else {
     // Default or user
     req.user = {
       id: 'regular-user-uuid-3333',
       username: 'Rishit_Goel',
-      email: 'rishit@bachatt.com',
+      email: 'rishit.goel@bachatt.app',
       roles: ['atlas_user'],
     };
   }
@@ -103,7 +105,7 @@ const handleJwtError = (err: any, req: Request, res: Response, next: NextFunctio
 };
 
 // Main middleware array export
-const useSimulation = process.env.KEYCLOAK_SIMULATION === 'true' || process.env.NODE_ENV === 'development';
+const useSimulation = config.isSimulation;
 
 export const authenticateToken = useSimulation
   ? [checkJwtSimulated]
@@ -132,4 +134,34 @@ export const requireRole = (requiredRoles: string[]) => {
 
     next();
   };
+};
+
+export const getAdminGroupSlugsFromRoles = (userRoles: string[]): string[] => {
+  const prefixes = ['atlas_group_admin_', 'group_admin_'];
+  const slugs: string[] = [];
+  
+  for (const role of userRoles) {
+    const lowerRole = role.toLowerCase();
+    for (const prefix of prefixes) {
+      if (lowerRole.startsWith(prefix)) {
+        const slug = lowerRole.substring(prefix.length).replace(/_/g, '-');
+        slugs.push(slug);
+      }
+    }
+  }
+  return slugs;
+};
+
+export const checkIsGroupAdmin = (userRoles: string[], groupSlug: string): boolean => {
+  const normalizedSlug = groupSlug.toLowerCase();
+  const underscoreSlug = normalizedSlug.replace(/-/g, '_');
+  
+  const possibleRoles = [
+    `atlas_group_admin_${normalizedSlug}`,
+    `atlas_group_admin_${underscoreSlug}`,
+    `group_admin_${normalizedSlug}`,
+    `group_admin_${underscoreSlug}`
+  ];
+  
+  return userRoles.some(role => possibleRoles.includes(role.toLowerCase()));
 };

@@ -3,6 +3,7 @@ import BaseController from './base.controller';
 import syncService from '../services/sync.service';
 import prisma from '../config/prisma';
 import { AuthorizationError } from '../utils/errors';
+import logger from '../utils/logger';
 
 export class AdminController extends BaseController {
   // POST /api/admin/sync
@@ -35,5 +36,3 @@ export class AdminController extends BaseController {
     }
   }
 }
-
-import logger from '../utils/logger';

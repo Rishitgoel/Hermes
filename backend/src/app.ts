@@ -1,7 +1,6 @@
-import dotenv from 'dotenv';
-// Load dotenv early
-dotenv.config();
+import './config/config'; // Loads dotenv + normalizes env once
 
+import config from './config/config';
 import app from './index';
 import logger from './utils/logger';
 import { loadSecrets } from './config/secrets';
@@ -9,11 +8,16 @@ import keycloakSetupService from './config/keycloak-setup';
 import schedulerService from './services/scheduler.service';
 import syncService from './services/sync.service';
 
-const PORT = process.env.PORT || 8001;
+import { registerEventListeners } from './services/event-listeners';
+
+const PORT = config.port;
 
 async function bootstrap() {
   try {
     logger.info('🚀 Atlas Backend starting up...');
+
+    // 0. Register event listeners
+    registerEventListeners();
 
     // 1. Load AWS secrets (in production)
     await loadSecrets();

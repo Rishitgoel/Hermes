@@ -30,7 +30,6 @@ export const TopBar: React.FC = () => {
     if (path === '/groups') return 'Groups';
     if (path.startsWith('/groups/')) return 'Group Details';
     if (path === '/my-requests') return 'My Requests';
-    if (path === '/my-access') return 'My Access';
     if (path === '/pending-approvals') return 'Pending Approvals';
     if (path === '/audit-log') return 'Audit Log';
     return 'Atlas';

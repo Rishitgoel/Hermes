@@ -7,6 +7,8 @@ exports.GroupController = void 0;
 const base_controller_1 = __importDefault(require("./base.controller"));
 const prisma_1 = __importDefault(require("../config/prisma"));
 const client_1 = require("@prisma/client");
+const auth_middleware_1 = require("../middleware/auth.middleware");
+const group_validation_1 = require("../validations/group.validation");
 class GroupController extends base_controller_1.default {
     // GET /api/groups
     async getGroups(req, res, next) {
@@ -14,32 +16,34 @@ class GroupController extends base_controller_1.default {
             const userId = this.getUserId();
             if (!userId)
                 return;
-            const groups = await prisma_1.default.group.findMany({
-                where: { isActive: true },
-                include: {
-                    admins: true,
-                    _count: {
-                        select: {
-                            userAccesses: { where: { isActive: true } },
+            const [groups, activeAccesses, pendingRequests] = await Promise.all([
+                prisma_1.default.group.findMany({
+                    where: { isActive: true },
+                    include: {
+                        admins: true,
+                        _count: {
+                            select: {
+                                userAccesses: { where: { isActive: true } },
+                            },
                         },
                     },
-                },
-                orderBy: { name: 'asc' },
-            });
-            // Get user's active accesses
-            const activeAccesses = await prisma_1.default.userAccess.findMany({
-                where: { userId, isActive: true },
-            });
-            // Get user's pending requests
-            const pendingRequests = await prisma_1.default.accessRequest.findMany({
-                where: { requesterId: userId, status: client_1.RequestStatus.PENDING },
-            });
+                    orderBy: { name: 'asc' },
+                }),
+                prisma_1.default.userAccess.findMany({
+                    where: { userId, isActive: true },
+                }),
+                prisma_1.default.accessRequest.findMany({
+                    where: { requesterId: userId, status: client_1.RequestStatus.PENDING },
+                })
+            ]);
             const isSuperAdmin = this.user?.roles.includes('atlas_super_admin') || false;
             const enrichedGroups = groups.map(g => {
                 let accessStatus = 'NONE';
                 const hasActive = activeAccesses.some(a => a.groupId === g.id);
                 const hasPending = pendingRequests.some(r => r.groupId === g.id);
-                if (isSuperAdmin) {
+                const isKeycloakAdmin = this.user?.roles ? (0, auth_middleware_1.checkIsGroupAdmin)(this.user.roles, g.slug) : false;
+                const isAdminOfGroup = g.admins.some(adm => adm.userId === userId) || isKeycloakAdmin;
+                if (isSuperAdmin || isAdminOfGroup) {
                     accessStatus = 'ACTIVE';
                 }
                 else if (hasActive) {
@@ -75,7 +79,10 @@ class GroupController extends base_controller_1.default {
     // GET /api/groups/:slug
     async getGroupDetail(req, res, next) {
         try {
-            const slug = this.params.slug;
+            const slugResult = this.validateWithZod(group_validation_1.groupSlugSchema, this.req.params.slug, 'Invalid group slug');
+            if (!slugResult.success)
+                return;
+            const slug = slugResult.data;
             const userId = this.getUserId();
             if (!userId)
                 return;
@@ -101,8 +108,10 @@ class GroupController extends base_controller_1.default {
                 where: { requesterId: userId, groupId: group.id, status: client_1.RequestStatus.PENDING },
             });
             const isSuperAdmin = this.user?.roles.includes('atlas_super_admin') || false;
+            const isKeycloakAdmin = this.user?.roles ? (0, auth_middleware_1.checkIsGroupAdmin)(this.user.roles, group.slug) : false;
+            const isAdminOfGroup = group.admins.some(adm => adm.userId === userId) || isKeycloakAdmin;
             let accessStatus = 'NONE';
-            if (isSuperAdmin) {
+            if (isSuperAdmin || isAdminOfGroup) {
                 accessStatus = 'ACTIVE';
             }
             else if (activeAccess) {
@@ -121,13 +130,13 @@ class GroupController extends base_controller_1.default {
                 externalGroupId: group.externalGroupId,
                 tables: group.tables,
                 accessStatus,
-                admins: group.admins.map((adm) => ({
+                admins: group.admins.map(adm => ({
                     userId: adm.userId,
                     userName: adm.userName,
                     userEmail: adm.userEmail,
                     assignedAt: adm.assignedAt,
                 })),
-                members: group.userAccesses.map((m) => ({
+                members: group.userAccesses.map(m => ({
                     id: m.id,
                     userId: m.userId,
                     userName: m.userName,

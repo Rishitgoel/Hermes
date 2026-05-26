@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import BaseController from './base.controller';
 import prisma from '../config/prisma';
 import { AuthorizationError } from '../utils/errors';
+import { auditQuerySchema } from '../validations/audit.validation';
 
 export class AuditController extends BaseController {
   // GET /api/audit
@@ -23,7 +24,9 @@ export class AuditController extends BaseController {
       const skip = (pageNo - 1) * pageSize;
 
       // Optional filters
-      const { action, search } = this.query;
+      const queryResult = this.validateWithZod(auditQuerySchema, this.req.query, 'Invalid query parameters');
+      if (!queryResult.success) return;
+      const { action, search } = queryResult.data;
       
       const where: any = {};
       

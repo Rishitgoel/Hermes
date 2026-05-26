@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import logger from '../utils/logger';
+import config from '../config/config';
 
 interface RateLimitConfig {
   windowMs: number;
@@ -9,36 +10,18 @@ interface RateLimitConfig {
   message?: string;
 }
 
-interface SecurityConfig {
-  enableRateLimit: boolean;
-  enableHelmet: boolean;
-  allowedOrigins: string[];
-}
-
 class SecurityService {
-  private config: SecurityConfig;
-
-  constructor() {
-    this.config = {
-      enableRateLimit: process.env.ENABLE_RATE_LIMIT === 'true',
-      enableHelmet: process.env.SECURITY_HELMET !== 'false',
-      allowedOrigins: (process.env.ALLOWED_ORIGINS || '')
-        .split(',')
-        .filter(Boolean),
-    };
-  }
-
-  createRateLimiter(config: RateLimitConfig) {
-    if (!this.config.enableRateLimit) {
+  createRateLimiter(rateLimitConfig: RateLimitConfig) {
+    if (!config.rateLimiting.enabled) {
       return (req: Request, res: Response, next: NextFunction) => {
         next();
       };
     }
 
     return rateLimit({
-      windowMs: config.windowMs,
-      max: config.max,
-      message: config.message || 'Too many requests, please try again later.',
+      windowMs: rateLimitConfig.windowMs,
+      max: rateLimitConfig.max,
+      message: rateLimitConfig.message || 'Too many requests, please try again later.',
       standardHeaders: true,
       legacyHeaders: false,
       keyGenerator: (req): string => {
@@ -56,17 +39,17 @@ class SecurityService {
             ip: req.ip,
             userAgent: req.headers['user-agent'],
             url: req.url,
-            max: config.max,
-            windowMs: config.windowMs,
+            max: rateLimitConfig.max,
+            windowMs: rateLimitConfig.windowMs,
           },
           'Rate limit exceeded',
         );
         res.status(429).json({
           success: false,
-          error: config.message || 'Too many requests, please try again later.',
+          error: rateLimitConfig.message || 'Too many requests, please try again later.',
           metadata: {
             timestamp: new Date().toISOString(),
-            retryAfter: Math.ceil(config.windowMs / 1000),
+            retryAfter: Math.ceil(rateLimitConfig.windowMs / 1000),
           },
         });
       },
@@ -74,10 +57,9 @@ class SecurityService {
   }
 
   getGeneralRateLimiter() {
-    const isDevelopment = process.env.NODE_ENV === 'development';
     return this.createRateLimiter({
       windowMs: 15 * 60 * 1000,
-      max: isDevelopment ? 1000 : 100,
+      max: config.isDev ? 1000 : 100,
     });
   }
 
@@ -115,7 +97,7 @@ class SecurityService {
       res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
       res.setHeader(
         'Permissions-Policy',
-        'geolocation=(), microphone=(), camera=()',
+        'geolocation=(), microphone=(), camera=()'
       );
       next();
     };

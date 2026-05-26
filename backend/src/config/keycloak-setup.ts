@@ -1,18 +1,10 @@
 import logger from '../utils/logger';
 import axios from 'axios';
+import config from './config';
 
 export class KeycloakSetupService {
-  private isSimulation: boolean;
-
-  constructor() {
-    this.isSimulation =
-      process.env.KEYCLOAK_SIMULATION === 'true' ||
-      process.env.NODE_ENV === 'development' ||
-      !process.env.KEYCLOAK_ADMIN_PASSWORD;
-  }
-
   async ensureClientAndRolesExist(): Promise<void> {
-    if (this.isSimulation) {
+    if (config.isSimulation || !config.keycloak.adminPassword) {
       logger.info('🔑 Keycloak setup: Running in SIMULATION mode. Auto-configuring atlas-prod client and roles locally in memory.');
       return;
     }
@@ -20,11 +12,11 @@ export class KeycloakSetupService {
     try {
       logger.info('🔑 Keycloak setup: Contacting Keycloak Admin API to check client and roles...');
 
-      const adminUrl = process.env.KEYCLOAK_ADMIN_URL || 'https://keycloak.bachatt.app';
-      const realm = process.env.VITE_KEYCLOAK_REALM || 'master';
-      const clientId = process.env.KEYCLOAK_ADMIN_CLIENT_ID || 'admin-cli';
-      const username = process.env.KEYCLOAK_ADMIN_USERNAME || 'admin';
-      const password = process.env.KEYCLOAK_ADMIN_PASSWORD;
+      const adminUrl = config.keycloak.adminUrl;
+      const realm = config.keycloak.realm;
+      const clientId = config.keycloak.adminClientId;
+      const username = config.keycloak.adminUsername;
+      const password = config.keycloak.adminPassword;
 
       // 1. Get Admin Access Token
       const tokenUrl = `${adminUrl}/realms/${realm}/protocol/openid-connect/token`;
@@ -45,7 +37,7 @@ export class KeycloakSetupService {
       logger.info('🔑 Keycloak setup: Authenticated with Keycloak Admin API.');
 
       // 2. Check if client 'atlas-prod' exists
-      const targetClientId = process.env.KEYCLOAK_AUDIENCE || 'atlas-prod';
+      const targetClientId = config.keycloak.audience || 'atlas-prod';
       const clientsUrl = `${adminUrl}/admin/realms/${realm}/clients`;
       const clientsRes = await axios.get(clientsUrl, {
         headers: { Authorization: `Bearer ${accessToken}` },
@@ -119,7 +111,7 @@ export class KeycloakSetupService {
     } catch (error: any) {
       logger.error('🔑 Keycloak setup failed: ' + (error.response?.data?.error_description || error.message));
       // In development, do not crash if Keycloak is unavailable, fallback to simulation
-      if (process.env.NODE_ENV === 'development') {
+      if (config.isDev) {
         logger.warn('🔑 Keycloak setup failed in development environment. Continuing with startup...');
       } else {
         throw error;

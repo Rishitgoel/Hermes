@@ -3,8 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.errorMonitor = exports.ErrorMonitor = exports.ConfigurationError = exports.InternalServerError = exports.ExternalServiceError = exports.DatabaseError = exports.RateLimitError = exports.ConflictError = exports.NotFoundError = exports.AuthorizationError = exports.AuthenticationError = exports.ValidationError = exports.BaseError = void 0;
-exports.withErrorHandling = withErrorHandling;
+exports.errorMonitor = exports.ErrorMonitor = exports.InternalServerError = exports.ExternalServiceError = exports.ConflictError = exports.NotFoundError = exports.AuthorizationError = exports.AuthenticationError = exports.ValidationError = exports.BaseError = void 0;
 const logger_1 = __importDefault(require("./logger"));
 // Base error class with enhanced properties
 class BaseError extends Error {
@@ -78,20 +77,6 @@ class ConflictError extends BaseError {
     }
 }
 exports.ConflictError = ConflictError;
-// Rate limit errors (429)
-class RateLimitError extends BaseError {
-    constructor(message = 'Rate limit exceeded', context, userId, requestId) {
-        super(message, 429, 'RATE_LIMIT_ERROR', true, context, userId, requestId);
-    }
-}
-exports.RateLimitError = RateLimitError;
-// Database errors (500)
-class DatabaseError extends BaseError {
-    constructor(message, context, userId, requestId) {
-        super(message, 500, 'DATABASE_ERROR', true, context, userId, requestId);
-    }
-}
-exports.DatabaseError = DatabaseError;
 // External service errors (502)
 class ExternalServiceError extends BaseError {
     constructor(message, context, userId, requestId) {
@@ -106,13 +91,6 @@ class InternalServerError extends BaseError {
     }
 }
 exports.InternalServerError = InternalServerError;
-// Configuration errors (500)
-class ConfigurationError extends BaseError {
-    constructor(message, context, userId, requestId) {
-        super(message, 500, 'CONFIGURATION_ERROR', false, context, userId, requestId);
-    }
-}
-exports.ConfigurationError = ConfigurationError;
 // Error monitoring and reporting
 class ErrorMonitor {
     static instance;
@@ -163,44 +141,6 @@ class ErrorMonitor {
             error: error.toJSON(),
         }, 'Critical error detected - immediate attention required');
     }
-    getErrorStats() {
-        const errorCounts = Object.fromEntries(this.errorCounts);
-        const totalErrors = Array.from(this.errorCounts.values()).reduce((sum, count) => sum + count, 0);
-        const criticalErrorsCount = this.recentErrors.filter(err => this.isCriticalError(err)).length;
-        return {
-            errorCounts,
-            totalErrors,
-            recentErrorsCount: this.recentErrors.length,
-            criticalErrorsCount,
-        };
-    }
-    getRecentErrors(limit = 10) {
-        return this.recentErrors.slice(-limit);
-    }
-    clearStats() {
-        this.errorCounts.clear();
-        this.recentErrors = [];
-    }
 }
 exports.ErrorMonitor = ErrorMonitor;
-// Utility function to wrap async functions with error handling
-function withErrorHandling(fn, context) {
-    return async (...args) => {
-        try {
-            return await fn(...args);
-        }
-        catch (error) {
-            const monitor = ErrorMonitor.getInstance();
-            if (error instanceof BaseError) {
-                monitor.reportError(error, context);
-                throw error;
-            }
-            else {
-                const wrappedError = new InternalServerError(error instanceof Error ? error.message : 'Unknown error occurred', { ...context, originalError: error });
-                monitor.reportError(wrappedError);
-                throw wrappedError;
-            }
-        }
-    };
-}
 exports.errorMonitor = ErrorMonitor.getInstance();

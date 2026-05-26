@@ -41,12 +41,13 @@ export class SyncService {
       const redashUsers = await redashService.syncUsers();
       logger.info(`🔄 SyncService: Fetched ${redashUsers.length} users from Redash.`);
 
+      // Upsert-based sync — no destructive deletes
       for (const user of redashUsers) {
         await prisma.redashUser.upsert({
-          where: { email: user.email },
+          where: { id: user.id },
           update: {
-            id: user.id,
             name: user.name,
+            email: user.email.toLowerCase(),
             isDisabled: user.is_disabled,
             groupIds: user.groups,
             lastSyncedAt: now,
@@ -54,7 +55,7 @@ export class SyncService {
           create: {
             id: user.id,
             name: user.name,
-            email: user.email,
+            email: user.email.toLowerCase(),
             isDisabled: user.is_disabled,
             groupIds: user.groups,
             lastSyncedAt: now,
@@ -62,23 +63,22 @@ export class SyncService {
         });
       }
 
-      // Clean up users that no longer exist in Redash
-      const activeEmails = redashUsers.map(u => u.email.toLowerCase());
+      // Remove users that no longer exist in Redash
+      const activeUserIds = redashUsers.map(u => u.id);
       await prisma.redashUser.deleteMany({
-        where: {
-          email: { notIn: activeEmails },
-        },
+        where: { id: { notIn: activeUserIds } },
       });
 
-      // Update RedashGroup member counts based on synced users cache
+      // Batch update member counts in a single transaction (fixes N+1 #27)
       const allCachedUsers = await prisma.redashUser.findMany();
-      for (const group of redashGroups) {
+      const updates = redashGroups.map(group => {
         const count = allCachedUsers.filter(u => u.groupIds.includes(group.id)).length;
-        await prisma.redashGroup.update({
+        return prisma.redashGroup.update({
           where: { id: group.id },
           data: { memberCount: count },
         });
-      }
+      });
+      await prisma.$transaction(updates);
 
       logger.info('🔄 SyncService: Redash synchronization completed successfully.');
       return {

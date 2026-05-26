@@ -18,7 +18,7 @@ export const AccessRequestModal: React.FC<AccessRequestModalProps> = ({
   onSuccess,
 }) => {
   const [justification, setJustification] = useState('');
-  const [duration, setDuration] = useState('ONE_WEEK');
+  const [duration, setDuration] = useState('PERMANENT');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -39,7 +39,7 @@ export const AccessRequestModal: React.FC<AccessRequestModalProps> = ({
         duration,
       });
       setJustification('');
-      setDuration('ONE_WEEK');
+      setDuration('PERMANENT');
       onSuccess();
       onClose();
     } catch (err: any) {
@@ -115,11 +115,10 @@ export const AccessRequestModal: React.FC<AccessRequestModalProps> = ({
             onChange={(e) => setDuration(e.target.value)}
             disabled={isSubmitting}
           >
+            <option value="PERMANENT">Permanent Access</option>
             <option value="ONE_DAY">1 Day (Temp Access)</option>
             <option value="ONE_WEEK">1 Week</option>
             <option value="ONE_MONTH">1 Month</option>
-            <option value="THREE_MONTHS">3 Months</option>
-            <option value="PERMANENT">Permanent Access</option>
           </select>
         </div>
       </form>

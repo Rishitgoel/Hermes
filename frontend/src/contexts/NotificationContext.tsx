@@ -33,10 +33,11 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     if (!isAuthenticated) return;
     setIsLoading(true);
     try {
-      const response = await apiClient.get('/api/notifications');
+      const [response, unreadRes] = await Promise.all([
+        apiClient.get('/api/notifications'),
+        apiClient.get('/api/notifications/unread-count')
+      ]);
       setNotifications(response.data);
-      
-      const unreadRes = await apiClient.get('/api/notifications/unread-count');
       setUnreadCount(unreadRes.data.count);
     } catch (error) {
       console.error('Failed to fetch notifications:', error);
@@ -71,8 +72,8 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     if (isAuthenticated) {
       fetchNotifications();
       
-      // Auto poll every 15 seconds to simulate live websocket changes for notifications
-      const interval = setInterval(fetchNotifications, 15000);
+      // Auto poll every 60 seconds (fixes #28)
+      const interval = setInterval(fetchNotifications, 60000);
       return () => clearInterval(interval);
     }
   }, [isAuthenticated]);

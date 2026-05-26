@@ -3,19 +3,21 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-const dotenv_1 = __importDefault(require("dotenv"));
-// Load dotenv early
-dotenv_1.default.config();
+require("./config/config"); // Loads dotenv + normalizes env once
+const config_1 = __importDefault(require("./config/config"));
 const index_1 = __importDefault(require("./index"));
 const logger_1 = __importDefault(require("./utils/logger"));
 const secrets_1 = require("./config/secrets");
 const keycloak_setup_1 = __importDefault(require("./config/keycloak-setup"));
 const scheduler_service_1 = __importDefault(require("./services/scheduler.service"));
 const sync_service_1 = __importDefault(require("./services/sync.service"));
-const PORT = process.env.PORT || 8001;
+const event_listeners_1 = require("./services/event-listeners");
+const PORT = config_1.default.port;
 async function bootstrap() {
     try {
         logger_1.default.info('🚀 Atlas Backend starting up...');
+        // 0. Register event listeners
+        (0, event_listeners_1.registerEventListeners)();
         // 1. Load AWS secrets (in production)
         await (0, secrets_1.loadSecrets)();
         // 2. Perform Keycloak check / client setup

@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import apiClient from '../services/apiClient';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import AccessRequestModal from '../components/access/AccessRequestModal';
+import PlatformInviteModal from '../components/access/PlatformInviteModal';
 import * as Icons from 'lucide-react';
 
 interface GroupAdmin {
@@ -46,8 +47,22 @@ export const GroupDetail: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isRequestModalOpen, setIsRequestModalOpen] = useState(false);
 
+  // Platform safeguards
+  const [isPlatformUser, setIsPlatformUser] = useState(true);
+  const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
+
   // Revoke state
   const [isRevoking, setIsRevoking] = useState<string | null>(null);
+
+  const checkPlatformStatus = async () => {
+    try {
+      const res = await apiClient.get('/api/user-access/platform-status/redash');
+      setIsPlatformUser(res.data.exists);
+    } catch (err) {
+      console.error('Failed to check platform status:', err);
+      setIsPlatformUser(false);
+    }
+  };
 
   const fetchGroupDetail = async () => {
     try {
@@ -55,7 +70,7 @@ export const GroupDetail: React.FC = () => {
       setGroup(res.data);
     } catch (err) {
       console.error('Failed to fetch group details:', err);
-      navigate('/groups');
+      navigate('/groups?platform=redash');
     } finally {
       setIsLoading(false);
     }
@@ -63,6 +78,7 @@ export const GroupDetail: React.FC = () => {
 
   useEffect(() => {
     fetchGroupDetail();
+    checkPlatformStatus();
   }, [slug]);
 
   const handleRevoke = async (memberAccessId: string, memberName: string) => {
@@ -109,7 +125,7 @@ export const GroupDetail: React.FC = () => {
       {/* Page Navigation */}
       <button 
         className="btn btn-outline" 
-        onClick={() => navigate('/groups')} 
+        onClick={() => navigate('/groups?platform=redash')} 
         style={{ marginBottom: '24px', padding: '6px 12px' }}
       >
         <Icons.ChevronLeft size={16} /> Back to Groups
@@ -198,7 +214,13 @@ export const GroupDetail: React.FC = () => {
           {group.accessStatus === 'NONE' && (
             <button 
               className="btn btn-primary" 
-              onClick={() => setIsRequestModalOpen(true)}
+              onClick={() => {
+                if (!isPlatformUser) {
+                  setIsInviteModalOpen(true);
+                } else {
+                  setIsRequestModalOpen(true);
+                }
+              }}
               style={{ width: '100%', marginTop: '12px' }}
             >
               Request Access
@@ -309,6 +331,17 @@ export const GroupDetail: React.FC = () => {
           onSuccess={fetchGroupDetail}
         />
       )}
+
+      {/* Platform Invite Modal */}
+      <PlatformInviteModal
+        isOpen={isInviteModalOpen}
+        onClose={() => setIsInviteModalOpen(false)}
+        platformId="redash"
+        platformName="Redash"
+        onSuccess={() => {
+          checkPlatformStatus();
+        }}
+      />
     </div>
   );
 };

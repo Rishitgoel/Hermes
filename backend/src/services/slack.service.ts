@@ -1,22 +1,25 @@
 import logger from '../utils/logger';
-import axios from 'axios';
+import config from '../config/config';
+import { createHttpClient } from '../utils/http-client';
 
 export class SlackService {
   private webhookUrl: string | null;
+  private client: any;
 
   constructor() {
-    const url = process.env.SLACK_WEBHOOK_URL;
+    const url = config.slack.webhookUrl;
     this.webhookUrl = url && url.startsWith('http') ? url : null;
+    this.client = this.webhookUrl ? createHttpClient({ baseURL: this.webhookUrl }) : null;
   }
 
   async sendPing(text: string): Promise<void> {
-    if (!this.webhookUrl) {
+    if (!this.client) {
       logger.info(`💬 [Slack Ping (Simulation)]: ${text}`);
       return;
     }
 
     try {
-      await axios.post(this.webhookUrl, { text });
+      await this.client.post('', { text });
       logger.info('💬 Slack ping sent successfully.');
     } catch (error: any) {
       logger.error('Failed to send Slack ping webhook:', error.message);

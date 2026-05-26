@@ -1,1 +1,1 @@
-export {};
+import './config/config';

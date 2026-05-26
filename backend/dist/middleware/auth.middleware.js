@@ -3,20 +3,21 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.requireRole = exports.authenticateToken = void 0;
+exports.checkIsGroupAdmin = exports.getAdminGroupSlugsFromRoles = exports.requireRole = exports.authenticateToken = void 0;
 const express_jwt_1 = require("express-jwt");
 const jwks_rsa_1 = __importDefault(require("jwks-rsa"));
 const logger_1 = __importDefault(require("../utils/logger"));
+const config_1 = __importDefault(require("../config/config"));
 const checkJwtLive = (0, express_jwt_1.expressjwt)({
     secret: jwks_rsa_1.default.expressJwtSecret({
         cache: true,
         rateLimit: true,
         jwksRequestsPerMinute: 5,
-        jwksUri: process.env.KEYCLOAK_JWKS_URI || 'https://keycloak.bachatt.app/realms/master/protocol/openid-connect/certs',
+        jwksUri: config_1.default.keycloak.jwksUri,
     }),
     algorithms: ['RS256'],
-    issuer: process.env.KEYCLOAK_ISSUER || 'https://keycloak.bachatt.app/realms/master',
-    audience: process.env.KEYCLOAK_AUDIENCE || 'atlas-prod',
+    issuer: config_1.default.keycloak.issuer,
+    ...(config_1.default.keycloak.audience ? { audience: config_1.default.keycloak.audience } : {}),
 });
 // Middleware for Live mapping
 const mapLiveKeycloakUser = (req, res, next) => {
@@ -44,7 +45,7 @@ const checkJwtSimulated = (req, res, next) => {
         req.user = {
             id: 'super-admin-uuid-1111',
             username: 'Mayank_Aggarwal',
-            email: 'mayank@bachatt.com',
+            email: 'mayank.aggarwal@bachatt.app',
             roles: ['atlas_super_admin', 'atlas_user'],
         };
     }
@@ -52,8 +53,8 @@ const checkJwtSimulated = (req, res, next) => {
         req.user = {
             id: 'group-admin-uuid-2222',
             username: 'Yogesh_Verma',
-            email: 'yogesh@bachatt.com',
-            roles: ['atlas_group_admin', 'atlas_user'],
+            email: 'yogesh.verma@bachatt.app',
+            roles: ['atlas_group_admin', 'atlas_group_admin_growth', 'atlas_user'],
         };
     }
     else {
@@ -61,7 +62,7 @@ const checkJwtSimulated = (req, res, next) => {
         req.user = {
             id: 'regular-user-uuid-3333',
             username: 'Rishit_Goel',
-            email: 'rishit@bachatt.com',
+            email: 'rishit.goel@bachatt.app',
             roles: ['atlas_user'],
         };
     }
@@ -81,7 +82,7 @@ const handleJwtError = (err, req, res, next) => {
     }
 };
 // Main middleware array export
-const useSimulation = process.env.KEYCLOAK_SIMULATION === 'true' || process.env.NODE_ENV === 'development';
+const useSimulation = config_1.default.isSimulation;
 exports.authenticateToken = useSimulation
     ? [checkJwtSimulated]
     : [checkJwtLive, mapLiveKeycloakUser, handleJwtError];
@@ -104,3 +105,30 @@ const requireRole = (requiredRoles) => {
     };
 };
 exports.requireRole = requireRole;
+const getAdminGroupSlugsFromRoles = (userRoles) => {
+    const prefixes = ['atlas_group_admin_', 'group_admin_'];
+    const slugs = [];
+    for (const role of userRoles) {
+        const lowerRole = role.toLowerCase();
+        for (const prefix of prefixes) {
+            if (lowerRole.startsWith(prefix)) {
+                const slug = lowerRole.substring(prefix.length).replace(/_/g, '-');
+                slugs.push(slug);
+            }
+        }
+    }
+    return slugs;
+};
+exports.getAdminGroupSlugsFromRoles = getAdminGroupSlugsFromRoles;
+const checkIsGroupAdmin = (userRoles, groupSlug) => {
+    const normalizedSlug = groupSlug.toLowerCase();
+    const underscoreSlug = normalizedSlug.replace(/-/g, '_');
+    const possibleRoles = [
+        `atlas_group_admin_${normalizedSlug}`,
+        `atlas_group_admin_${underscoreSlug}`,
+        `group_admin_${normalizedSlug}`,
+        `group_admin_${underscoreSlug}`
+    ];
+    return userRoles.some(role => possibleRoles.includes(role.toLowerCase()));
+};
+exports.checkIsGroupAdmin = checkIsGroupAdmin;

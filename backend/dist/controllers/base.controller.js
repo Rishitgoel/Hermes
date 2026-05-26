@@ -4,12 +4,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const logger_1 = __importDefault(require("../utils/logger"));
+const errors_1 = require("../utils/errors");
 class BaseController {
     logger;
-    body;
-    params;
-    query;
-    headers;
     user;
     req;
     res;
@@ -19,10 +16,6 @@ class BaseController {
         this.res = res;
         this.next = next;
         this.logger = req.log ?? logger_1.default;
-        this.body = req.body ?? {};
-        this.params = req.params ?? {};
-        this.query = req.query ?? {};
-        this.headers = req.headers ?? {};
         this.user = req.user;
     }
     createResponse(data, message, metadata) {
@@ -53,6 +46,9 @@ class BaseController {
         const response = this.createResponse(data, message, metadata);
         this.res.status(statusCode).json(response);
     }
+    sendCreated(data, message) {
+        this.sendResponse(data, message, 201);
+    }
     sendErrorResponse(error, statusCode = 500, metadata) {
         const response = this.createErrorResponse(error, metadata);
         this.logger.error({ error, statusCode }, 'Error response sent');
@@ -60,14 +56,22 @@ class BaseController {
     }
     handleError(error, message, statusCode = 500) {
         this.logger.error({ err: error }, message);
-        this.sendErrorResponse(message, statusCode);
+        if (error instanceof errors_1.BaseError) {
+            this.sendErrorResponse(error.message, error.statusCode, {
+                errorCode: error.errorCode,
+                context: error.context,
+            });
+        }
+        else {
+            this.sendErrorResponse(message, statusCode);
+        }
     }
     validateRequiredParams(params) {
         if (!params.length) {
             return { isValid: true };
         }
         const missingParams = params.filter(param => {
-            const value = this.params[param];
+            const value = this.req.params[param];
             return !value || (typeof value === 'string' && value.trim() === '');
         });
         if (missingParams.length > 0) {
@@ -81,7 +85,7 @@ class BaseController {
             return { isValid: true };
         }
         const missingFields = fields.filter(field => {
-            const value = this.body[field];
+            const value = this.req.body[field];
             return (value === undefined ||
                 value === null ||
                 (typeof value === 'string' && value.trim() === ''));
@@ -93,8 +97,8 @@ class BaseController {
         return { isValid: true };
     }
     validatePagination() {
-        const pageNoStr = this.headers['pageno'];
-        const pageSizeStr = this.headers['pagesize'];
+        const pageNoStr = this.req.headers['pageno'];
+        const pageSizeStr = this.req.headers['pagesize'];
         const pageNo = pageNoStr ? Number(pageNoStr) : 1;
         const pageSize = pageSizeStr ? Number(pageSizeStr) : 10;
         if (isNaN(pageNo) || isNaN(pageSize)) {

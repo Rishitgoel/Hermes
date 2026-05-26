@@ -1,6 +1,7 @@
 import prisma from '../config/prisma';
 import slackService from './slack.service';
 import logger from '../utils/logger';
+import config from '../config/config';
 
 export class NotificationService {
   // Create a general in-app notification
@@ -35,7 +36,7 @@ export class NotificationService {
     duration: string
   ): Promise<void> {
     // 1. Send Slack Ping
-    const slackMsg = `📋 *Atlas Access Request*\n--------------------------\n*${requesterName}* requested access to the *${groupName}* group.\nReason: "${justification}"\nDuration: ${duration.replace('_', ' ').toLowerCase()}\n\n👉 Review in Atlas: ${process.env.FRONTEND_URL || 'http://localhost:5173'}/pending-approvals`;
+    const slackMsg = `📋 *Atlas Access Request*\n--------------------------\n*${requesterName}* requested access to the *${groupName}* group.\nReason: "${justification}"\nDuration: ${duration.replace('_', ' ').toLowerCase()}\n\n👉 Review in Atlas: ${config.frontend.url}/pending-approvals`;
     await slackService.sendPing(slackMsg);
 
     // 2. Query Group Admins from DB and send in-app notification
@@ -71,7 +72,7 @@ export class NotificationService {
       ? `Your access request to ${groupName} was approved by ${reviewerName}.${note ? ` Note: "${note}"` : ''}`
       : `Your access request to ${groupName} was rejected by ${reviewerName}.${note ? ` Reason: "${note}"` : ''}`;
 
-    await this.createNotification(requesterId, title, message, approved ? '/my-access' : '/my-requests');
+    await this.createNotification(requesterId, title, message, approved ? '/' : '/my-requests');
 
     // Notify requester via Slack if possible (simulation simply pings admin webhook channel)
     const slackMsg = `📢 *Atlas Access Update*\n--------------------------\nAccess request to *${groupName}* was *${statusText}* by ${reviewerName}.${note ? `\nNote: "${note}"` : ''}`;

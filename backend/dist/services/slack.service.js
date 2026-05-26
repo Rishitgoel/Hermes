@@ -5,20 +5,23 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.slackService = exports.SlackService = void 0;
 const logger_1 = __importDefault(require("../utils/logger"));
-const axios_1 = __importDefault(require("axios"));
+const config_1 = __importDefault(require("../config/config"));
+const http_client_1 = require("../utils/http-client");
 class SlackService {
     webhookUrl;
+    client;
     constructor() {
-        const url = process.env.SLACK_WEBHOOK_URL;
+        const url = config_1.default.slack.webhookUrl;
         this.webhookUrl = url && url.startsWith('http') ? url : null;
+        this.client = this.webhookUrl ? (0, http_client_1.createHttpClient)({ baseURL: this.webhookUrl }) : null;
     }
     async sendPing(text) {
-        if (!this.webhookUrl) {
+        if (!this.client) {
             logger_1.default.info(`💬 [Slack Ping (Simulation)]: ${text}`);
             return;
         }
         try {
-            await axios_1.default.post(this.webhookUrl, { text });
+            await this.client.post('', { text });
             logger_1.default.info('💬 Slack ping sent successfully.');
         }
         catch (error) {

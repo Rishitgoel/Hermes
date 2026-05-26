@@ -10,7 +10,6 @@ import Dashboard from './pages/Dashboard';
 import Groups from './pages/Groups';
 import GroupDetail from './pages/GroupDetail';
 import MyRequests from './pages/MyRequests';
-import MyAccess from './pages/MyAccess';
 import PendingApprovals from './pages/PendingApprovals';
 import AuditLog from './pages/AuditLog';
 
@@ -32,7 +31,6 @@ export const App: React.FC = () => {
               
               {/* Request history and active status */}
               <Route path="my-requests" element={<MyRequests />} />
-              <Route path="my-access" element={<MyAccess />} />
               
               {/* Administrative Approvals Queue */}
               <Route 

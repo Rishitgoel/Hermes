@@ -28,8 +28,9 @@ apiClient.interceptors.request.use(
     // 1. Try to get token from Keycloak JS if active
     let token = (window as any).keycloak?.token;
     
-    // 2. Fallback to localStorage mock token in simulation mode
-    if (!token) {
+    // 2. Fallback to localStorage mock token in simulation mode ONLY
+    const useSimulation = import.meta.env.VITE_KEYCLOAK_SIMULATION !== 'false';
+    if (!token && useSimulation) {
       token = localStorage.getItem('atlas_mock_token');
     }
 

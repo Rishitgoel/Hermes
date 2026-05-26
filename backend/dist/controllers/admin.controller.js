@@ -8,6 +8,7 @@ const base_controller_1 = __importDefault(require("./base.controller"));
 const sync_service_1 = __importDefault(require("../services/sync.service"));
 const prisma_1 = __importDefault(require("../config/prisma"));
 const errors_1 = require("../utils/errors");
+const logger_1 = __importDefault(require("../utils/logger"));
 class AdminController extends base_controller_1.default {
     // POST /api/admin/sync
     async triggerSync(req, res, next) {
@@ -38,4 +39,3 @@ class AdminController extends base_controller_1.default {
     }
 }
 exports.AdminController = AdminController;
-const logger_1 = __importDefault(require("../utils/logger"));

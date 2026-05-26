@@ -21,7 +21,6 @@ export declare class RedashService {
     findOrInviteUser(email: string, name: string): Promise<number>;
     addUserToGroup(redashUserId: number, redashGroupId: number): Promise<void>;
     removeUserFromGroup(redashUserId: number, redashGroupId: number): Promise<void>;
-    disableUser(redashUserId: number): Promise<void>;
 }
 export declare const redashService: RedashService;
 export default redashService;

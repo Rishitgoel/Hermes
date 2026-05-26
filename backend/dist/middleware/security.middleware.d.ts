@@ -5,9 +5,7 @@ interface RateLimitConfig {
     message?: string;
 }
 declare class SecurityService {
-    private config;
-    constructor();
-    createRateLimiter(config: RateLimitConfig): (req: Request, res: Response, next: NextFunction) => void;
+    createRateLimiter(rateLimitConfig: RateLimitConfig): (req: Request, res: Response, next: NextFunction) => void;
     getGeneralRateLimiter(): (req: Request, res: Response, next: NextFunction) => void;
     getHelmetConfig(): (req: import("http").IncomingMessage, res: import("http").ServerResponse, next: (err?: unknown) => void) => void;
     createSecurityHeaders(): (req: Request, res: Response, next: NextFunction) => void;

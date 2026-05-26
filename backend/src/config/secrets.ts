@@ -2,33 +2,26 @@ import {
   SecretsManagerClient,
   GetSecretValueCommand,
 } from '@aws-sdk/client-secrets-manager';
-import dotenv from 'dotenv';
+import config from './config';
 import logger from '../utils/logger';
 
-// Load environment variables from .env file
-dotenv.config();
-
-if (process.env.NODE_ENV) {
-  process.env.NODE_ENV = process.env.NODE_ENV.replace(/['"]/g, '').trim();
-}
-
 let client: SecretsManagerClient | null = null;
-const isDev = process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'local' || process.env.KEYCLOAK_SIMULATION === 'true';
+const isDev = config.isDev || config.isSimulation;
 
 if (!isDev) {
-  const requiredEnvVars = [
-    'AWS_ACCESS_KEY_ID',
-    'AWS_SECRET_ACCESS_KEY',
-    'AWS_REGION',
-  ];
-  const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
+  const { region, accessKeyId, secretAccessKey } = config.aws;
+  const missingVars = [
+    !accessKeyId && 'AWS_ACCESS_KEY_ID',
+    !secretAccessKey && 'AWS_SECRET_ACCESS_KEY',
+    !region && 'AWS_REGION',
+  ].filter(Boolean);
 
   if (missingVars.length === 0) {
     client = new SecretsManagerClient({
-      region: process.env.AWS_REGION as string,
+      region: region!,
       credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID as string,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY as string,
+        accessKeyId: accessKeyId!,
+        secretAccessKey: secretAccessKey!,
       },
     });
   } else {
@@ -36,9 +29,7 @@ if (!isDev) {
   }
 }
 
-const secretName = process.env.AWS_SECRET_NAME || 'Atlas-Prod';
-
-export async function getSecret(secretName: string): Promise<string> {
+export async function getSecret(name: string): Promise<string> {
   if (!client) {
     logger.warn('SecretsManagerClient is not initialized. Cannot fetch secrets.');
     return '';
@@ -46,7 +37,7 @@ export async function getSecret(secretName: string): Promise<string> {
 
   try {
     const command = new GetSecretValueCommand({
-      SecretId: secretName,
+      SecretId: name,
     });
     const response = await client.send(command);
     if (response.SecretString) {
@@ -55,8 +46,8 @@ export async function getSecret(secretName: string): Promise<string> {
     return '';
   } catch (error) {
     logger.error(
-      { error, secretName },
-      `Error retrieving secret ${secretName}`,
+      { error, secretName: name },
+      `Error retrieving secret ${name}`,
     );
     throw error;
   }
@@ -64,19 +55,19 @@ export async function getSecret(secretName: string): Promise<string> {
 
 export async function loadSecrets(): Promise<void> {
   if (isDev) {
-    logger.info('Running in development mode. Using local variables from .env.');
+    logger.info('Running in development/simulation mode. Using local variables from .env.');
     return;
   }
 
   try {
     logger.info('Attempting to fetch secrets from AWS Secrets Manager...');
-    const value = await getSecret(secretName);
+    const value = await getSecret(config.aws.secretName);
     if (value) {
       const secretValue = JSON.parse(value);
       Object.entries(secretValue).forEach(([key, val]) => {
         process.env[key] = val as string;
       });
-      logger.info(`Successfully loaded and processed secrets from ${secretName}`);
+      logger.info(`Successfully loaded and processed secrets from ${config.aws.secretName}`);
     }
   } catch (error) {
     logger.warn('Failed loading secrets from AWS Secrets Manager. Relying on local env variables.');

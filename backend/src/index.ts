@@ -11,20 +11,29 @@ import notificationRouter from './routes/notification.route';
 import auditRouter from './routes/audit.route';
 import adminRouter from './routes/admin.route';
 
+import config from './config/config';
+import prisma from './config/prisma';
+import provisioningRegistry from './services/provisioning.registry';
+
 const app = express();
 
 // Security and utility middleware
 app.use(helmetMiddleware);
 app.use(securityHeaders);
 
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:5173,http://localhost:5174')
-  .split(',')
-  .map(o => o.trim());
+const allowedOrigins = config.frontend.allowedOrigins;
 
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
+      if (!origin) {
+        // Allow server-to-server / health-check / Postman only in non-prod
+        if (config.isDev) {
+          callback(null, true);
+        } else {
+          callback(new Error('Origin header required in production'));
+        }
+      } else if (allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
         callback(new Error('Not allowed by CORS'));
@@ -40,8 +49,31 @@ app.use(performanceMiddleware);
 app.use(generalRateLimiter);
 
 // Health check endpoint (unauthenticated)
-app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+app.get('/health', async (req, res) => {
+  const checks: Record<string, any> = { timestamp: new Date().toISOString() };
+
+  // Database check
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    checks.database = 'healthy';
+  } catch (err: any) {
+    checks.database = 'unhealthy';
+    checks.databaseError = err.message;
+  }
+
+  // Platform checks (via registry)
+  try {
+    checks.platforms = await provisioningRegistry.healthCheckAll();
+  } catch (err: any) {
+    checks.platforms = 'error';
+    checks.platformsError = err.message;
+  }
+
+  const allHealthy = checks.database === 'healthy';
+  res.status(allHealthy ? 200 : 503).json({
+    status: allHealthy ? 'ok' : 'degraded',
+    ...checks,
+  });
 });
 
 // App Routes
@@ -58,4 +90,3 @@ app.use(notFoundHandler);
 app.use(errorHandler);
 
 export default app;
-export { app };
