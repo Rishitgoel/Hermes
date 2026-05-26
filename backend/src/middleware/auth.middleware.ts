@@ -53,7 +53,14 @@ const mapLiveKeycloakUser = (req: Request, res: Response, next: NextFunction) =>
 const checkJwtSimulated = (req: Request, res: Response, next: NextFunction) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    res.status(401).json({ success: false, message: 'Authentication required (Simulation mode active. Use Bearer super_admin, Bearer group_admin, or Bearer user)' });
+    res.status(401).json({
+      success: false,
+      error: 'Authentication required (Simulation mode active. Use Bearer super_admin, Bearer group_admin, or Bearer user)',
+      metadata: {
+        timestamp: new Date().toISOString(),
+        errorCode: 'AUTHENTICATION_ERROR',
+      },
+    });
     return;
   }
 
@@ -95,9 +102,16 @@ const handleJwtError = (err: any, req: Request, res: Response, next: NextFunctio
       { path: req.path, method: req.method, error: err.message },
       'Invalid token access attempt',
     );
+    // Distinguish expired vs malformed/invalid so the client can react
+    // (e.g. the apiClient's 401 interceptor only retries after refresh).
+    const isExpired = err.inner?.name === 'TokenExpiredError' || /expired/i.test(err.message || '');
     res.status(401).json({
       success: false,
-      message: err.message,
+      error: err.message,
+      metadata: {
+        timestamp: new Date().toISOString(),
+        errorCode: isExpired ? 'TOKEN_EXPIRED' : 'AUTHENTICATION_ERROR',
+      },
     });
   } else {
     next(err);
@@ -116,7 +130,14 @@ export const requireRole = (requiredRoles: string[]) => {
   return (req: Request, res: Response, next: NextFunction): void => {
     if (!req.user || !req.user.roles) {
       logger.warn({ path: req.path }, 'Role check failed - no user found');
-      res.status(401).json({ success: false, message: 'Authentication required' });
+      res.status(401).json({
+        success: false,
+        error: 'Authentication required',
+        metadata: {
+          timestamp: new Date().toISOString(),
+          errorCode: 'AUTHENTICATION_ERROR',
+        },
+      });
       return;
     }
 
@@ -128,7 +149,14 @@ export const requireRole = (requiredRoles: string[]) => {
         { user: req.user.username, required: requiredRoles, actual: req.user.roles },
         'Insufficient permissions',
       );
-      res.status(403).json({ success: false, message: 'Insufficient permissions' });
+      res.status(403).json({
+        success: false,
+        error: 'Insufficient permissions',
+        metadata: {
+          timestamp: new Date().toISOString(),
+          errorCode: 'AUTHORIZATION_ERROR',
+        },
+      });
       return;
     }
 

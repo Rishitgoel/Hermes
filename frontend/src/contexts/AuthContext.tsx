@@ -42,6 +42,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Initialize Auth
   useEffect(() => {
+    let tokenRefreshIntervalId: number | null = null;
+
     if (useSimulation) {
       // Simulation mode
       const mockRole = localStorage.getItem('atlas_mock_token') as 'super_admin' | 'group_admin' | 'user' || 'user';
@@ -85,6 +87,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         })
         .then((authenticated) => {
           if (authenticated) {
+            // Refresh the access token whenever Keycloak signals expiry.
+            // Without this, tokens silently die after the realm's access-token
+            // lifespan (default 5 min) and every subsequent API call 401s.
+            keycloakInstance!.onTokenExpired = () => {
+              keycloakInstance!.updateToken(30).catch(() => keycloakInstance!.login());
+            };
+
+            // Proactive refresh: if the token has <70s left, renew it.
+            tokenRefreshIntervalId = window.setInterval(() => {
+              keycloakInstance!.updateToken(70).catch(() => keycloakInstance!.login());
+            }, 60_000);
+
             // Fetch backend /auth/me to verify user sync & details
             apiClient.get('/auth/me')
               .then((res: any) => {
@@ -115,6 +129,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setIsLoading(false);
         });
     }
+
+    return () => {
+      if (tokenRefreshIntervalId !== null) {
+        window.clearInterval(tokenRefreshIntervalId);
+      }
+    };
   }, []);
 
   const login = () => {

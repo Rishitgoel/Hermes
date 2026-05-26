@@ -7,7 +7,7 @@
     "build": "tsc",
     "start": "node dist/app.js",
     "prisma:generate": "prisma generate --schema=prisma/atlas/schema.prisma",
-    "prisma:migrate": "prisma migrate dev --schema=prisma/atlas/schema.prisma --name init",
+    "prisma:migrate": "prisma migrate dev --schema=prisma/atlas/schema.prisma",
     "prisma:seed": "ts-node prisma/atlas/seed.ts"
   },
   "dependencies": {

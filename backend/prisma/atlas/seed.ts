@@ -105,28 +105,36 @@ async function main() {
     });
     console.log('Seeded Growth admin: Yogesh Verma');
 
-    await prisma.userAccess.upsert({
+    // No composite unique key exists in Prisma anymore — uniqueness for active
+    // grants is enforced by a partial DB index. So we find-or-create manually.
+    const existingAccess = await prisma.userAccess.findFirst({
       where: {
-        userId_groupId_isActive: {
-          userId: 'group-admin-uuid-2222',
-          groupId: growthGroup.id,
-          isActive: true,
-        },
-      },
-      update: {
-        userName: 'Yogesh_Verma',
-        userEmail: 'yogesh.verma@bachatt.app',
-        grantedBy: 'system',
-      },
-      create: {
         userId: 'group-admin-uuid-2222',
         groupId: growthGroup.id,
-        userName: 'Yogesh_Verma',
-        userEmail: 'yogesh.verma@bachatt.app',
         isActive: true,
-        grantedBy: 'system',
       },
     });
+    if (existingAccess) {
+      await prisma.userAccess.update({
+        where: { id: existingAccess.id },
+        data: {
+          userName: 'Yogesh_Verma',
+          userEmail: 'yogesh.verma@bachatt.app',
+          grantedBy: 'system',
+        },
+      });
+    } else {
+      await prisma.userAccess.create({
+        data: {
+          userId: 'group-admin-uuid-2222',
+          groupId: growthGroup.id,
+          userName: 'Yogesh_Verma',
+          userEmail: 'yogesh.verma@bachatt.app',
+          isActive: true,
+          grantedBy: 'system',
+        },
+      });
+    }
     console.log('Seeded active UserAccess for Growth admin: Yogesh Verma');
   }
 

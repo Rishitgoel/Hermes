@@ -24,11 +24,22 @@ const apiClient = axios.create({
 
 // Request Interceptor: Inject token (live Keycloak token or mock simulation token)
 apiClient.interceptors.request.use(
-  (config) => {
-    // 1. Try to get token from Keycloak JS if active
-    let token = (window as any).keycloak?.token;
-    
-    // 2. Fallback to localStorage mock token in simulation mode ONLY
+  async (config) => {
+    const kc = (window as any).keycloak;
+
+    // In live mode, refresh the token if it's about to expire (<30s left).
+    // updateToken is a no-op if the token is still fresh.
+    if (kc && typeof kc.updateToken === 'function') {
+      try {
+        await kc.updateToken(30);
+      } catch {
+        // refresh failed — fall through; the 401 retry below will redirect to login
+      }
+    }
+
+    let token = kc?.token;
+
+    // Fallback to localStorage mock token in simulation mode ONLY
     const useSimulation = import.meta.env.VITE_KEYCLOAK_SIMULATION !== 'false';
     if (!token && useSimulation) {
       token = localStorage.getItem('atlas_mock_token');
@@ -37,7 +48,7 @@ apiClient.interceptors.request.use(
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
-    
+
     return config;
   },
   (error) => Promise.reject(error)
@@ -65,10 +76,31 @@ apiClient.interceptors.response.use(
     }
     return response;
   },
-  (error) => {
+  async (error) => {
     if (error.response) {
       const status = error.response.status;
       const resData = error.response.data;
+      const originalRequest = error.config as
+        | (typeof error.config & { _retriedAfterRefresh?: boolean })
+        | undefined;
+
+      // 401 → try a one-shot token refresh, then retry the original request.
+      // Avoids stale-token loops where the access token has expired but the
+      // refresh token is still valid.
+      if (status === 401 && originalRequest && !originalRequest._retriedAfterRefresh) {
+        const kc = (window as any).keycloak;
+        if (kc && typeof kc.updateToken === 'function') {
+          try {
+            const refreshed = await kc.updateToken(-1); // force refresh
+            if (refreshed) {
+              originalRequest._retriedAfterRefresh = true;
+              return apiClient(originalRequest);
+            }
+          } catch {
+            // fall through to the normal error path
+          }
+        }
+      }
 
       // Extract error details from backend custom BaseError shape
       if (resData && typeof resData === 'object' && 'error' in resData) {
@@ -90,7 +122,7 @@ apiClient.interceptors.response.use(
         )
       );
     }
-    
+
     return Promise.reject(new ApiClientError(error.message || 'Network error', 0, 'NETWORK_ERROR'));
   }
 );
