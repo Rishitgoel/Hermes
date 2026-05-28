@@ -48,7 +48,7 @@ The first applies the new index. The second refreshes the generated Prisma clien
 |----|------|--------|------|
 | **P1** | **Cleanup & drift (this week)** | | |
 | ~~P1-1~~ | ~~Extract admin-check helper~~ — Done in `afeafccc` | S | Low |
-| ~~P1-2~~ | ~~Periodic Redash sync~~ — Done (commit pending) | S | Low |
+| ~~P1-2~~ | ~~Periodic Redash sync~~ — Done in `f5982fca` | S | Low |
 | P1-3 | Reconcile THREE_MONTHS duration | XS | Low |
 | P1-4 | Add .env.example files | XS | Low |
 | P1-5 | Frontend data-fetching hook | M | Low |
