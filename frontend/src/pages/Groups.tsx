@@ -780,6 +780,7 @@ export const Groups: React.FC = () => {
                     <option value="ONE_DAY">1 Day (Temp Access)</option>
                     <option value="ONE_WEEK">1 Week</option>
                     <option value="ONE_MONTH">1 Month</option>
+                    <option value="THREE_MONTHS">3 Months</option>
                   </select>
                 </div>
               </div>
