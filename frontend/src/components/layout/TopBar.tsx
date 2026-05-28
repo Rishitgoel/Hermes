@@ -129,7 +129,9 @@ export const TopBar: React.FC = () => {
             </div>
             <div className="user-details">
               <span className="user-name">{user.username.replace('_', ' ')}</span>
-              <span className="user-role-badge">{getPrimaryRoleLabel(user.roles)}</span>
+              {getPrimaryRoleLabel(user.roles) !== 'Employee' && (
+                <span className="user-role-badge">{getPrimaryRoleLabel(user.roles)}</span>
+              )}
             </div>
           </div>
         )}

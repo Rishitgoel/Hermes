@@ -73,7 +73,6 @@ export const Dashboard: React.FC = () => {
   }
 
   // Calculate statistics
-  const totalGroups = groups.length;
   const activeAccessCount = accesses.length;
   const pendingRequestCount = groups.filter((g) => g.accessStatus === 'PENDING').length;
 
@@ -142,7 +141,7 @@ export const Dashboard: React.FC = () => {
           </div>
         </div>
 
-        {isAdmin ? (
+        {isAdmin && (
           <div className="stat-card" onClick={() => navigate('/pending-approvals')} style={{ cursor: 'pointer', borderLeft: '4px solid var(--secondary)' }}>
             <div className="stat-icon-wrapper" style={{ backgroundColor: 'var(--primary-light)', color: 'var(--secondary)' }}>
               <Icons.CheckSquare size={26} />
@@ -150,16 +149,6 @@ export const Dashboard: React.FC = () => {
             <div className="stat-info">
               <span className="stat-value" style={{ color: 'var(--secondary)' }}>{pendingReviewCount}</span>
               <span className="stat-label">Approvals Pending</span>
-            </div>
-          </div>
-        ) : (
-          <div className="stat-card" onClick={() => navigate('/groups')} style={{ cursor: 'pointer' }}>
-            <div className="stat-icon-wrapper">
-              <Icons.Layers size={26} />
-            </div>
-            <div className="stat-info">
-              <span className="stat-value">{totalGroups}</span>
-              <span className="stat-label">Total Groups</span>
             </div>
           </div>
         )}

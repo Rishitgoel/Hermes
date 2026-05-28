@@ -54,7 +54,7 @@ export const Sidebar: React.FC = () => {
           className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
         >
           <Layers size={20} />
-          <span>Groups</span>
+          <span>Platforms</span>
         </NavLink>
 
         <NavLink 
