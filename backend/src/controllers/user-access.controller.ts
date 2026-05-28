@@ -4,7 +4,7 @@ import prisma from '../config/prisma';
 import accessWorkflowService from '../services/access-workflow.service';
 import provisioningRegistry from '../services/provisioning.registry';
 import { AuthorizationError, NotFoundError } from '../utils/errors';
-import { checkIsGroupAdmin } from '../middleware/auth.middleware';
+import { isGroupAdminOf } from '../utils/authz';
 import { PlatformEnum } from '../validations/platform.validation';
 
 export class UserAccessController extends BaseController {
@@ -33,33 +33,7 @@ export class UserAccessController extends BaseController {
       const userId = this.getUserId();
       if (!userId) return;
 
-      // Authorization Check: Super Admin or Group Admin of this group
-      const isSuperAdmin = this.user!.roles.includes('atlas_super_admin');
-      let isAuthorized = isSuperAdmin;
-
-      if (!isAuthorized && this.user!.roles.includes('atlas_group_admin')) {
-        const adminEntry = await prisma.groupAdmin.findUnique({
-          where: {
-            groupId_userId: {
-              groupId,
-              userId: userId,
-            },
-          },
-        });
-        if (adminEntry) {
-          isAuthorized = true;
-        } else {
-          const group = await prisma.group.findUnique({
-            where: { id: groupId },
-            select: { slug: true }
-          });
-          if (group && checkIsGroupAdmin(this.user!.roles, group.slug)) {
-            isAuthorized = true;
-          }
-        }
-      }
-
-      if (!isAuthorized) {
+      if (!(await isGroupAdminOf(this.user!, groupId))) {
         throw new AuthorizationError('You do not have permission to view this group member list');
       }
 
@@ -92,29 +66,7 @@ export class UserAccessController extends BaseController {
         throw new NotFoundError('User access record not found');
       }
 
-      // 2. Authorization Check: Super Admin, or Group Admin of this group
-      const isSuperAdmin = this.user!.roles.includes('atlas_super_admin');
-      let isAuthorized = isSuperAdmin;
-
-      if (!isAuthorized && this.user!.roles.includes('atlas_group_admin')) {
-        const adminEntry = await prisma.groupAdmin.findUnique({
-          where: {
-            groupId_userId: {
-              groupId: access.groupId,
-              userId: userId,
-            },
-          },
-        });
-        if (adminEntry) {
-          isAuthorized = true;
-        } else {
-          if (access.group && checkIsGroupAdmin(this.user!.roles, access.group.slug)) {
-            isAuthorized = true;
-          }
-        }
-      }
-
-      if (!isAuthorized) {
+      if (!(await isGroupAdminOf(this.user!, access.groupId, access.group?.slug))) {
         throw new AuthorizationError('You do not have permission to revoke access for this group');
       }
 
