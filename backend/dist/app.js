@@ -15,7 +15,7 @@ const event_listeners_1 = require("./services/event-listeners");
 const PORT = config_1.default.port;
 async function bootstrap() {
     try {
-        logger_1.default.info('🚀 Atlas Backend starting up...');
+        logger_1.default.info('🚀 Hermes Backend starting up...');
         // 0. Register event listeners
         (0, event_listeners_1.registerEventListeners)();
         // 1. Load AWS secrets (in production)
@@ -34,7 +34,7 @@ async function bootstrap() {
         });
         // 5. Start Express server
         const server = index_1.default.listen(PORT, () => {
-            logger_1.default.info(`🚀 Atlas Backend listening on http://localhost:${PORT}`);
+            logger_1.default.info(`🚀 Hermes Backend listening on http://localhost:${PORT}`);
         });
         // Graceful shutdown
         const shutdown = () => {
@@ -49,7 +49,7 @@ async function bootstrap() {
         process.on('SIGINT', shutdown);
     }
     catch (error) {
-        logger_1.default.fatal('❌ Failed to bootstrap Atlas Application:', error.message);
+        logger_1.default.fatal('❌ Failed to bootstrap Hermes Application:', error.message);
         process.exit(1);
     }
 }

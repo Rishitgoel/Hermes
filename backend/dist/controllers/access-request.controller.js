@@ -11,6 +11,7 @@ const access_request_validation_1 = require("../validations/access-request.valid
 const client_1 = require("@prisma/client");
 const errors_1 = require("../utils/errors");
 const auth_middleware_1 = require("../middleware/auth.middleware");
+const authz_1 = require("../utils/authz");
 class AccessRequestController extends base_controller_1.default {
     // POST /api/access-requests
     async createRequest(req, res, next) {
@@ -27,20 +28,9 @@ class AccessRequestController extends base_controller_1.default {
                 email: this.user.email,
             };
             const { groupId, justification, duration } = validated.data;
-            // Check if user is superadmin or admin of this group (prevent self-requesting)
-            const group = await prisma_1.default.group.findUnique({
-                where: { id: groupId },
-                select: { slug: true }
-            });
-            if (group) {
-                const isSuperAdmin = this.user.roles.includes('atlas_super_admin');
-                const isKeycloakAdmin = (0, auth_middleware_1.checkIsGroupAdmin)(this.user.roles, group.slug);
-                const dbAdmin = await prisma_1.default.groupAdmin.findFirst({
-                    where: { groupId, userId }
-                });
-                if (isSuperAdmin || isKeycloakAdmin || dbAdmin) {
-                    throw new errors_1.ValidationError('You are an admin of this group and already have active access by default.');
-                }
+            // Prevent self-requesting if the caller already administers this group.
+            if (await (0, authz_1.isGroupAdminOf)(this.user, groupId)) {
+                throw new errors_1.ValidationError('You are an admin of this group and already have active access by default.');
             }
             const request = await access_workflow_service_1.default.createRequest(requester, groupId, justification, duration);
             this.sendResponse(request, 'Access request submitted successfully', 201);
@@ -72,13 +62,13 @@ class AccessRequestController extends base_controller_1.default {
             const userId = this.getUserId();
             if (!userId)
                 return;
-            const isSuperAdmin = this.user.roles.includes('atlas_super_admin');
-            const isGroupAdmin = this.user.roles.includes('atlas_group_admin');
-            if (!isSuperAdmin && !isGroupAdmin) {
+            const superAdmin = (0, authz_1.isSuperAdmin)(this.user);
+            const isGroupAdmin = this.user.roles.includes('hermes_group_admin');
+            if (!superAdmin && !isGroupAdmin) {
                 throw new errors_1.AuthorizationError('Only admins can view pending requests');
             }
             let requests;
-            if (isSuperAdmin) {
+            if (superAdmin) {
                 // Super admin sees all pending requests
                 requests = await prisma_1.default.accessRequest.findMany({
                     where: { status: client_1.RequestStatus.PENDING },
@@ -133,25 +123,8 @@ class AccessRequestController extends base_controller_1.default {
             }
             // Authorization Check: Must be requester, super_admin, or admin of the request's group
             const isRequester = request.requesterId === userId;
-            const isSuperAdmin = this.user.roles.includes('atlas_super_admin');
-            let isGroupAdminOfRequest = false;
-            if (this.user.roles.includes('atlas_group_admin')) {
-                const adminEntry = await prisma_1.default.groupAdmin.findUnique({
-                    where: {
-                        groupId_userId: {
-                            groupId: request.groupId,
-                            userId: userId,
-                        },
-                    },
-                });
-                if (adminEntry) {
-                    isGroupAdminOfRequest = true;
-                }
-                else if (request.group && (0, auth_middleware_1.checkIsGroupAdmin)(this.user.roles, request.group.slug)) {
-                    isGroupAdminOfRequest = true;
-                }
-            }
-            if (!isRequester && !isSuperAdmin && !isGroupAdminOfRequest) {
+            const canAdminister = isRequester || (await (0, authz_1.isGroupAdminOf)(this.user, request.groupId, request.group?.slug));
+            if (!canAdminister) {
                 throw new errors_1.AuthorizationError('You are not authorized to view this request');
             }
             this.sendResponse(request, 'Access request retrieved successfully');
@@ -178,26 +151,7 @@ class AccessRequestController extends base_controller_1.default {
             if (!request) {
                 throw new errors_1.NotFoundError('Access request not found');
             }
-            // 2. Authorization Check: Super Admin or Group Admin of this group
-            const isSuperAdmin = this.user.roles.includes('atlas_super_admin');
-            let isAuthorized = isSuperAdmin;
-            if (!isAuthorized && this.user.roles.includes('atlas_group_admin')) {
-                const adminEntry = await prisma_1.default.groupAdmin.findUnique({
-                    where: {
-                        groupId_userId: {
-                            groupId: request.groupId,
-                            userId: userId,
-                        },
-                    },
-                });
-                if (adminEntry) {
-                    isAuthorized = true;
-                }
-                else if (request.group && (0, auth_middleware_1.checkIsGroupAdmin)(this.user.roles, request.group.slug)) {
-                    isAuthorized = true;
-                }
-            }
-            if (!isAuthorized) {
+            if (!(await (0, authz_1.isGroupAdminOf)(this.user, request.groupId, request.group?.slug))) {
                 throw new errors_1.AuthorizationError('You do not have permission to review requests for this group');
             }
             const { status, note } = validated.data;

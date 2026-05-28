@@ -34,6 +34,9 @@ export declare class NotFoundError extends BaseError {
 export declare class ConflictError extends BaseError {
     constructor(message: string, context?: Record<string, unknown>, userId?: string, requestId?: string);
 }
+export declare class UserNotApprovedError extends BaseError {
+    constructor(message: string, context?: Record<string, unknown>, userId?: string, requestId?: string);
+}
 export declare class ExternalServiceError extends BaseError {
     constructor(message: string, context?: Record<string, unknown>, userId?: string, requestId?: string);
 }

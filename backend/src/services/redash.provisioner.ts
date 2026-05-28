@@ -39,6 +39,7 @@ export class RedashProvisioner implements PlatformAdapter {
       where: { email: email.toLowerCase() },
       update: {
         name,
+        isInvitationPending: true,
         lastSyncedAt: new Date(),
       },
       create: {
@@ -46,6 +47,7 @@ export class RedashProvisioner implements PlatformAdapter {
         name,
         email: email.toLowerCase(),
         isDisabled: false,
+        isInvitationPending: true,
         groupIds: [1],
         lastSyncedAt: new Date(),
       },

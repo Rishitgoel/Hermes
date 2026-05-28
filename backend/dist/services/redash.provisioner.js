@@ -9,7 +9,7 @@ const prisma_1 = __importDefault(require("../config/prisma"));
 class RedashProvisioner {
     platform = 'redash';
     async provision(ctx) {
-        const redashUserId = await redash_service_1.default.findOrInviteUser(ctx.email, ctx.name);
+        const { id: redashUserId } = await redash_service_1.default.findOrInviteUser(ctx.email, ctx.name);
         if (ctx.externalGroupId) {
             await redash_service_1.default.addUserToGroup(redashUserId, parseInt(ctx.externalGroupId, 10));
         }
@@ -31,11 +31,12 @@ class RedashProvisioner {
         };
     }
     async inviteUser(email, name) {
-        const redashUserId = await redash_service_1.default.findOrInviteUser(email, name);
+        const { id: redashUserId } = await redash_service_1.default.findOrInviteUser(email, name);
         await prisma_1.default.redashUser.upsert({
             where: { email: email.toLowerCase() },
             update: {
                 name,
+                isInvitationPending: true,
                 lastSyncedAt: new Date(),
             },
             create: {
@@ -43,6 +44,7 @@ class RedashProvisioner {
                 name,
                 email: email.toLowerCase(),
                 isDisabled: false,
+                isInvitationPending: true,
                 groupIds: [1],
                 lastSyncedAt: new Date(),
             },

@@ -6,8 +6,13 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.syncService = exports.SyncService = void 0;
 const prisma_1 = __importDefault(require("../config/prisma"));
 const redash_service_1 = __importDefault(require("./redash.service"));
+const user_creation_service_1 = __importDefault(require("./user-creation.service"));
 const logger_1 = __importDefault(require("../utils/logger"));
 class SyncService {
+    lastSyncedAt = null;
+    getLastSyncedAt() {
+        return this.lastSyncedAt;
+    }
     async syncWithRedash() {
         logger_1.default.info('🔄 SyncService: Starting Redash synchronization...');
         const now = new Date();
@@ -49,6 +54,7 @@ class SyncService {
                         name: user.name,
                         email: user.email.toLowerCase(),
                         isDisabled: user.is_disabled,
+                        isInvitationPending: user.is_invitation_pending,
                         groupIds: user.groups,
                         lastSyncedAt: now,
                     },
@@ -57,6 +63,7 @@ class SyncService {
                         name: user.name,
                         email: user.email.toLowerCase(),
                         isDisabled: user.is_disabled,
+                        isInvitationPending: user.is_invitation_pending,
                         groupIds: user.groups,
                         lastSyncedAt: now,
                     },
@@ -77,6 +84,26 @@ class SyncService {
                 });
             });
             await prisma_1.default.$transaction(updates);
+            // Notify user-creation workflow about every active Redash user. The handler
+            // is a cheap no-op for users with no pending request; it only acts when a
+            // UserCreationRequest exists in APPROVED/AWAITING_SETUP. Per-user try/catch
+            // so one failure can't break the rest of the batch.
+            for (const u of redashUsers) {
+                if (u.is_disabled)
+                    continue;
+                try {
+                    await user_creation_service_1.default.handleRedashUserDetected({
+                        id: u.id,
+                        email: u.email,
+                        name: u.name,
+                        isInvitationPending: u.is_invitation_pending,
+                    });
+                }
+                catch (err) {
+                    logger_1.default.error({ redashUserId: u.id, email: u.email, error: err.message }, 'handleRedashUserDetected failed for one user; continuing batch');
+                }
+            }
+            this.lastSyncedAt = new Date();
             logger_1.default.info('🔄 SyncService: Redash synchronization completed successfully.');
             return {
                 usersSynced: redashUsers.length,
@@ -86,6 +113,50 @@ class SyncService {
         catch (error) {
             logger_1.default.error('🔄 SyncService: Sync failed:', error.message);
             throw error;
+        }
+    }
+    async syncSingleUser(email) {
+        logger_1.default.info({ email }, '🔄 SyncService: Starting fast-path single user Redash synchronization...');
+        try {
+            const user = await redash_service_1.default.fetchUserByEmail(email);
+            if (!user) {
+                logger_1.default.warn({ email }, '🔄 SyncService: User not found in Redash during single sync.');
+                return false;
+            }
+            const now = new Date();
+            await prisma_1.default.redashUser.upsert({
+                where: { id: user.id },
+                update: {
+                    name: user.name,
+                    email: user.email.toLowerCase(),
+                    isDisabled: user.is_disabled,
+                    isInvitationPending: user.is_invitation_pending,
+                    groupIds: user.groups,
+                    lastSyncedAt: now,
+                },
+                create: {
+                    id: user.id,
+                    name: user.name,
+                    email: user.email.toLowerCase(),
+                    isDisabled: user.is_disabled,
+                    isInvitationPending: user.is_invitation_pending,
+                    groupIds: user.groups,
+                    lastSyncedAt: now,
+                },
+            });
+            if (!user.is_disabled) {
+                await user_creation_service_1.default.handleRedashUserDetected({
+                    id: user.id,
+                    email: user.email,
+                    name: user.name,
+                    isInvitationPending: user.is_invitation_pending,
+                });
+            }
+            return true;
+        }
+        catch (error) {
+            logger_1.default.error({ email, error: error.message }, '🔄 SyncService: Single user sync failed');
+            return false;
         }
     }
 }

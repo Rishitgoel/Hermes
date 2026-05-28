@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.errorMonitor = exports.ErrorMonitor = exports.InternalServerError = exports.ExternalServiceError = exports.ConflictError = exports.NotFoundError = exports.AuthorizationError = exports.AuthenticationError = exports.ValidationError = exports.BaseError = void 0;
+exports.errorMonitor = exports.ErrorMonitor = exports.InternalServerError = exports.ExternalServiceError = exports.UserNotApprovedError = exports.ConflictError = exports.NotFoundError = exports.AuthorizationError = exports.AuthenticationError = exports.ValidationError = exports.BaseError = void 0;
 const logger_1 = __importDefault(require("./logger"));
 // Base error class with enhanced properties
 class BaseError extends Error {
@@ -77,6 +77,15 @@ class ConflictError extends BaseError {
     }
 }
 exports.ConflictError = ConflictError;
+// 409 — admin tried to approve a group request before the requester's user-creation
+// request was approved. Frontend keys off errorCode === 'USER_NOT_APPROVED' to show
+// "Approve user first" instead of the generic conflict message.
+class UserNotApprovedError extends BaseError {
+    constructor(message, context, userId, requestId) {
+        super(message, 409, 'USER_NOT_APPROVED', true, context, userId, requestId);
+    }
+}
+exports.UserNotApprovedError = UserNotApprovedError;
 // External service errors (502)
 class ExternalServiceError extends BaseError {
     constructor(message, context, userId, requestId) {

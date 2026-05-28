@@ -6,8 +6,21 @@ import eventBus from './event-bus';
 import logger from '../utils/logger';
 import { UserCreationStatus } from '@prisma/client';
 import { ConflictError, NotFoundError, ValidationError } from '../utils/errors';
+import { normalizeRedashInviteLink } from '../utils/redash-url';
 
 const RESEND_COOLDOWN_MS = 60 * 1000; // 60s rate-limit on Resend Invite
+
+/**
+ * Row-shaped wrapper around `normalizeRedashInviteLink`. Returns the same row
+ * with `inviteLink` rewritten to match REDASH_BASE_URL so historical rows
+ * with stale links (e.g. wrong port from earlier bugs) come out clean.
+ */
+function normalizeInviteLink<T extends { inviteLink?: string | null }>(row: T): T {
+  if (row.inviteLink) {
+    row.inviteLink = normalizeRedashInviteLink(row.inviteLink);
+  }
+  return row;
+}
 
 export interface RequesterIdentity {
   id: string;
@@ -34,14 +47,14 @@ export class UserCreationService {
     const existing = await prisma.userCreationRequest.findUnique({
       where: { userId: user.id },
     });
-    if (existing) return existing;
+    if (existing) return normalizeInviteLink(existing);
 
     const lowerEmail = user.email.toLowerCase();
     const redashUser = await prisma.redashUser.findUnique({
       where: { email: lowerEmail },
     });
 
-    if (redashUser && !redashUser.isDisabled) {
+    if (redashUser && !redashUser.isDisabled && !redashUser.isInvitationPending) {
       logger.info(
         { userId: user.id, email: lowerEmail, redashUserId: redashUser.id },
         '🌱 Auto-completing user-creation request (user already exists on Redash)',
@@ -55,7 +68,7 @@ export class UserCreationService {
           externalUserId: redashUser.id,
           completedAt: new Date(),
         },
-      });
+      }).then(normalizeInviteLink);
     }
 
     return prisma.userCreationRequest.create({
@@ -65,7 +78,7 @@ export class UserCreationService {
         userEmail: lowerEmail,
         status: UserCreationStatus.DRAFT,
       },
-    });
+    }).then(normalizeInviteLink);
   }
 
   /** Move DRAFT -> PENDING with a justification. */
@@ -103,11 +116,11 @@ export class UserCreationService {
       timestamp: new Date(),
     });
 
-    return updated;
+    return normalizeInviteLink(updated);
   }
 
   async getMyRequest(userId: string) {
-    return prisma.userCreationRequest.findUnique({ where: { userId } });
+    return prisma.userCreationRequest.findUnique({ where: { userId } }).then(row => row ? normalizeInviteLink(row) : null);
   }
 
   /** Admin: list everything currently in PENDING state. */
@@ -189,7 +202,7 @@ export class UserCreationService {
         timestamp: new Date(),
       });
 
-      return updated;
+      return normalizeInviteLink(updated);
     }
 
     // APPROVED branch
@@ -260,7 +273,7 @@ export class UserCreationService {
           );
         });
 
-        return completed;
+        return normalizeInviteLink(completed);
       }
 
       const awaiting = await prisma.userCreationRequest.update({
@@ -296,7 +309,7 @@ export class UserCreationService {
         timestamp: new Date(),
       });
 
-      return awaiting;
+      return normalizeInviteLink(awaiting);
     } catch (err: any) {
       logger.error(
         { requestId: row.id, error: err.message },
@@ -347,7 +360,7 @@ export class UserCreationService {
         },
       });
       logger.info({ userId, externalUserId, hadNewLink: !!inviteLink }, '📨 Resent Redash invite');
-      return updated;
+      return normalizeInviteLink(updated);
     } catch (err: any) {
       await prisma.userCreationRequest.update({
         where: { id: row.id },
@@ -363,7 +376,10 @@ export class UserCreationService {
    * inside the sync upsert loop and advance the row to COMPLETED.
    */
   async forceSync(userId: string) {
-    await syncService.syncWithRedash();
+    const row = await prisma.userCreationRequest.findUnique({ where: { userId } });
+    if (row) {
+      await syncService.syncSingleUser(row.userEmail);
+    }
     return this.getMyRequest(userId);
   }
 
@@ -371,12 +387,24 @@ export class UserCreationService {
    * Called from the Redash user-sync upsert loop whenever a RedashUser row is newly inserted
    * (or its isDisabled flipped false). Quietly no-ops if there's nothing to do.
    */
-  async handleRedashUserDetected(redashUser: { id: number; email: string; name: string }) {
+  async handleRedashUserDetected(redashUser: { id: number; email: string; name: string; isInvitationPending?: boolean }) {
     const lowerEmail = redashUser.email.toLowerCase();
     const row = await prisma.userCreationRequest.findUnique({
       where: { userEmail: lowerEmail },
     });
     if (!row) return; // No tracked request for this email — nothing to do.
+
+    // If the invite is still pending, they are not finished setting up.
+    // Record externalUserId if needed, but do not advance to COMPLETED.
+    if (redashUser.isInvitationPending) {
+      if (row.externalUserId !== redashUser.id) {
+        await prisma.userCreationRequest.update({
+          where: { id: row.id },
+          data: { externalUserId: redashUser.id },
+        });
+      }
+      return;
+    }
 
     // Always record externalUserId once we know it, regardless of status.
     if (

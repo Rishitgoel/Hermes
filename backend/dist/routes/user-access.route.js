@@ -8,11 +8,11 @@ router.get('/me', auth_middleware_1.authenticateToken, (req, res, next) => {
     const controller = new user_access_controller_1.UserAccessController(req, res, next);
     controller.getMyAccess(req, res, next).catch(next);
 });
-router.get('/group/:groupId', auth_middleware_1.authenticateToken, (0, auth_middleware_1.requireRole)(['atlas_super_admin', 'atlas_group_admin']), (req, res, next) => {
+router.get('/group/:groupId', auth_middleware_1.authenticateToken, (0, auth_middleware_1.requireRole)(['hermes_super_admin', 'hermes_group_admin']), (req, res, next) => {
     const controller = new user_access_controller_1.UserAccessController(req, res, next);
     controller.getGroupAccessList(req, res, next).catch(next);
 });
-router.delete('/:id', auth_middleware_1.authenticateToken, (0, auth_middleware_1.requireRole)(['atlas_super_admin', 'atlas_group_admin']), (req, res, next) => {
+router.delete('/:id', auth_middleware_1.authenticateToken, (0, auth_middleware_1.requireRole)(['hermes_super_admin', 'hermes_group_admin']), (req, res, next) => {
     const controller = new user_access_controller_1.UserAccessController(req, res, next);
     controller.revokeAccess(req, res, next).catch(next);
 });

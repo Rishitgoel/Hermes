@@ -14,9 +14,11 @@ const user_access_route_1 = __importDefault(require("./routes/user-access.route"
 const notification_route_1 = __importDefault(require("./routes/notification.route"));
 const audit_route_1 = __importDefault(require("./routes/audit.route"));
 const admin_route_1 = __importDefault(require("./routes/admin.route"));
+const user_creation_route_1 = __importDefault(require("./routes/user-creation.route"));
 const config_1 = __importDefault(require("./config/config"));
 const prisma_1 = __importDefault(require("./config/prisma"));
 const provisioning_registry_1 = __importDefault(require("./services/provisioning.registry"));
+const sync_service_1 = __importDefault(require("./services/sync.service"));
 const app = (0, express_1.default)();
 // Security and utility middleware
 app.use(security_middleware_1.helmetMiddleware);
@@ -66,6 +68,8 @@ app.get('/health', async (req, res) => {
         checks.platforms = 'error';
         checks.platformsError = err.message;
     }
+    // Last successful Redash sync (null if never run)
+    checks.lastRedashSyncAt = sync_service_1.default.getLastSyncedAt()?.toISOString() ?? null;
     const allHealthy = checks.database === 'healthy';
     res.status(allHealthy ? 200 : 503).json({
         status: allHealthy ? 'ok' : 'degraded',
@@ -80,6 +84,7 @@ app.use('/api/user-access', user_access_route_1.default);
 app.use('/api/notifications', notification_route_1.default);
 app.use('/api/audit', audit_route_1.default);
 app.use('/api/admin', admin_route_1.default);
+app.use('/api/user-creation-requests', user_creation_route_1.default);
 // Fallbacks
 app.use(error_middleware_1.notFoundHandler);
 app.use(error_middleware_1.errorHandler);

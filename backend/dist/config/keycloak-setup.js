@@ -10,7 +10,7 @@ const config_1 = __importDefault(require("./config"));
 class KeycloakSetupService {
     async ensureClientAndRolesExist() {
         if (config_1.default.isSimulation || !config_1.default.keycloak.adminPassword) {
-            logger_1.default.info('🔑 Keycloak setup: Running in SIMULATION mode. Auto-configuring atlas-prod client and roles locally in memory.');
+            logger_1.default.info('🔑 Keycloak setup: Running in SIMULATION mode. Auto-configuring hermes-prod client and roles locally in memory.');
             return;
         }
         try {
@@ -32,8 +32,8 @@ class KeycloakSetupService {
             });
             const accessToken = tokenRes.data.access_token;
             logger_1.default.info('🔑 Keycloak setup: Authenticated with Keycloak Admin API.');
-            // 2. Check if client 'atlas-prod' exists
-            const targetClientId = config_1.default.keycloak.audience || 'atlas-prod';
+            // 2. Check if client 'hermes-prod' exists
+            const targetClientId = config_1.default.keycloak.audience || 'hermes-prod';
             const clientsUrl = `${adminUrl}/admin/realms/${realm}/clients`;
             const clientsRes = await axios_1.default.get(clientsUrl, {
                 headers: { Authorization: `Bearer ${accessToken}` },
@@ -55,7 +55,7 @@ class KeycloakSetupService {
                     directAccessGrantsEnabled: true,
                     standardFlowEnabled: true,
                     redirectUris: [
-                        'https://atlas.bachatt.app/*',
+                        'https://hermes.bachatt.app/*',
                         'http://localhost:5173/*',
                         'http://localhost:5174/*',
                     ],
@@ -72,7 +72,7 @@ class KeycloakSetupService {
                 clientDbId = recheckRes.data.find((c) => c.clientId === targetClientId)?.id || '';
             }
             // 3. Ensure Roles Exist
-            const roles = ['atlas_super_admin', 'atlas_group_admin', 'atlas_user'];
+            const roles = ['hermes_super_admin', 'hermes_group_admin', 'hermes_user'];
             const rolesUrl = `${adminUrl}/admin/realms/${realm}/roles`;
             for (const roleName of roles) {
                 try {
@@ -84,7 +84,7 @@ class KeycloakSetupService {
                 catch (err) {
                     if (err.response && err.response.status === 404) {
                         logger_1.default.info(`🔑 Keycloak setup: Creating realm role '${roleName}'...`);
-                        await axios_1.default.post(rolesUrl, { name: roleName, description: `Atlas ${roleName.replace('atlas_', '')} role` }, { headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' } });
+                        await axios_1.default.post(rolesUrl, { name: roleName, description: `Hermes ${roleName.replace('hermes_', '')} role` }, { headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' } });
                         logger_1.default.info(`🔑 Keycloak setup: Role '${roleName}' created.`);
                     }
                     else {

@@ -7,26 +7,54 @@ exports.schedulerService = exports.SchedulerService = void 0;
 const node_cron_1 = __importDefault(require("node-cron"));
 const prisma_1 = __importDefault(require("../config/prisma"));
 const access_workflow_service_1 = __importDefault(require("./access-workflow.service"));
+const sync_service_1 = __importDefault(require("./sync.service"));
+const config_1 = __importDefault(require("../config/config"));
 const logger_1 = __importDefault(require("../utils/logger"));
 class SchedulerService {
-    cronJob = null;
-    // Starts the hourly cron job
+    expiryJob = null;
+    redashSyncJob = null;
+    // Starts all cron jobs (auto-revoke + periodic Redash sync)
     start() {
-        logger_1.default.info('⏰ Scheduler Service: Starting auto-revocation hourly cron job...');
-        // Run every hour: '0 * * * *'
-        // For local dev/testing comfort, let's run it every 5 minutes in development mode if configured, or default to hourly
-        const schedulePattern = process.env.NODE_ENV === 'development' ? '*/5 * * * *' : '0 * * * *';
-        this.cronJob = node_cron_1.default.schedule(schedulePattern, async () => {
+        this.startExpiryJob();
+        this.startRedashSyncJob();
+    }
+    // Stops all cron jobs
+    stop() {
+        if (this.expiryJob) {
+            this.expiryJob.stop();
+            this.expiryJob = null;
+            logger_1.default.info('⏰ Scheduler Service: Expiry cron job stopped.');
+        }
+        if (this.redashSyncJob) {
+            this.redashSyncJob.stop();
+            this.redashSyncJob = null;
+            logger_1.default.info('⏰ Scheduler Service: Redash sync cron job stopped.');
+        }
+    }
+    startExpiryJob() {
+        // Hourly in prod, every 5 minutes in dev for faster feedback.
+        const pattern = config_1.default.isDev ? '*/5 * * * *' : '0 * * * *';
+        logger_1.default.info(`⏰ Scheduler Service: Starting auto-revocation cron job (pattern: ${pattern}).`);
+        this.expiryJob = node_cron_1.default.schedule(pattern, async () => {
             logger_1.default.info('⏰ Scheduler Service: Checking for expired access grants...');
             await this.checkAndRevokeExpiredAccess();
         });
     }
-    // Stops the cron job
-    stop() {
-        if (this.cronJob) {
-            this.cronJob.stop();
-            logger_1.default.info('⏰ Scheduler Service: Hourly cron job stopped.');
-        }
+    startRedashSyncJob() {
+        // Every 15 minutes in prod, every 5 minutes in dev.
+        const pattern = config_1.default.isDev ? '*/5 * * * *' : '*/15 * * * *';
+        logger_1.default.info(`⏰ Scheduler Service: Starting periodic Redash sync (pattern: ${pattern}).`);
+        this.redashSyncJob = node_cron_1.default.schedule(pattern, async () => {
+            try {
+                const result = await sync_service_1.default.syncWithRedash();
+                logger_1.default.info(`⏰ Scheduler Service: Periodic Redash sync done — ${result.usersSynced} users, ${result.groupsSynced} groups.`);
+            }
+            catch (err) {
+                // Never throw out of the cron handler — a transient Redash hiccup
+                // shouldn't tear down the scheduler.
+                logger_1.default.warn(`⏰ Scheduler Service: Periodic Redash sync failed: ${err.message}`);
+            }
+        });
     }
     // Scan DB for expired accesses and run revocation workflow
     async checkAndRevokeExpiredAccess() {

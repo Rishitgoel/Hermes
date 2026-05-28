@@ -9,7 +9,7 @@ const prisma_1 = __importDefault(require("../config/prisma"));
 const access_workflow_service_1 = __importDefault(require("../services/access-workflow.service"));
 const provisioning_registry_1 = __importDefault(require("../services/provisioning.registry"));
 const errors_1 = require("../utils/errors");
-const auth_middleware_1 = require("../middleware/auth.middleware");
+const authz_1 = require("../utils/authz");
 const platform_validation_1 = require("../validations/platform.validation");
 class UserAccessController extends base_controller_1.default {
     // GET /api/user-access/me
@@ -36,32 +36,7 @@ class UserAccessController extends base_controller_1.default {
             const userId = this.getUserId();
             if (!userId)
                 return;
-            // Authorization Check: Super Admin or Group Admin of this group
-            const isSuperAdmin = this.user.roles.includes('atlas_super_admin');
-            let isAuthorized = isSuperAdmin;
-            if (!isAuthorized && this.user.roles.includes('atlas_group_admin')) {
-                const adminEntry = await prisma_1.default.groupAdmin.findUnique({
-                    where: {
-                        groupId_userId: {
-                            groupId,
-                            userId: userId,
-                        },
-                    },
-                });
-                if (adminEntry) {
-                    isAuthorized = true;
-                }
-                else {
-                    const group = await prisma_1.default.group.findUnique({
-                        where: { id: groupId },
-                        select: { slug: true }
-                    });
-                    if (group && (0, auth_middleware_1.checkIsGroupAdmin)(this.user.roles, group.slug)) {
-                        isAuthorized = true;
-                    }
-                }
-            }
-            if (!isAuthorized) {
+            if (!(await (0, authz_1.isGroupAdminOf)(this.user, groupId))) {
                 throw new errors_1.AuthorizationError('You do not have permission to view this group member list');
             }
             const accesses = await prisma_1.default.userAccess.findMany({
@@ -90,28 +65,7 @@ class UserAccessController extends base_controller_1.default {
             if (!access) {
                 throw new errors_1.NotFoundError('User access record not found');
             }
-            // 2. Authorization Check: Super Admin, or Group Admin of this group
-            const isSuperAdmin = this.user.roles.includes('atlas_super_admin');
-            let isAuthorized = isSuperAdmin;
-            if (!isAuthorized && this.user.roles.includes('atlas_group_admin')) {
-                const adminEntry = await prisma_1.default.groupAdmin.findUnique({
-                    where: {
-                        groupId_userId: {
-                            groupId: access.groupId,
-                            userId: userId,
-                        },
-                    },
-                });
-                if (adminEntry) {
-                    isAuthorized = true;
-                }
-                else {
-                    if (access.group && (0, auth_middleware_1.checkIsGroupAdmin)(this.user.roles, access.group.slug)) {
-                        isAuthorized = true;
-                    }
-                }
-            }
-            if (!isAuthorized) {
+            if (!(await (0, authz_1.isGroupAdminOf)(this.user, access.groupId, access.group?.slug))) {
                 throw new errors_1.AuthorizationError('You do not have permission to revoke access for this group');
             }
             const revoker = {

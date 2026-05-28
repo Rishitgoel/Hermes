@@ -38,9 +38,11 @@ exports.config = {
         baseUrl: process.env.REDASH_BASE_URL || 'https://redash.bachatt.app',
         apiKey: process.env.REDASH_API_KEY || 'dummy-key-for-development',
         get isSimulation() {
+            // ON only when explicitly requested, or when the key is still the dev
+            // dummy. The previous `|| config.isDev` clause forced simulation on
+            // locally even when REDASH_SIMULATION=false, making the toggle a no-op.
             return process.env.REDASH_SIMULATION === 'true'
-                || this.apiKey === 'dummy-key-for-development'
-                || exports.config.isDev;
+                || this.apiKey === 'dummy-key-for-development';
         },
     },
     slack: {
@@ -50,7 +52,7 @@ exports.config = {
         region: process.env.AWS_REGION,
         accessKeyId: process.env.AWS_ACCESS_KEY_ID,
         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-        secretName: process.env.AWS_SECRET_NAME || 'Atlas-Prod',
+        secretName: process.env.AWS_SECRET_NAME || 'Hermes-Prod',
     },
     frontend: {
         url: process.env.FRONTEND_URL || 'http://localhost:5173',

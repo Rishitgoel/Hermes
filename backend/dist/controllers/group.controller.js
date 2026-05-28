@@ -36,7 +36,7 @@ class GroupController extends base_controller_1.default {
                     where: { requesterId: userId, status: client_1.RequestStatus.PENDING },
                 })
             ]);
-            const isSuperAdmin = this.user?.roles.includes('atlas_super_admin') || false;
+            const isSuperAdmin = this.user?.roles.includes('hermes_super_admin') || false;
             const enrichedGroups = groups.map(g => {
                 let accessStatus = 'NONE';
                 const hasActive = activeAccesses.some(a => a.groupId === g.id);
@@ -107,7 +107,7 @@ class GroupController extends base_controller_1.default {
             const pendingRequest = await prisma_1.default.accessRequest.findFirst({
                 where: { requesterId: userId, groupId: group.id, status: client_1.RequestStatus.PENDING },
             });
-            const isSuperAdmin = this.user?.roles.includes('atlas_super_admin') || false;
+            const isSuperAdmin = this.user?.roles.includes('hermes_super_admin') || false;
             const isKeycloakAdmin = this.user?.roles ? (0, auth_middleware_1.checkIsGroupAdmin)(this.user.roles, group.slug) : false;
             const isAdminOfGroup = group.admins.some(adm => adm.userId === userId) || isKeycloakAdmin;
             let accessStatus = 'NONE';

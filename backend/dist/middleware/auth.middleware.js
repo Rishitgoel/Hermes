@@ -37,7 +37,14 @@ const mapLiveKeycloakUser = (req, res, next) => {
 const checkJwtSimulated = (req, res, next) => {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        res.status(401).json({ success: false, message: 'Authentication required (Simulation mode active. Use Bearer super_admin, Bearer group_admin, or Bearer user)' });
+        res.status(401).json({
+            success: false,
+            error: 'Authentication required (Simulation mode active. Use Bearer super_admin, Bearer group_admin, or Bearer user)',
+            metadata: {
+                timestamp: new Date().toISOString(),
+                errorCode: 'AUTHENTICATION_ERROR',
+            },
+        });
         return;
     }
     const token = authHeader.split(' ')[1];
@@ -46,7 +53,7 @@ const checkJwtSimulated = (req, res, next) => {
             id: 'super-admin-uuid-1111',
             username: 'Mayank_Aggarwal',
             email: 'mayank.aggarwal@bachatt.app',
-            roles: ['atlas_super_admin', 'atlas_user'],
+            roles: ['hermes_super_admin', 'hermes_user'],
         };
     }
     else if (token === 'group_admin') {
@@ -54,7 +61,7 @@ const checkJwtSimulated = (req, res, next) => {
             id: 'group-admin-uuid-2222',
             username: 'Yogesh_Verma',
             email: 'yogesh.verma@bachatt.app',
-            roles: ['atlas_group_admin', 'atlas_group_admin_growth', 'atlas_user'],
+            roles: ['hermes_group_admin', 'hermes_group_admin_growth', 'hermes_user'],
         };
     }
     else {
@@ -63,7 +70,7 @@ const checkJwtSimulated = (req, res, next) => {
             id: 'regular-user-uuid-3333',
             username: 'Rishit_Goel',
             email: 'rishit.goel@bachatt.app',
-            roles: ['atlas_user'],
+            roles: ['hermes_user'],
         };
     }
     logger_1.default.debug({ user: req.user.username, roles: req.user.roles, path: req.path }, 'Authenticated via Simulation mode');
@@ -72,9 +79,16 @@ const checkJwtSimulated = (req, res, next) => {
 const handleJwtError = (err, req, res, next) => {
     if (err.name === 'UnauthorizedError') {
         logger_1.default.warn({ path: req.path, method: req.method, error: err.message }, 'Invalid token access attempt');
+        // Distinguish expired vs malformed/invalid so the client can react
+        // (e.g. the apiClient's 401 interceptor only retries after refresh).
+        const isExpired = err.inner?.name === 'TokenExpiredError' || /expired/i.test(err.message || '');
         res.status(401).json({
             success: false,
-            message: err.message,
+            error: err.message,
+            metadata: {
+                timestamp: new Date().toISOString(),
+                errorCode: isExpired ? 'TOKEN_EXPIRED' : 'AUTHENTICATION_ERROR',
+            },
         });
     }
     else {
@@ -91,14 +105,28 @@ const requireRole = (requiredRoles) => {
     return (req, res, next) => {
         if (!req.user || !req.user.roles) {
             logger_1.default.warn({ path: req.path }, 'Role check failed - no user found');
-            res.status(401).json({ success: false, message: 'Authentication required' });
+            res.status(401).json({
+                success: false,
+                error: 'Authentication required',
+                metadata: {
+                    timestamp: new Date().toISOString(),
+                    errorCode: 'AUTHENTICATION_ERROR',
+                },
+            });
             return;
         }
         const userRoles = req.user?.roles ?? [];
         const hasRole = requiredRoles.some(role => userRoles.includes(role));
         if (!hasRole) {
             logger_1.default.warn({ user: req.user.username, required: requiredRoles, actual: req.user.roles }, 'Insufficient permissions');
-            res.status(403).json({ success: false, message: 'Insufficient permissions' });
+            res.status(403).json({
+                success: false,
+                error: 'Insufficient permissions',
+                metadata: {
+                    timestamp: new Date().toISOString(),
+                    errorCode: 'AUTHORIZATION_ERROR',
+                },
+            });
             return;
         }
         next();
@@ -106,7 +134,7 @@ const requireRole = (requiredRoles) => {
 };
 exports.requireRole = requireRole;
 const getAdminGroupSlugsFromRoles = (userRoles) => {
-    const prefixes = ['atlas_group_admin_', 'group_admin_'];
+    const prefixes = ['hermes_group_admin_', 'group_admin_'];
     const slugs = [];
     for (const role of userRoles) {
         const lowerRole = role.toLowerCase();
@@ -124,8 +152,8 @@ const checkIsGroupAdmin = (userRoles, groupSlug) => {
     const normalizedSlug = groupSlug.toLowerCase();
     const underscoreSlug = normalizedSlug.replace(/-/g, '_');
     const possibleRoles = [
-        `atlas_group_admin_${normalizedSlug}`,
-        `atlas_group_admin_${underscoreSlug}`,
+        `hermes_group_admin_${normalizedSlug}`,
+        `hermes_group_admin_${underscoreSlug}`,
         `group_admin_${normalizedSlug}`,
         `group_admin_${underscoreSlug}`
     ];

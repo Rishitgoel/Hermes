@@ -12,7 +12,7 @@ router.get('/my', auth_middleware_1.authenticateToken, (req, res, next) => {
     const controller = new access_request_controller_1.AccessRequestController(req, res, next);
     controller.getMyRequests(req, res, next).catch(next);
 });
-router.get('/pending', auth_middleware_1.authenticateToken, (0, auth_middleware_1.requireRole)(['atlas_super_admin', 'atlas_group_admin']), (req, res, next) => {
+router.get('/pending', auth_middleware_1.authenticateToken, (0, auth_middleware_1.requireRole)(['hermes_super_admin', 'hermes_group_admin']), (req, res, next) => {
     const controller = new access_request_controller_1.AccessRequestController(req, res, next);
     controller.getPendingRequests(req, res, next).catch(next);
 });
@@ -20,7 +20,7 @@ router.get('/:id', auth_middleware_1.authenticateToken, (req, res, next) => {
     const controller = new access_request_controller_1.AccessRequestController(req, res, next);
     controller.getRequestDetail(req, res, next).catch(next);
 });
-router.put('/:id/review', auth_middleware_1.authenticateToken, (0, auth_middleware_1.requireRole)(['atlas_super_admin', 'atlas_group_admin']), (req, res, next) => {
+router.put('/:id/review', auth_middleware_1.authenticateToken, (0, auth_middleware_1.requireRole)(['hermes_super_admin', 'hermes_group_admin']), (req, res, next) => {
     const controller = new access_request_controller_1.AccessRequestController(req, res, next);
     controller.reviewRequest(req, res, next).catch(next);
 });

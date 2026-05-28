@@ -1,12 +1,14 @@
 import logger from '../utils/logger';
 import config from '../config/config';
 import { createHttpClient } from '../utils/http-client';
+import { normalizeRedashInviteLink } from '../utils/redash-url';
 
 export interface RedashUserResponse {
   id: number;
   name: string;
   email: string;
   is_disabled: boolean;
+  is_invitation_pending: boolean;
   groups: number[];
 }
 
@@ -42,10 +44,10 @@ export class RedashService {
     if (this.isSimulation) {
       logger.info('📊 Redash syncUsers (Simulation): Returning mock users.');
       return [
-        { id: 1, name: 'Mayank Aggarwal', email: 'mayank.aggarwal@bachatt.app', is_disabled: false, groups: [1, 2] },
-        { id: 2, name: 'Yogesh Verma', email: 'yogesh.verma@bachatt.app', is_disabled: false, groups: [1, 101] },
-        { id: 3, name: 'Rishit Goel', email: 'rishit.goel@bachatt.app', is_disabled: false, groups: [1] },
-        { id: 4, name: 'Ankit Sharma', email: 'ankit.sharma@bachatt.app', is_disabled: false, groups: [1, 2] },
+        { id: 1, name: 'Mayank Aggarwal', email: 'mayank.aggarwal@bachatt.app', is_disabled: false, is_invitation_pending: false, groups: [1, 2] },
+        { id: 2, name: 'Yogesh Verma', email: 'yogesh.verma@bachatt.app', is_disabled: false, is_invitation_pending: false, groups: [1, 101] },
+        { id: 3, name: 'Rishit Goel', email: 'rishit.goel@bachatt.app', is_disabled: false, is_invitation_pending: false, groups: [1] },
+        { id: 4, name: 'Ankit Sharma', email: 'ankit.sharma@bachatt.app', is_disabled: false, is_invitation_pending: false, groups: [1, 2] },
       ];
     }
 
@@ -58,11 +60,51 @@ export class RedashService {
         name: u.name,
         email: u.email,
         is_disabled: u.is_disabled,
-        groups: u.groups || [],
+        is_invitation_pending: !!u.is_invitation_pending,
+        // Modern Redash returns `groups` as an array of {id, name} objects;
+        // older builds (and the sim shim) return plain integer IDs. Normalize
+        // to Int[] so the `RedashUser.groupIds Int[]` column accepts it.
+        groups: Array.isArray(u.groups)
+          ? u.groups.map((g: any) => (typeof g === 'number' ? g : g?.id)).filter((g: any) => typeof g === 'number')
+          : [],
       }));
     } catch (error: any) {
       logger.error('Failed to sync users from Redash API:', error.message);
       throw new Error(`Redash API syncUsers error: ${error.message}`);
+    }
+  }
+
+  // Fetch a single user by email from Redash (Fast-path single sync)
+  async fetchUserByEmail(email: string): Promise<RedashUserResponse | null> {
+    if (this.isSimulation) {
+      const lower = email.toLowerCase();
+      const mock = [
+        { id: 1, name: 'Mayank Aggarwal', email: 'mayank.aggarwal@bachatt.app', is_disabled: false, is_invitation_pending: false, groups: [1, 2] },
+        { id: 2, name: 'Yogesh Verma', email: 'yogesh.verma@bachatt.app', is_disabled: false, is_invitation_pending: false, groups: [1, 101] },
+        { id: 3, name: 'Rishit Goel', email: 'rishit.goel@bachatt.app', is_disabled: false, is_invitation_pending: false, groups: [1] },
+        { id: 4, name: 'Ankit Sharma', email: 'ankit.sharma@bachatt.app', is_disabled: false, is_invitation_pending: false, groups: [1, 2] },
+      ].find(u => u.email === lower);
+      return mock || null;
+    }
+
+    try {
+      const client = this.getClient();
+      const searchRes = await client.get(`/api/users?q=${encodeURIComponent(email)}`);
+      const u = searchRes.data.results.find((u: any) => u.email.toLowerCase() === email.toLowerCase());
+      if (!u) return null;
+      return {
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        is_disabled: u.is_disabled,
+        is_invitation_pending: !!u.is_invitation_pending,
+        groups: Array.isArray(u.groups)
+          ? u.groups.map((g: any) => (typeof g === 'number' ? g : g?.id)).filter((g: any) => typeof g === 'number')
+          : [],
+      };
+    } catch (error: any) {
+      logger.error(`Failed to fetch user ${email} from Redash API:`, error.message);
+      return null;
     }
   }
 
@@ -128,6 +170,20 @@ export class RedashService {
 
       if (existing) {
         logger.info(`📊 Redash findOrInviteUser: Found existing user ${email} with ID ${existing.id}`);
+        
+        // If the user's invitation is pending, generate and return a new invite link
+        if (existing.is_invitation_pending) {
+          logger.info(`📊 Redash findOrInviteUser: Existing user ${email} invitation is pending. Generating new invite link...`);
+          try {
+            const inviteRes = await client.post(`/api/users/${existing.id}/invite`);
+            const rawLink: string | undefined =
+              typeof inviteRes.data?.invite_link === 'string' ? inviteRes.data.invite_link : undefined;
+            const inviteLink = normalizeRedashInviteLink(rawLink);
+            return { id: existing.id, inviteLink };
+          } catch (inviteErr: any) {
+            logger.warn({ email, error: inviteErr.message }, 'Failed to generate invite link for existing pending user; proceeding without it');
+          }
+        }
         return { id: existing.id };
       }
 
@@ -138,10 +194,12 @@ export class RedashService {
         name,
         email,
       });
-      const inviteLink: string | undefined =
+      const rawLink: string | undefined =
         typeof inviteRes.data?.invite_link === 'string' ? inviteRes.data.invite_link : undefined;
+      const inviteLink = normalizeRedashInviteLink(rawLink);
+
       logger.info(
-        `📊 Redash findOrInviteUser: Successfully invited user ${email} with ID ${inviteRes.data.id}${inviteLink ? ' (captured invite link)' : ''}`,
+        `📊 Redash findOrInviteUser: Successfully invited user ${email} with ID ${inviteRes.data.id}${inviteLink ? ' (normalized invite link)' : ''}`,
       );
       return { id: inviteRes.data.id, inviteLink };
     } catch (error: any) {

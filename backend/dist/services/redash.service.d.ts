@@ -3,6 +3,7 @@ export interface RedashUserResponse {
     name: string;
     email: string;
     is_disabled: boolean;
+    is_invitation_pending: boolean;
     groups: number[];
 }
 export interface RedashGroupResponse {
@@ -17,8 +18,19 @@ export declare class RedashService {
     constructor();
     private getClient;
     syncUsers(): Promise<RedashUserResponse[]>;
+    fetchUserByEmail(email: string): Promise<RedashUserResponse | null>;
     syncGroups(): Promise<RedashGroupResponse[]>;
-    findOrInviteUser(email: string, name: string): Promise<number>;
+    /**
+     * Result of `findOrInviteUser`:
+     *  - `id` is the Redash user ID, populated either way.
+     *  - `inviteLink` is the Redash-issued one-time setup URL, present ONLY when
+     *    we just created a fresh invited user. Returns undefined when the user
+     *    already existed (no setup needed).
+     */
+    findOrInviteUser(email: string, name: string): Promise<{
+        id: number;
+        inviteLink?: string;
+    }>;
     addUserToGroup(redashUserId: number, redashGroupId: number): Promise<void>;
     removeUserFromGroup(redashUserId: number, redashGroupId: number): Promise<void>;
 }

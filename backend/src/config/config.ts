@@ -38,9 +38,11 @@ export const config = {
     baseUrl: process.env.REDASH_BASE_URL || 'https://redash.bachatt.app',
     apiKey: process.env.REDASH_API_KEY || 'dummy-key-for-development',
     get isSimulation() {
+      // ON only when explicitly requested, or when the key is still the dev
+      // dummy. The previous `|| config.isDev` clause forced simulation on
+      // locally even when REDASH_SIMULATION=false, making the toggle a no-op.
       return process.env.REDASH_SIMULATION === 'true'
-        || this.apiKey === 'dummy-key-for-development'
-        || config.isDev;
+        || this.apiKey === 'dummy-key-for-development';
     },
   },
 

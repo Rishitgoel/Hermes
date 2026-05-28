@@ -58,5 +58,52 @@ function registerEventListeners() {
             logger_1.default.error('Failed to notify access.expired event:', err.message);
         }
     });
+    // Group access request approved but waiting for the user to finish Redash setup.
+    event_bus_1.default.on('access.queued-for-setup', async (event) => {
+        try {
+            const { requesterId, groupName, reviewerName } = event.payload;
+            await notification_service_1.default.notifyAccessQueuedForSetup(requesterId, groupName, reviewerName);
+        }
+        catch (err) {
+            logger_1.default.error('Failed to notify access.queued-for-setup event:', err.message);
+        }
+    });
+    // User-creation lifecycle
+    event_bus_1.default.on('user-creation.submitted', async (event) => {
+        try {
+            const { requestId, userName, userEmail, justification } = event.payload;
+            await notification_service_1.default.notifyUserCreationSubmitted(requestId, userName, userEmail, justification);
+        }
+        catch (err) {
+            logger_1.default.error('Failed to notify user-creation.submitted event:', err.message);
+        }
+    });
+    event_bus_1.default.on('user-creation.invited', async (event) => {
+        try {
+            const { userId, userEmail, reviewerName } = event.payload;
+            await notification_service_1.default.notifyUserCreationApproved(userId, userEmail, reviewerName);
+        }
+        catch (err) {
+            logger_1.default.error('Failed to notify user-creation.invited event:', err.message);
+        }
+    });
+    event_bus_1.default.on('user-creation.rejected', async (event) => {
+        try {
+            const { userId, reviewerName, note } = event.payload;
+            await notification_service_1.default.notifyUserCreationRejected(userId, reviewerName, note);
+        }
+        catch (err) {
+            logger_1.default.error('Failed to notify user-creation.rejected event:', err.message);
+        }
+    });
+    event_bus_1.default.on('user-creation.completed', async (event) => {
+        try {
+            const { userId, userEmail } = event.payload;
+            await notification_service_1.default.notifyUserCreationCompleted(userId, userEmail);
+        }
+        catch (err) {
+            logger_1.default.error('Failed to notify user-creation.completed event:', err.message);
+        }
+    });
     logger_1.default.info('📡 Event listeners registered.');
 }

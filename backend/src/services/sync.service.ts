@@ -56,6 +56,7 @@ export class SyncService {
             name: user.name,
             email: user.email.toLowerCase(),
             isDisabled: user.is_disabled,
+            isInvitationPending: user.is_invitation_pending,
             groupIds: user.groups,
             lastSyncedAt: now,
           },
@@ -64,6 +65,7 @@ export class SyncService {
             name: user.name,
             email: user.email.toLowerCase(),
             isDisabled: user.is_disabled,
+            isInvitationPending: user.is_invitation_pending,
             groupIds: user.groups,
             lastSyncedAt: now,
           },
@@ -98,6 +100,7 @@ export class SyncService {
             id: u.id,
             email: u.email,
             name: u.name,
+            isInvitationPending: u.is_invitation_pending,
           });
         } catch (err: any) {
           logger.error(
@@ -116,6 +119,52 @@ export class SyncService {
     } catch (error: any) {
       logger.error('🔄 SyncService: Sync failed:', error.message);
       throw error;
+    }
+  }
+
+  async syncSingleUser(email: string): Promise<boolean> {
+    logger.info({ email }, '🔄 SyncService: Starting fast-path single user Redash synchronization...');
+    try {
+      const user = await redashService.fetchUserByEmail(email);
+      if (!user) {
+        logger.warn({ email }, '🔄 SyncService: User not found in Redash during single sync.');
+        return false;
+      }
+
+      const now = new Date();
+      await prisma.redashUser.upsert({
+        where: { id: user.id },
+        update: {
+          name: user.name,
+          email: user.email.toLowerCase(),
+          isDisabled: user.is_disabled,
+          isInvitationPending: user.is_invitation_pending,
+          groupIds: user.groups,
+          lastSyncedAt: now,
+        },
+        create: {
+          id: user.id,
+          name: user.name,
+          email: user.email.toLowerCase(),
+          isDisabled: user.is_disabled,
+          isInvitationPending: user.is_invitation_pending,
+          groupIds: user.groups,
+          lastSyncedAt: now,
+        },
+      });
+
+      if (!user.is_disabled) {
+        await userCreationService.handleRedashUserDetected({
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          isInvitationPending: user.is_invitation_pending,
+        });
+      }
+      return true;
+    } catch (error: any) {
+      logger.error({ email, error: error.message }, '🔄 SyncService: Single user sync failed');
+      return false;
     }
   }
 }
