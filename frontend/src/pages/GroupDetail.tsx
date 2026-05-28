@@ -1,11 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../contexts/AuthContext';
 import apiClient from '../services/apiClient';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import AccessRequestModal from '../components/access/AccessRequestModal';
 import PlatformInviteModal from '../components/access/PlatformInviteModal';
 import * as Icons from 'lucide-react';
+import { queryKeys } from '../lib/queryKeys';
 
 interface GroupAdmin {
   userId: string;
@@ -42,60 +44,55 @@ export const GroupDetail: React.FC = () => {
   const { slug } = useParams<{ slug: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
+  const queryClient = useQueryClient();
 
-  const [group, setGroup] = useState<GroupDetailData | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
   const [isRequestModalOpen, setIsRequestModalOpen] = useState(false);
-
-  // Platform safeguards
-  const [isPlatformUser, setIsPlatformUser] = useState(true);
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
 
-  // Revoke state
-  const [isRevoking, setIsRevoking] = useState<string | null>(null);
+  const groupQuery = useQuery<GroupDetailData>({
+    queryKey: queryKeys.groupDetail(slug ?? ''),
+    queryFn: () => apiClient.get(`/api/groups/${slug}`).then((r) => r.data),
+    enabled: !!slug,
+  });
 
-  const checkPlatformStatus = async () => {
-    try {
-      const res = await apiClient.get('/api/user-access/platform-status/redash');
-      setIsPlatformUser(res.data.exists);
-    } catch (err) {
-      console.error('Failed to check platform status:', err);
-      setIsPlatformUser(false);
-    }
-  };
+  const platformStatusQuery = useQuery<{ exists: boolean }>({
+    queryKey: queryKeys.platformStatus('redash'),
+    queryFn: () => apiClient.get('/api/user-access/platform-status/redash').then((r) => r.data),
+  });
 
-  const fetchGroupDetail = async () => {
-    try {
-      const res = await apiClient.get(`/api/groups/${slug}`);
-      setGroup(res.data);
-    } catch (err) {
-      console.error('Failed to fetch group details:', err);
+  const group = groupQuery.data;
+  const isLoading = groupQuery.isLoading;
+  // Default to `true` while loading so the "request access" CTA stays hidden
+  // behind the invite modal only when we *know* the user is not on platform.
+  const isPlatformUser = platformStatusQuery.data?.exists ?? true;
+
+  // If the group fetch errors (e.g. 404), bounce back to the listing.
+  React.useEffect(() => {
+    if (groupQuery.isError) {
       navigate('/groups?platform=redash');
-    } finally {
-      setIsLoading(false);
     }
-  };
+  }, [groupQuery.isError, navigate]);
 
-  useEffect(() => {
-    fetchGroupDetail();
-    checkPlatformStatus();
-  }, [slug]);
+  const revokeMutation = useMutation({
+    mutationFn: ({ memberAccessId, reason }: { memberAccessId: string; reason: string }) =>
+      apiClient.delete(`/api/user-access/${memberAccessId}`, {
+        data: { reason: reason || 'Revoked manually by administrator' },
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.groupDetail(slug ?? '') });
+      queryClient.invalidateQueries({ queryKey: queryKeys.groups() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.myAccess() });
+    },
+    onError: (err: any) => {
+      alert(`Failed to revoke access: ${err.message}`);
+    },
+  });
+  const revokingId = revokeMutation.isPending ? revokeMutation.variables?.memberAccessId : null;
 
-  const handleRevoke = async (memberAccessId: string, memberName: string) => {
+  const handleRevoke = (memberAccessId: string, memberName: string) => {
     const reason = window.prompt(`Are you sure you want to revoke access for ${memberName}? Enter a reason:`);
     if (reason === null) return; // cancelled
-
-    setIsRevoking(memberAccessId);
-    try {
-      await apiClient.delete(`/api/user-access/${memberAccessId}`, {
-        data: { reason: reason || 'Revoked manually by administrator' },
-      });
-      fetchGroupDetail();
-    } catch (err: any) {
-      alert(`Failed to revoke access: ${err.message}`);
-    } finally {
-      setIsRevoking(null);
-    }
+    revokeMutation.mutate({ memberAccessId, reason });
   };
 
   if (isLoading || !group) {
@@ -305,9 +302,9 @@ export const GroupDetail: React.FC = () => {
                               className="btn btn-danger"
                               style={{ padding: '6px 12px', fontSize: '12px' }}
                               onClick={() => handleRevoke(member.id, member.userName)}
-                              disabled={isRevoking === member.id}
+                              disabled={revokingId === member.id}
                             >
-                              {isRevoking === member.id ? 'Revoking...' : 'Revoke'}
+                              {revokingId === member.id ? 'Revoking...' : 'Revoke'}
                             </button>
                           )}
                         </td>
@@ -328,7 +325,11 @@ export const GroupDetail: React.FC = () => {
           onClose={() => setIsRequestModalOpen(false)}
           groupId={group.id}
           groupName={group.name}
-          onSuccess={fetchGroupDetail}
+          onSuccess={() => {
+            queryClient.invalidateQueries({ queryKey: queryKeys.groupDetail(slug ?? '') });
+            queryClient.invalidateQueries({ queryKey: queryKeys.groups() });
+            queryClient.invalidateQueries({ queryKey: queryKeys.myRequests() });
+          }}
         />
       )}
 
@@ -339,7 +340,7 @@ export const GroupDetail: React.FC = () => {
         platformId="redash"
         platformName="Redash"
         onSuccess={() => {
-          checkPlatformStatus();
+          queryClient.invalidateQueries({ queryKey: queryKeys.platformStatus('redash') });
         }}
       />
     </div>

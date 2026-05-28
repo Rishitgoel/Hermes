@@ -1,7 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import apiClient from '../services/apiClient';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import * as Icons from 'lucide-react';
+import { queryKeys } from '../lib/queryKeys';
 
 interface PendingRequest {
   id: string;
@@ -20,8 +22,12 @@ interface PendingRequest {
 }
 
 export const PendingApprovals: React.FC = () => {
-  const [requests, setRequests] = useState<PendingRequest[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const queryClient = useQueryClient();
+
+  const { data: requests = [], isLoading } = useQuery<PendingRequest[]>({
+    queryKey: queryKeys.pendingRequests(),
+    queryFn: () => apiClient.get('/api/access-requests/pending').then((r) => r.data),
+  });
 
   // Selection & custom notes state
   const [selectedRequests, setSelectedRequests] = useState<Record<string, boolean>>({});
@@ -30,24 +36,8 @@ export const PendingApprovals: React.FC = () => {
   const [activePopupId, setActivePopupId] = useState<string | null>(null);
 
   const [tempNote, setTempNote] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [bulkSuccess, setBulkSuccess] = useState<string | null>(null);
-
-  const fetchPending = async () => {
-    try {
-      const res = await apiClient.get('/api/access-requests/pending');
-      setRequests(res.data);
-    } catch (err) {
-      console.error('Failed to fetch pending requests:', err);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchPending();
-  }, []);
 
   const handleOpenNotePopup = (requestId: string) => {
     if (activePopupId === requestId) {
@@ -97,12 +87,8 @@ export const PendingApprovals: React.FC = () => {
     }
   };
 
-  const handleBulkReview = async (status: 'APPROVED' | 'REJECTED') => {
-    setIsSubmitting(true);
-    setBulkError(null);
-    setBulkSuccess(null);
-
-    try {
+  const bulkReviewMutation = useMutation({
+    mutationFn: async (status: 'APPROVED' | 'REJECTED') => {
       const results = await Promise.allSettled(
         checkedRequestIds.map((requestId) => {
           const custom = customNotes[requestId]?.trim() || '';
@@ -113,7 +99,9 @@ export const PendingApprovals: React.FC = () => {
           });
         })
       );
-
+      return { results, status };
+    },
+    onSuccess: ({ results, status }) => {
       const failures = results.filter((r) => r.status === 'rejected') as PromiseRejectedResult[];
       const successes = results.filter((r) => r.status === 'fulfilled');
 
@@ -127,12 +115,23 @@ export const PendingApprovals: React.FC = () => {
         setGeneralNote('');
       }
 
-      await fetchPending();
-    } catch (err: any) {
+      // Any successful review changes pending list + may grant access, so
+      // invalidate the related query trees.
+      queryClient.invalidateQueries({ queryKey: queryKeys.pendingRequests() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.groups() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.myAccess() });
+    },
+    onError: (err: any) => {
       setBulkError(err.message || 'An error occurred during submission.');
-    } finally {
-      setIsSubmitting(false);
-    }
+    },
+  });
+
+  const isSubmitting = bulkReviewMutation.isPending;
+
+  const handleBulkReview = (status: 'APPROVED' | 'REJECTED') => {
+    setBulkError(null);
+    setBulkSuccess(null);
+    bulkReviewMutation.mutate(status);
   };
 
   if (isLoading) {

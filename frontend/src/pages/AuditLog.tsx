@@ -1,7 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import apiClient from '../services/apiClient';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import { Scroll, Search, RefreshCw, ChevronLeft, ChevronRight, CheckCircle2 } from 'lucide-react';
+import { queryKeys } from '../lib/queryKeys';
 
 interface AuditLogEntry {
   id: string;
@@ -17,73 +19,66 @@ interface AuditLogEntry {
   createdAt: string;
 }
 
+interface AuditResponse {
+  items: AuditLogEntry[];
+  total: number;
+}
+
 export const AuditLog: React.FC = () => {
-  const [logs, setLogs] = useState<AuditLogEntry[]>([]);
-  const [totalLogs, setTotalLogs] = useState(0);
+  const queryClient = useQueryClient();
+
   const [page, setPage] = useState(1);
   const [pageSize] = useState(10);
-  const [isLoading, setIsLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [submittedSearch, setSubmittedSearch] = useState('');
   const [actionFilter, setActionFilter] = useState('');
 
-  // Sync state
-  const [isSyncing, setIsSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
 
-  const fetchLogs = async () => {
-    setIsLoading(true);
-    try {
+  const auditQuery = useQuery<AuditResponse>({
+    queryKey: queryKeys.audit({ page, pageSize, action: actionFilter, search: submittedSearch }),
+    queryFn: async () => {
       const headers = {
         pageno: page.toString(),
         pagesize: pageSize.toString(),
       };
-      
-      const params: any = {};
-      if (search) params.search = search;
+      const params: Record<string, string> = {};
+      if (submittedSearch) params.search = submittedSearch;
       if (actionFilter) params.action = actionFilter;
 
-      const res = await apiClient.get('/api/audit', {
-        headers,
-        params,
-      });
+      const res = await apiClient.get('/api/audit', { headers, params });
+      const items = (res.data ?? []) as AuditLogEntry[];
+      // Standard envelope metadata is unwrapped by apiClient; fall back gracefully.
+      const total =
+        Number(res.headers['total']) ||
+        Number((res as any).metadata?.total) ||
+        items.length;
+      return { items, total };
+    },
+    // Keep the previous page visible while a new one loads to avoid a flash.
+    placeholderData: (prev) => prev,
+  });
 
-      setLogs(res.data);
-      setTotalLogs(Number(res.headers['total'] || res.config.headers.total || 0)); // Fallback or read response metadata
-      
-      // If backend returns pagination in standard response shape (metadata)
-      if (res.data && (res as any).metadata) {
-        setTotalLogs((res as any).metadata.total || 0);
-      }
-    } catch (err) {
-      console.error('Failed to fetch audit logs:', err);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  const logs = auditQuery.data?.items ?? [];
+  const totalLogs = auditQuery.data?.total ?? 0;
+  const isLoading = auditQuery.isLoading;
 
-  useEffect(() => {
-    fetchLogs();
-  }, [page, actionFilter]);
+  const syncMutation = useMutation({
+    mutationFn: () => apiClient.post('/api/admin/sync').then((r) => r.data),
+    onSuccess: (data: { usersSynced: number; groupsSynced: number }) => {
+      setSyncStatus(`Sync success! Imported ${data.usersSynced} users and ${data.groupsSynced} groups.`);
+      queryClient.invalidateQueries({ queryKey: ['audit'] });
+      setTimeout(() => setSyncStatus(null), 5000);
+    },
+    onError: (err: any) => {
+      alert(`Sync failed: ${err.message}`);
+    },
+  });
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setPage(1);
-    fetchLogs();
-  };
-
-  const handleSync = async () => {
-    setIsSyncing(true);
-    setSyncStatus(null);
-    try {
-      const res = await apiClient.post('/api/admin/sync');
-      setSyncStatus(`Sync success! Imported ${res.data.usersSynced} users and ${res.data.groupsSynced} groups.`);
-      fetchLogs(); // refresh logs
-    } catch (err: any) {
-      alert(`Sync failed: ${err.message}`);
-    } finally {
-      setIsSyncing(false);
-      setTimeout(() => setSyncStatus(null), 5000);
-    }
+    setSubmittedSearch(search);
   };
 
   const totalPages = Math.ceil(totalLogs / pageSize) || 1;
@@ -120,12 +115,14 @@ export const AuditLog: React.FC = () => {
     return JSON.stringify(details);
   };
 
+  const isSyncing = syncMutation.isPending;
+
   return (
     <div>
       {/* Page Header */}
       <div className="section-header">
         <h1 style={{ fontSize: '28px', fontFamily: 'Outfit, sans-serif' }}>Platform Audit Log</h1>
-        
+
         {/* Sync Trigger button */}
         {syncStatus && (
           <div style={{
@@ -144,9 +141,9 @@ export const AuditLog: React.FC = () => {
           </div>
         )}
 
-        <button 
-          className="btn btn-primary" 
-          onClick={handleSync}
+        <button
+          className="btn btn-primary"
+          onClick={() => syncMutation.mutate()}
           disabled={isSyncing}
           style={{ gap: '8px' }}
         >
@@ -291,7 +288,7 @@ export const AuditLog: React.FC = () => {
           </div>
         </>
       )}
-      
+
       <style>{`
         @keyframes spin {
           from { transform: rotate(0deg); }

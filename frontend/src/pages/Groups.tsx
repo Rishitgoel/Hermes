@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import apiClient from '../services/apiClient';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import PlatformInviteModal from '../components/access/PlatformInviteModal';
 import * as Icons from 'lucide-react';
+import { queryKeys } from '../lib/queryKeys';
 
 interface GroupData {
   id: string;
@@ -103,16 +105,14 @@ const PLATFORMS: PlatformMetadata[] = [
 
 export const Groups: React.FC = () => {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const activePlatform = searchParams.get('platform');
 
-  const [groups, setGroups] = useState<GroupData[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
 
   // Platform Safeguards
-  const [isPlatformUser, setIsPlatformUser] = useState(true);
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
 
   // Bulk Request States
@@ -121,42 +121,29 @@ export const Groups: React.FC = () => {
   const [generalReason, setGeneralReason] = useState('');
   const [selectedDuration, setSelectedDuration] = useState('PERMANENT');
   const [activePopupGroupId, setActivePopupGroupId] = useState<string | null>(null);
-  const [isSubmittingBulk, setIsSubmittingBulk] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [bulkSuccess, setBulkSuccess] = useState<string | null>(null);
 
   // Custom reason popup state (temporary input before clicking "Save")
   const [tempReason, setTempReason] = useState('');
 
-  const checkPlatformStatus = async () => {
-    if (activePlatform) {
-      try {
-        const res = await apiClient.get(`/api/user-access/platform-status/${activePlatform}`);
-        setIsPlatformUser(res.data.exists);
-      } catch (err) {
-        console.error('Failed to check platform status:', err);
-        setIsPlatformUser(false);
-      }
-    } else {
-      setIsPlatformUser(true);
-    }
-  };
+  const groupsQuery = useQuery<GroupData[]>({
+    queryKey: queryKeys.groups(),
+    queryFn: () => apiClient.get('/api/groups').then((r) => r.data),
+  });
 
-  const fetchGroups = async () => {
-    try {
-      const res = await apiClient.get('/api/groups');
-      setGroups(res.data);
-    } catch (err) {
-      console.error('Failed to fetch groups:', err);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  const platformStatusQuery = useQuery<{ exists: boolean }>({
+    queryKey: queryKeys.platformStatus(activePlatform ?? ''),
+    queryFn: () =>
+      apiClient.get(`/api/user-access/platform-status/${activePlatform}`).then((r) => r.data),
+    enabled: !!activePlatform,
+  });
 
-  useEffect(() => {
-    fetchGroups();
-    checkPlatformStatus();
-  }, [activePlatform]);
+  const groups = groupsQuery.data ?? [];
+  const isLoading = groupsQuery.isLoading;
+  // Treat the user as on-platform until proven otherwise. Default to `true` so
+  // the invite-prompt CTA only triggers when we know `exists === false`.
+  const isPlatformUser = !activePlatform || (platformStatusQuery.data?.exists ?? true);
 
   const handleSelectPlatform = (platform: PlatformMetadata | null) => {
     if (platform && platform.status === 'ACTIVE') {
@@ -246,7 +233,45 @@ export const Groups: React.FC = () => {
     }
   };
 
-  const handleBulkSubmit = async () => {
+  const bulkSubmitMutation = useMutation({
+    mutationFn: async (
+      requestsToSubmit: { groupId: string; justification: string }[]
+    ) => {
+      return Promise.allSettled(
+        requestsToSubmit.map((req) =>
+          apiClient.post('/api/access-requests', {
+            groupId: req.groupId,
+            justification: req.justification,
+            duration: selectedDuration,
+          })
+        )
+      );
+    },
+    onSuccess: (results) => {
+      const failures = results.filter((r) => r.status === 'rejected') as PromiseRejectedResult[];
+      const successes = results.filter((r) => r.status === 'fulfilled');
+
+      if (failures.length > 0) {
+        const errorDetails = failures.map((f) => f.reason?.message || 'Unknown error').join(', ');
+        setBulkError(`Submitted ${successes.length} request(s) successfully, but ${failures.length} failed: ${errorDetails}`);
+      } else {
+        setBulkSuccess(`Successfully requested access to ${successes.length} group(s).`);
+        setSelectedGroups({});
+        setCustomReasons({});
+        setGeneralReason('');
+      }
+
+      queryClient.invalidateQueries({ queryKey: queryKeys.groups() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.myRequests() });
+    },
+    onError: (err: any) => {
+      setBulkError(err.message || 'An error occurred during submission.');
+    },
+  });
+
+  const isSubmittingBulk = bulkSubmitMutation.isPending;
+
+  const handleBulkSubmit = () => {
     const invalidGroupNames: string[] = [];
     const requestsToSubmit = checkedGroupIds.map((groupId) => {
       const custom = customReasons[groupId]?.trim() || '';
@@ -267,40 +292,9 @@ export const Groups: React.FC = () => {
       return;
     }
 
-    setIsSubmittingBulk(true);
     setBulkError(null);
     setBulkSuccess(null);
-
-    try {
-      const results = await Promise.allSettled(
-        requestsToSubmit.map((req) =>
-          apiClient.post('/api/access-requests', {
-            groupId: req.groupId,
-            justification: req.justification,
-            duration: selectedDuration,
-          })
-        )
-      );
-
-      const failures = results.filter((r) => r.status === 'rejected') as PromiseRejectedResult[];
-      const successes = results.filter((r) => r.status === 'fulfilled');
-
-      if (failures.length > 0) {
-        const errorDetails = failures.map((f) => f.reason?.message || 'Unknown error').join(', ');
-        setBulkError(`Submitted ${successes.length} request(s) successfully, but ${failures.length} failed: ${errorDetails}`);
-      } else {
-        setBulkSuccess(`Successfully requested access to ${successes.length} group(s).`);
-        setSelectedGroups({});
-        setCustomReasons({});
-        setGeneralReason('');
-      }
-      
-      await fetchGroups();
-    } catch (err: any) {
-      setBulkError(err.message || 'An error occurred during submission.');
-    } finally {
-      setIsSubmittingBulk(false);
-    }
+    bulkSubmitMutation.mutate(requestsToSubmit);
   };
 
   if (!activePlatform) {
@@ -828,7 +822,11 @@ export const Groups: React.FC = () => {
         platformId="redash"
         platformName="Redash"
         onSuccess={() => {
-          checkPlatformStatus();
+          if (activePlatform) {
+            queryClient.invalidateQueries({
+              queryKey: queryKeys.platformStatus(activePlatform),
+            });
+          }
         }}
       />
     </div>

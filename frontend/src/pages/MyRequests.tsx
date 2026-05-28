@@ -1,8 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
+import { useQuery } from '@tanstack/react-query';
 import apiClient from '../services/apiClient';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import StatusBadge from '../components/common/StatusBadge';
 import { FileText } from 'lucide-react';
+import { queryKeys } from '../lib/queryKeys';
 
 interface RequestData {
   id: string;
@@ -22,22 +24,10 @@ interface RequestData {
 }
 
 export const MyRequests: React.FC = () => {
-  const [requests, setRequests] = useState<RequestData[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    const fetchRequests = async () => {
-      try {
-        const res = await apiClient.get('/api/access-requests/my');
-        setRequests(res.data);
-      } catch (err) {
-        console.error('Failed to fetch requests:', err);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    fetchRequests();
-  }, []);
+  const { data: requests = [], isLoading } = useQuery<RequestData[]>({
+    queryKey: queryKeys.myRequests(),
+    queryFn: () => apiClient.get('/api/access-requests/my').then((r) => r.data),
+  });
 
   if (isLoading) {
     return <LoadingSpinner />;
@@ -85,8 +75,8 @@ export const MyRequests: React.FC = () => {
               {requests.map((req) => (
                 <tr key={req.id}>
                   <td>
-                    <span style={{ 
-                      fontWeight: 700, 
+                    <span style={{
+                      fontWeight: 700,
                       color: req.group.color || 'var(--primary)',
                       borderLeft: `3px solid ${req.group.color || 'var(--primary)'}`,
                       paddingLeft: '8px'

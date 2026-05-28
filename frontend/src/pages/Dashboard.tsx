@@ -1,8 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../contexts/AuthContext';
 import apiClient from '../services/apiClient';
 import LoadingSpinner from '../components/common/LoadingSpinner';
+import { queryKeys } from '../lib/queryKeys';
 import * as Icons from 'lucide-react';
 
 interface GroupData {
@@ -36,41 +38,35 @@ interface ActiveAccessData {
 export const Dashboard: React.FC = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
-  
-  const [groups, setGroups] = useState<GroupData[]>([]);
-  const [accesses, setAccesses] = useState<ActiveAccessData[]>([]);
-  const [pendingReviewCount, setPendingReviewCount] = useState<number>(0);
-  const [isLoading, setIsLoading] = useState(true);
-  
+
   const activeAccessRef = useRef<HTMLDivElement>(null);
 
   const isAdmin = user?.roles.includes('atlas_super_admin') || user?.roles.includes('atlas_group_admin');
 
-  const fetchData = async () => {
-    try {
-      // 1. Fetch active accesses
-      const accessesRes = await apiClient.get('/api/user-access/me');
-      setAccesses(accessesRes.data);
+  const accessesQuery = useQuery<ActiveAccessData[]>({
+    queryKey: queryKeys.myAccess(),
+    queryFn: () => apiClient.get('/api/user-access/me').then((r) => r.data),
+  });
 
-      // 2. Fetch groups with statuses
-      const groupsRes = await apiClient.get('/api/groups');
-      setGroups(groupsRes.data);
+  const groupsQuery = useQuery<GroupData[]>({
+    queryKey: queryKeys.groups(),
+    queryFn: () => apiClient.get('/api/groups').then((r) => r.data),
+  });
 
-      // 3. Fetch pending reviews if admin
-      if (isAdmin) {
-        const pendingRes = await apiClient.get('/api/access-requests/pending');
-        setPendingReviewCount(pendingRes.data.length);
-      }
-    } catch (err) {
-      console.error('Failed to load dashboard data:', err);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  const pendingQuery = useQuery<unknown[]>({
+    queryKey: queryKeys.pendingRequests(),
+    queryFn: () => apiClient.get('/api/access-requests/pending').then((r) => r.data),
+    enabled: !!isAdmin,
+  });
 
-  useEffect(() => {
-    fetchData();
-  }, [user]);
+  const accesses = accessesQuery.data ?? [];
+  const groups = groupsQuery.data ?? [];
+  const pendingReviewCount = pendingQuery.data?.length ?? 0;
+
+  const isLoading =
+    accessesQuery.isLoading ||
+    groupsQuery.isLoading ||
+    (isAdmin && pendingQuery.isLoading);
 
   if (isLoading) {
     return <LoadingSpinner />;
