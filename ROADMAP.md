@@ -323,7 +323,7 @@ Effort: XS ≈ 15 min · S ≈ 1–2 h · M ≈ half day · L ≈ 1–2 days. Ri
 
 ## P3-2 — Event bus → BullMQ (Redis-backed)
 
-**Why:** in-process `EventEmitter` (`backend/src/services/event-bus.ts`) loses events on crash. A Slack ping failure is silently swallowed — no retry. As you add platforms and notification channels (email, MS Teams), this gets worse. Redis is already running in `docker-compose.yml` for Redash; reuse it.
+**Why:** in-process `EventEmitter` (`backend/src/services/event-bus.ts`) loses events on crash. A Slack ping failure is silently swallowed — no retry. As you add platforms and notification channels (email, MS Teams), this gets worse. (Note: Redis is defined in `docker-compose.yml` but currently commented out for local development to save RAM; you will need to uncomment it to use BullMQ).
 
 **Approach:**
 1. `npm i bullmq`.
@@ -405,7 +405,7 @@ These came out of the audit but didn't merit their own P-number. Pick one when y
 - **`backend/src/middleware/error.middleware.ts`, `backend/src/services/scheduler.service.ts`, `backend/src/utils/errors.ts`**: switch `process.env.NODE_ENV === 'production'` checks to `config.isProd` (or `config.isDev`). Single source of truth.
 - **`backend/src/services/redash.provisioner.ts:46-52`**: don't hardcode `groupIds: [1]` when caching newly invited users. Fetch the actual default group from Redash, or store `[]`.
 - **`backend/src/services/scheduler.service.ts:51-57`**: parallelise `expireAccess` calls with `Promise.allSettled`. Sequential loop blocks if a backlog ever builds up.
-- **`backend/src/index.ts:52-77` (`/health` endpoint)**: add a Redis ping. Redis is in `docker-compose.yml` but never health-checked from the API side.
+- **`backend/src/index.ts:52-77` (`/health` endpoint)**: add a Redis ping. Redis is defined in `docker-compose.yml` (currently commented out) but never health-checked from the API side.
 - **`frontend/src/pages/GroupDetail.tsx:85`**: replace `window.prompt('Enter a reason')` with a proper modal for the revoke-reason input.
 - **`frontend/src/components/layout/MainLayout.tsx`**: wrap children in a React `ErrorBoundary` so a single component crash doesn't blank the whole app.
 - **Frontend inline styles**: lift the giant inline-style objects in `Groups.tsx` and `Dashboard.tsx` into the existing `frontend/src/styles/global.css`. You're already loading it; it's barely used.

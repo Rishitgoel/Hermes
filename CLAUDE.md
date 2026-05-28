@@ -65,41 +65,36 @@ D:\Bachatt\Hermes 2\
 
 ## Dev environment
 
-### Services (`docker-compose up`)
+To save RAM on local development (especially on 8GB machines), the project runs **completely Docker-free by default**.
+* **Database**: Runs in the cloud on **Supabase** (credentials are configured in `backend/.env`).
+* **Authentication**: Skips Keycloak and runs in **Simulation Mode** (enabled in `.env` files).
+* **Integrations**: Skips Redash and runs in **Simulation Mode** (enabled in `.env` files).
 
-| Service | Container | Host port | Note |
-|---|---|---|---|
-| Hermes Postgres | `hermes_postgres` | **15433** | non-default port (5432 → 15433) |
-| Keycloak | `hermes_keycloak` | 8080 | admin/admin_password |
-| Redis | `hermes_redis` | **16379** | shared with Redash |
-| Redash Postgres | `hermes_redash_postgres` | **15434** | |
-| Redash server | `hermes_redash` | **5500** | login at http://localhost:5500 |
-| Redash worker/scheduler | — | — | background |
+### Docker Services (`docker-compose.yml`)
+All services in `docker-compose.yml` (Postgres, Keycloak, Redis, Redash) are currently commented out to prevent background RAM usage. If you eventually need to run a live service locally:
+1. Uncomment the service in [docker-compose.yml](file:///d:/Bachatt/Hermes%202/docker-compose.yml).
+2. Start Docker Desktop and run `docker compose up -d`.
+3. Set the respective simulation flags to `false` in your `.env` files.
 
 ### Environment files
 
 - `backend/.env` and `frontend/.env` exist locally (gitignored).
-- `.env.example` files **don't exist yet** (see P1-4 in ROADMAP.md).
+- `.env.example` files exist as templates ([backend/.env.example](file:///d:/Bachatt/Hermes%202/backend/.env.example), [frontend/.env.example](file:///d:/Bachatt/Hermes%202/frontend/.env.example)).
 - Key flags:
-  - `KEYCLOAK_SIMULATION=true|false` (backend). When `true`, the backend accepts `Bearer super_admin`, `Bearer group_admin`, or `Bearer user` as the entire token. Default user UUIDs are hardcoded in `backend/src/middleware/auth.middleware.ts`.
-  - `VITE_KEYCLOAK_SIMULATION=true|false` (frontend). When `true`, AuthContext skips Keycloak entirely and reads a mock role from `localStorage['hermes_mock_token']`.
-  - `REDASH_SIMULATION=true|false` (backend). When `true`, `redash.service.ts` returns mock users/groups instead of hitting Redash.
-- All three default to live mode in the current `.env` files.
-- **The user typically runs in live mode** (`KEYCLOAK_SIMULATION=false`, `REDASH_SIMULATION=true` for local dev).
+  - `KEYCLOAK_SIMULATION=true|false` (backend). When `true`, the backend accepts `Bearer super_admin`, `Bearer group_admin`, or `Bearer user` as the entire token. Enabled (`true`) by default for local dev.
+  - `VITE_KEYCLOAK_SIMULATION=true|false` (frontend). When `true`, AuthContext skips Keycloak entirely and reads a mock role from `localStorage['hermes_mock_token']`. Enabled (`true`) by default for local dev.
+  - `REDASH_SIMULATION=true|false` (backend). When `true`, `redash.service.ts` returns mock users/groups instead of hitting Redash. Enabled (`true`) by default for local dev.
+- **The user runs in simulation mode for local dev** (`KEYCLOAK_SIMULATION=true`, `REDASH_SIMULATION=true`, `VITE_KEYCLOAK_SIMULATION=true`).
 
 ### Commands (run from the directory shown)
 
 ```powershell
-# Boot infra
-cd "D:\Bachatt\Hermes 2"
-docker compose up -d
-
 # Backend
 cd backend
 npm run dev                              # nodemon, port 8001
 npm run build                            # tsc → dist/
-npm run prisma:migrate                   # creates+applies a new migration (will prompt for name)
-npm run prisma:seed                      # runs prisma/hermes/seed.ts
+npm run prisma:migrate                   # applies pending migrations to Supabase
+npm run prisma:seed                      # seeds the Supabase database
 npx prisma generate --schema=prisma/hermes/schema.prisma   # ⚠ always pass --schema flag
 npx prisma validate --schema=prisma/hermes/schema.prisma
 npx tsc --noEmit                         # typecheck only
