@@ -4,6 +4,7 @@ import { AuthProvider } from './contexts/AuthContext';
 import { NotificationProvider } from './contexts/NotificationContext';
 import MainLayout from './components/layout/MainLayout';
 import ProtectedRoute from './components/common/ProtectedRoute';
+import ErrorBoundary from './components/common/ErrorBoundary';
 
 // Pages
 import Dashboard from './pages/Dashboard';
@@ -18,46 +19,42 @@ import './styles/global.css';
 export const App: React.FC = () => {
   return (
     <BrowserRouter>
-      <AuthProvider>
-        <NotificationProvider>
-          <Routes>
-            <Route path="/" element={<MainLayout />}>
-              {/* Dashboard */}
-              <Route index element={<Dashboard />} />
-              
-              {/* Groups */}
-              <Route path="groups" element={<Groups />} />
-              <Route path="groups/:slug" element={<GroupDetail />} />
-              
-              {/* Request history and active status */}
-              <Route path="my-requests" element={<MyRequests />} />
-              
-                            {/* Administrative Approvals Queue */}
-              <Route 
-                path="pending-approvals" 
-                element={
-                  <ProtectedRoute allowedRoles={['hermes_super_admin', 'hermes_group_admin']}>
-                    <PendingApprovals />
-                  </ProtectedRoute>
-                } 
-              />
-              
-              {/* Admin Audit Trails */}
-              <Route 
-                path="audit-log" 
-                element={
-                  <ProtectedRoute allowedRoles={['hermes_super_admin']}>
-                    <AuditLog />
-                  </ProtectedRoute>
-                } 
-              />
-            </Route>
+      <ErrorBoundary>
+        <AuthProvider>
+          <NotificationProvider>
+            <Routes>
+              <Route path="/" element={<MainLayout />}>
+                <Route index element={<Dashboard />} />
 
-            {/* Fallback Catch-All */}
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </NotificationProvider>
-      </AuthProvider>
+                <Route path="groups" element={<Groups />} />
+                <Route path="groups/:slug" element={<GroupDetail />} />
+
+                <Route path="my-requests" element={<MyRequests />} />
+
+                <Route
+                  path="pending-approvals"
+                  element={
+                    <ProtectedRoute allowedRoles={['hermes_super_admin', 'hermes_group_admin']}>
+                      <PendingApprovals />
+                    </ProtectedRoute>
+                  }
+                />
+
+                <Route
+                  path="audit-log"
+                  element={
+                    <ProtectedRoute allowedRoles={['hermes_super_admin']}>
+                      <AuditLog />
+                    </ProtectedRoute>
+                  }
+                />
+              </Route>
+
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </NotificationProvider>
+        </AuthProvider>
+      </ErrorBoundary>
     </BrowserRouter>
   );
 };

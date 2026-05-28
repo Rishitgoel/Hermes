@@ -139,6 +139,42 @@ export const Groups: React.FC = () => {
     enabled: !!activePlatform,
   });
 
+  const bulkSubmitMutation = useMutation({
+    mutationFn: async (
+      requestsToSubmit: { groupId: string; justification: string }[]
+    ) => {
+      return Promise.allSettled(
+        requestsToSubmit.map((req) =>
+          apiClient.post('/api/access-requests', {
+            groupId: req.groupId,
+            justification: req.justification,
+            duration: selectedDuration,
+          })
+        )
+      );
+    },
+    onSuccess: (results) => {
+      const failures = results.filter((r) => r.status === 'rejected') as PromiseRejectedResult[];
+      const successes = results.filter((r) => r.status === 'fulfilled');
+
+      if (failures.length > 0) {
+        const errorDetails = failures.map((f) => f.reason?.message || 'Unknown error').join(', ');
+        setBulkError(`Submitted ${successes.length} request(s) successfully, but ${failures.length} failed: ${errorDetails}`);
+      } else {
+        setBulkSuccess(`Successfully requested access to ${successes.length} group(s).`);
+        setSelectedGroups({});
+        setCustomReasons({});
+        setGeneralReason('');
+      }
+
+      queryClient.invalidateQueries({ queryKey: queryKeys.groups() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.myRequests() });
+    },
+    onError: (err: any) => {
+      setBulkError(err.message || 'An error occurred during submission.');
+    },
+  });
+
   const groups = groupsQuery.data ?? [];
   const isLoading = groupsQuery.isLoading;
   // Treat the user as on-platform until proven otherwise. Default to `true` so
@@ -232,42 +268,6 @@ export const Groups: React.FC = () => {
       });
     }
   };
-
-  const bulkSubmitMutation = useMutation({
-    mutationFn: async (
-      requestsToSubmit: { groupId: string; justification: string }[]
-    ) => {
-      return Promise.allSettled(
-        requestsToSubmit.map((req) =>
-          apiClient.post('/api/access-requests', {
-            groupId: req.groupId,
-            justification: req.justification,
-            duration: selectedDuration,
-          })
-        )
-      );
-    },
-    onSuccess: (results) => {
-      const failures = results.filter((r) => r.status === 'rejected') as PromiseRejectedResult[];
-      const successes = results.filter((r) => r.status === 'fulfilled');
-
-      if (failures.length > 0) {
-        const errorDetails = failures.map((f) => f.reason?.message || 'Unknown error').join(', ');
-        setBulkError(`Submitted ${successes.length} request(s) successfully, but ${failures.length} failed: ${errorDetails}`);
-      } else {
-        setBulkSuccess(`Successfully requested access to ${successes.length} group(s).`);
-        setSelectedGroups({});
-        setCustomReasons({});
-        setGeneralReason('');
-      }
-
-      queryClient.invalidateQueries({ queryKey: queryKeys.groups() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.myRequests() });
-    },
-    onError: (err: any) => {
-      setBulkError(err.message || 'An error occurred during submission.');
-    },
-  });
 
   const isSubmittingBulk = bulkSubmitMutation.isPending;
 
