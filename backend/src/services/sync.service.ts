@@ -3,6 +3,12 @@ import redashService from './redash.service';
 import logger from '../utils/logger';
 
 export class SyncService {
+  private lastSyncedAt: Date | null = null;
+
+  getLastSyncedAt(): Date | null {
+    return this.lastSyncedAt;
+  }
+
   async syncWithRedash(): Promise<{ usersSynced: number; groupsSynced: number }> {
     logger.info('🔄 SyncService: Starting Redash synchronization...');
     const now = new Date();
@@ -80,6 +86,7 @@ export class SyncService {
       });
       await prisma.$transaction(updates);
 
+      this.lastSyncedAt = new Date();
       logger.info('🔄 SyncService: Redash synchronization completed successfully.');
       return {
         usersSynced: redashUsers.length,

@@ -26,6 +26,7 @@ If you ever forget the IDs, just say "show me the roadmap" and Claude will read 
 | P0-4 | Removed hardcoded `--name init` from prisma:migrate | `backend/package.json` |
 | P0-5 | Standardised auth-middleware error response shape | `backend/src/middleware/auth.middleware.ts` |
 | P1-1 | Extracted `isGroupAdminOf` helper; collapsed 4 duplicated admin-check blocks into one call | `backend/src/utils/authz.ts`, `backend/src/controllers/user-access.controller.ts`, `backend/src/controllers/access-request.controller.ts` |
+| P1-2 | Periodic Redash sync cron (15 min prod / 5 min dev) + `lastRedashSyncAt` on `/health` | `backend/src/services/scheduler.service.ts`, `backend/src/services/sync.service.ts`, `backend/src/index.ts` |
 
 All in commit `36dbcad3`, on `main`, on `origin/main`.
 
@@ -46,8 +47,8 @@ The first applies the new index. The second refreshes the generated Prisma clien
 | ID | Item | Effort | Risk |
 |----|------|--------|------|
 | **P1** | **Cleanup & drift (this week)** | | |
-| ~~P1-1~~ | ~~Extract admin-check helper~~ — Done (commit pending) | S | Low |
-| P1-2 | Periodic Redash sync | S | Low |
+| ~~P1-1~~ | ~~Extract admin-check helper~~ — Done in `afeafccc` | S | Low |
+| ~~P1-2~~ | ~~Periodic Redash sync~~ — Done (commit pending) | S | Low |
 | P1-3 | Reconcile THREE_MONTHS duration | XS | Low |
 | P1-4 | Add .env.example files | XS | Low |
 | P1-5 | Frontend data-fetching hook | M | Low |

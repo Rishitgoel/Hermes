@@ -14,6 +14,7 @@ import adminRouter from './routes/admin.route';
 import config from './config/config';
 import prisma from './config/prisma';
 import provisioningRegistry from './services/provisioning.registry';
+import syncService from './services/sync.service';
 
 const app = express();
 
@@ -68,6 +69,9 @@ app.get('/health', async (req, res) => {
     checks.platforms = 'error';
     checks.platformsError = err.message;
   }
+
+  // Last successful Redash sync (null if never run)
+  checks.lastRedashSyncAt = syncService.getLastSyncedAt()?.toISOString() ?? null;
 
   const allHealthy = checks.database === 'healthy';
   res.status(allHealthy ? 200 : 503).json({
