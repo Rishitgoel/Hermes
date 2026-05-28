@@ -42,7 +42,7 @@ apiClient.interceptors.request.use(
     // Fallback to localStorage mock token in simulation mode ONLY
     const useSimulation = import.meta.env.VITE_KEYCLOAK_SIMULATION !== 'false';
     if (!token && useSimulation) {
-      token = localStorage.getItem('atlas_mock_token');
+      token = localStorage.getItem('hermes_mock_token');
     }
 
     if (token) {

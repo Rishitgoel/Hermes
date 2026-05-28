@@ -95,7 +95,7 @@ export const PlatformInviteModal: React.FC<PlatformInviteModalProps> = ({
                   gap: '8px'
                 }}>
                   <div style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                    Account Details (from Atlas profile)
+                    Account Details (from Hermes profile)
                   </div>
                   <div style={{ fontSize: '14px', fontWeight: 700 }}>
                     Name: <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>{displayName}</span>
@@ -117,7 +117,7 @@ export const PlatformInviteModal: React.FC<PlatformInviteModalProps> = ({
                   <Mail size={16} style={{ color: 'var(--primary)', marginTop: '2px', flexShrink: 0 }} />
                   <span style={{ fontSize: '12.5px', color: 'var(--text-muted)', lineHeight: 1.4 }}>
                     By clicking <strong>Send Invitation</strong>, an automated setup email will be sent to your inbox.
-                    Your account will be instantly recognized by Atlas.
+                    Your account will be instantly recognized by Hermes.
                   </span>
                 </div>
 

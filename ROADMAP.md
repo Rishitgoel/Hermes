@@ -1,12 +1,12 @@
-# Atlas — Post-P0 Roadmap
+# Hermes — Post-P0 Roadmap
 
-This is the implementation backlog for Atlas after the P0 fixes landed in commit `36dbcad3`. Each item has enough detail that you can paste a single section to Claude in a new chat and we can start.
+This is the implementation backlog for Hermes after the P0 fixes landed in commit `36dbcad3`. Each item has enough detail that you can paste a single section to Claude in a new chat and we can start.
 
 ---
 
 ## How to use this doc
 
-When you want to tackle an item, open a new chat in `D:\Bachatt\Atlas 2` and paste something like:
+When you want to tackle an item, open a new chat in `D:\Bachatt\Hermes 2` and paste something like:
 
 > Implement **P1-1** from `ROADMAP.md` (Extract admin-check helper).
 
@@ -21,8 +21,8 @@ If you ever forget the IDs, just say "show me the roadmap" and Claude will read 
 | # | Item | Where |
 |---|------|-------|
 | P0-1 | Keycloak token refresh (fixes 5-min vanish bug) | `frontend/src/contexts/AuthContext.tsx`, `frontend/src/services/apiClient.ts` |
-| P0-2 | Replace stale unique index with partial unique | `backend/prisma/atlas/migrations/20260526120000_replace_user_access_unique/` |
-| P0-3 | `Group.platform` enum → String to match DB | `backend/prisma/atlas/schema.prisma` |
+| P0-2 | Replace stale unique index with partial unique | `backend/prisma/hermes/migrations/20260526120000_replace_user_access_unique/` |
+| P0-3 | `Group.platform` enum → String to match DB | `backend/prisma/hermes/schema.prisma` |
 | P0-4 | Removed hardcoded `--name init` from prisma:migrate | `backend/package.json` |
 | P0-5 | Standardised auth-middleware error response shape | `backend/src/middleware/auth.middleware.ts` |
 | P1-1 | Extracted `isGroupAdminOf` helper; collapsed 4 duplicated admin-check blocks into one call | `backend/src/utils/authz.ts`, `backend/src/controllers/user-access.controller.ts`, `backend/src/controllers/access-request.controller.ts` |
@@ -36,9 +36,9 @@ All in commit `36dbcad3`, on `main`, on `origin/main`.
 **Before continuing**, run these once locally:
 
 ```powershell
-cd D:\Bachatt\Atlas 2\backend
+cd D:\Bachatt\Hermes 2\backend
 npm run prisma:migrate  
-npx prisma generate --schema=prisma/atlas/schema.prisma
+npx prisma generate --schema=prisma/hermes/schema.prisma
 ```
 
 The first applies the new index. The second refreshes the generated Prisma client so `Group.platform` is now `string` and the old `userId_groupId_isActive` composite key is gone.
@@ -88,8 +88,8 @@ Effort: XS ≈ 15 min · S ≈ 1–2 h · M ≈ half day · L ≈ 1–2 days. Ri
 
 **Approach:**
 1. Add `isGroupAdminOf(user, groupId): Promise<boolean>` to `backend/src/middleware/auth.middleware.ts` (or a new `backend/src/utils/authz.ts` if you prefer to keep middleware lean). Behaviour:
-   - returns `true` if user has `atlas_super_admin`
-   - else if user has `atlas_group_admin` AND either has a `GroupAdmin` DB row for that group, OR has a `atlas_group_admin_<slug>` Keycloak role matching the group's slug → `true`
+   - returns `true` if user has `hermes_super_admin`
+   - else if user has `hermes_group_admin` AND either has a `GroupAdmin` DB row for that group, OR has a `hermes_group_admin_<slug>` Keycloak role matching the group's slug → `true`
    - else `false`
 2. Replace the four blocks. Each becomes ~2 lines: call helper, throw `AuthorizationError` if false.
 3. (Optional) Also expose `requireGroupAdmin(groupIdParam: string)` as an Express middleware so route definitions can do the check before reaching the controller. Useful for the `revokeAccess` route which already needs the group id from the access row.
@@ -102,7 +102,7 @@ Effort: XS ≈ 15 min · S ≈ 1–2 h · M ≈ half day · L ≈ 1–2 days. Ri
 
 ## P1-2 — Periodic Redash sync
 
-**Why:** sync only happens on backend boot ([`backend/src/app.ts:32-38`](backend/src/app.ts)). If a Redash user is added or disabled during the day, Atlas's cached `redash_users` / `redash_groups` drift until restart. This makes `checkUserStatus` and the "invite missing user" flow unreliable, which is what the user-facing "Create Redash Account" banner depends on.
+**Why:** sync only happens on backend boot ([`backend/src/app.ts:32-38`](backend/src/app.ts)). If a Redash user is added or disabled during the day, Hermes's cached `redash_users` / `redash_groups` drift until restart. This makes `checkUserStatus` and the "invite missing user" flow unreliable, which is what the user-facing "Create Redash Account" banner depends on.
 
 **Files:**
 - `backend/src/services/scheduler.service.ts` — add a second cron job.
@@ -118,13 +118,13 @@ Effort: XS ≈ 15 min · S ≈ 1–2 h · M ≈ half day · L ≈ 1–2 days. Ri
 
 **Done when:**
 - Backend log shows a sync line every 15 min in prod / 5 min in dev.
-- Adding a user directly in the Redash UI shows up in Atlas's cache within 15 min without restart.
+- Adding a user directly in the Redash UI shows up in Hermes's cache within 15 min without restart.
 
 ---
 
 ## P1-3 — Reconcile THREE_MONTHS duration
 
-**Why:** the Prisma `AccessDuration` enum (`backend/prisma/atlas/schema.prisma:200-206`) has `THREE_MONTHS`, but no frontend dropdown exposes it. Dead value. Either remove it or wire it up.
+**Why:** the Prisma `AccessDuration` enum (`backend/prisma/hermes/schema.prisma:200-206`) has `THREE_MONTHS`, but no frontend dropdown exposes it. Dead value. Either remove it or wire it up.
 
 **Recommend (B) — wire it up.** Less migration risk; users sometimes ask for a quarter.
 
@@ -327,7 +327,7 @@ Effort: XS ≈ 15 min · S ≈ 1–2 h · M ≈ half day · L ≈ 1–2 days. Ri
 
 **Approach:**
 1. `npm i bullmq`.
-2. Create a `backend/src/services/queue.ts` that exports a single `Queue('atlas-events')` instance pointing at `redis://redis:6379/1` (different DB than Redash so they don't collide).
+2. Create a `backend/src/services/queue.ts` that exports a single `Queue('hermes-events')` instance pointing at `redis://redis:6379/1` (different DB than Redash so they don't collide).
 3. Replace `eventBus.emitAccessEvent(...)` with `queue.add(eventType, payload)`.
 4. Each consumer (notification, slack, audit) becomes a BullMQ `Worker` with retry/backoff config.
 5. Failed jobs land in a dead-letter queue. Add a small admin endpoint `GET /api/admin/queues` returning `await queue.getJobCounts()` for visibility.

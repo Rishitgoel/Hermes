@@ -1,5 +1,5 @@
 /* ══════════════════════════════════════════════════════════════════
-   ATLAS CSS DESIGN SYSTEM - WHITE & PURPLE CUSTOM THEME
+   HERMES CSS DESIGN SYSTEM - WHITE & PURPLE CUSTOM THEME
    ══════════════════════════════════════════════════════════════════ */
 
 :root {
@@ -675,13 +675,13 @@ a:hover {
   margin-top: 16px;
 }
 
-.atlas-table {
+.hermes-table {
   width: 100%;
   border-collapse: collapse;
   text-align: left;
 }
 
-.atlas-table th {
+.hermes-table th {
   background-color: var(--primary-light);
   color: var(--primary);
   font-weight: 700;
@@ -692,7 +692,7 @@ a:hover {
   border-bottom: 1px solid var(--border);
 }
 
-.atlas-table td {
+.hermes-table td {
   padding: 16px 24px;
   font-size: 14px;
   border-bottom: 1px solid var(--border);
@@ -700,11 +700,11 @@ a:hover {
   vertical-align: middle;
 }
 
-.atlas-table tr:last-child td {
+.hermes-table tr:last-child td {
   border-bottom: none;
 }
 
-.atlas-table tr:hover td {
+.hermes-table tr:hover td {
   background-color: hsla(262, 60%, 48%, 0.01);
 }
 

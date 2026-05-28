@@ -32,7 +32,7 @@ export const TopBar: React.FC = () => {
     if (path === '/my-requests') return 'My Requests';
     if (path === '/pending-approvals') return 'Pending Approvals';
     if (path === '/audit-log') return 'Audit Log';
-    return 'Atlas';
+    return 'Hermes';
   };
 
   const getInitials = (name: string) => {
@@ -47,8 +47,8 @@ export const TopBar: React.FC = () => {
   };
 
   const getPrimaryRoleLabel = (roles: string[]) => {
-    if (roles.includes('atlas_super_admin')) return 'Super Admin';
-    if (roles.includes('atlas_group_admin')) return 'Group Admin';
+    if (roles.includes('hermes_super_admin')) return 'Super Admin';
+    if (roles.includes('hermes_group_admin')) return 'Group Admin';
     return 'Employee';
   };
 

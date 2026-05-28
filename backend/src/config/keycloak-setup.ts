@@ -5,7 +5,7 @@ import config from './config';
 export class KeycloakSetupService {
   async ensureClientAndRolesExist(): Promise<void> {
     if (config.isSimulation || !config.keycloak.adminPassword) {
-      logger.info('🔑 Keycloak setup: Running in SIMULATION mode. Auto-configuring atlas-prod client and roles locally in memory.');
+      logger.info('🔑 Keycloak setup: Running in SIMULATION mode. Auto-configuring hermes-prod client and roles locally in memory.');
       return;
     }
 
@@ -36,8 +36,8 @@ export class KeycloakSetupService {
       const accessToken = tokenRes.data.access_token;
       logger.info('🔑 Keycloak setup: Authenticated with Keycloak Admin API.');
 
-      // 2. Check if client 'atlas-prod' exists
-      const targetClientId = config.keycloak.audience || 'atlas-prod';
+      // 2. Check if client 'hermes-prod' exists
+      const targetClientId = config.keycloak.audience || 'hermes-prod';
       const clientsUrl = `${adminUrl}/admin/realms/${realm}/clients`;
       const clientsRes = await axios.get(clientsUrl, {
         headers: { Authorization: `Bearer ${accessToken}` },
@@ -62,7 +62,7 @@ export class KeycloakSetupService {
             directAccessGrantsEnabled: true,
             standardFlowEnabled: true,
             redirectUris: [
-              'https://atlas.bachatt.app/*',
+              'https://hermes.bachatt.app/*',
               'http://localhost:5173/*',
               'http://localhost:5174/*',
             ],
@@ -83,7 +83,7 @@ export class KeycloakSetupService {
       }
 
       // 3. Ensure Roles Exist
-      const roles = ['atlas_super_admin', 'atlas_group_admin', 'atlas_user'];
+      const roles = ['hermes_super_admin', 'hermes_group_admin', 'hermes_user'];
       const rolesUrl = `${adminUrl}/admin/realms/${realm}/roles`;
 
       for (const roleName of roles) {
@@ -97,7 +97,7 @@ export class KeycloakSetupService {
             logger.info(`🔑 Keycloak setup: Creating realm role '${roleName}'...`);
             await axios.post(
               rolesUrl,
-              { name: roleName, description: `Atlas ${roleName.replace('atlas_', '')} role` },
+              { name: roleName, description: `Hermes ${roleName.replace('hermes_', '')} role` },
               { headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' } }
             );
             logger.info(`🔑 Keycloak setup: Role '${roleName}' created.`);

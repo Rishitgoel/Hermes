@@ -30,7 +30,7 @@ if (!useSimulation) {
   keycloakInstance = new Keycloak({
     url: import.meta.env.VITE_KEYCLOAK_URL || 'https://keycloak.bachatt.app',
     realm: import.meta.env.VITE_KEYCLOAK_REALM || 'master',
-    clientId: import.meta.env.VITE_KEYCLOAK_CLIENT_ID || 'atlas-prod',
+    clientId: import.meta.env.VITE_KEYCLOAK_CLIENT_ID || 'hermes-prod',
   });
   (window as any).keycloak = keycloakInstance; // Make available to apiClient
 }
@@ -46,8 +46,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     if (useSimulation) {
       // Simulation mode
-      const mockRole = localStorage.getItem('atlas_mock_token') as 'super_admin' | 'group_admin' | 'user' || 'user';
-      localStorage.setItem('atlas_mock_token', mockRole); // ensure set
+      const mockRole = localStorage.getItem('hermes_mock_token') as 'super_admin' | 'group_admin' | 'user' || 'user';
+      localStorage.setItem('hermes_mock_token', mockRole); // ensure set
 
       let mockUser: UserSession;
       if (mockRole === 'super_admin') {
@@ -55,21 +55,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           id: 'super-admin-uuid-1111',
           username: 'Mayank_Aggarwal',
           email: 'mayank.aggarwal@bachatt.app',
-          roles: ['atlas_super_admin', 'atlas_user'],
+          roles: ['hermes_super_admin', 'hermes_user'],
         };
       } else if (mockRole === 'group_admin') {
         mockUser = {
           id: 'group-admin-uuid-2222',
           username: 'Yogesh_Verma',
           email: 'yogesh.verma@bachatt.app',
-          roles: ['atlas_group_admin', 'atlas_group_admin_growth', 'atlas_user'],
+          roles: ['hermes_group_admin', 'hermes_group_admin_growth', 'hermes_user'],
         };
       } else {
         mockUser = {
           id: 'regular-user-uuid-3333',
           username: 'Rishit_Goel',
           email: 'rishit.goel@bachatt.app',
-          roles: ['atlas_user'],
+          roles: ['hermes_user'],
         };
       }
 
@@ -147,7 +147,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = () => {
     if (useSimulation) {
-      localStorage.removeItem('atlas_mock_token');
+      localStorage.removeItem('hermes_mock_token');
       setUser(null);
       setIsAuthenticated(false);
       window.location.reload();
@@ -158,7 +158,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const switchSimulatedRole = (role: 'super_admin' | 'group_admin' | 'user') => {
     if (!useSimulation) return;
-    localStorage.setItem('atlas_mock_token', role);
+    localStorage.setItem('hermes_mock_token', role);
     window.location.reload();
   };
 

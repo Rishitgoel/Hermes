@@ -69,7 +69,7 @@ export class AccessRequestController extends BaseController {
       if (!userId) return;
 
       const superAdmin = isSuperAdmin(this.user!);
-      const isGroupAdmin = this.user!.roles.includes('atlas_group_admin');
+      const isGroupAdmin = this.user!.roles.includes('hermes_group_admin');
 
       if (!superAdmin && !isGroupAdmin) {
         throw new AuthorizationError('Only admins can view pending requests');

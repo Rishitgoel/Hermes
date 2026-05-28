@@ -541,7 +541,7 @@ export const Groups: React.FC = () => {
       ) : (
         <>
           <div className="table-container">
-            <table className="atlas-table">
+            <table className="hermes-table">
               <thead>
                 <tr>
                   <th style={{ width: '90px', textAlign: 'center' }}>

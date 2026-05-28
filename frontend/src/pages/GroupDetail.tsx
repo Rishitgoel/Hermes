@@ -99,7 +99,7 @@ export const GroupDetail: React.FC = () => {
     return <LoadingSpinner />;
   }
 
-  const isSuperAdmin = user?.roles.includes('atlas_super_admin') || false;
+  const isSuperAdmin = user?.roles.includes('hermes_super_admin') || false;
   const isGroupAdminOfThisGroup = group.admins.some((adm) => adm.userId === user?.id);
   const canManage = isSuperAdmin || isGroupAdminOfThisGroup;
 
@@ -264,7 +264,7 @@ export const GroupDetail: React.FC = () => {
             </div>
           ) : (
             <div className="table-container">
-              <table className="atlas-table">
+              <table className="hermes-table">
                 <thead>
                   <tr>
                     <th>User</th>

@@ -7,7 +7,7 @@ export interface AccessEvent {
   timestamp: Date;
 }
 
-class AtlasEventBus extends EventEmitter {
+class HermesEventBus extends EventEmitter {
   emitAccessEvent(event: AccessEvent): void {
     logger.debug({ event: event.type }, `Event emitted: ${event.type}`);
     this.emit(event.type, event);
@@ -15,5 +15,5 @@ class AtlasEventBus extends EventEmitter {
   }
 }
 
-export const eventBus = new AtlasEventBus();
+export const eventBus = new HermesEventBus();
 export default eventBus;

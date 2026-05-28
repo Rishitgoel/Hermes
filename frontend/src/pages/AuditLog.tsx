@@ -214,7 +214,7 @@ export const AuditLog: React.FC = () => {
       ) : (
         <>
           <div className="table-container">
-            <table className="atlas-table">
+            <table className="hermes-table">
               <thead>
                 <tr>
                   <th>Event Date</th>

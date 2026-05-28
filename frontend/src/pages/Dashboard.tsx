@@ -41,7 +41,7 @@ export const Dashboard: React.FC = () => {
 
   const activeAccessRef = useRef<HTMLDivElement>(null);
 
-  const isAdmin = user?.roles.includes('atlas_super_admin') || user?.roles.includes('atlas_group_admin');
+  const isAdmin = user?.roles.includes('hermes_super_admin') || user?.roles.includes('hermes_group_admin');
 
   const accessesQuery = useQuery<ActiveAccessData[]>({
     queryKey: queryKeys.myAccess(),
@@ -184,7 +184,7 @@ export const Dashboard: React.FC = () => {
         </div>
       ) : (
         <div className="table-container">
-          <table className="atlas-table">
+          <table className="hermes-table">
             <thead>
               <tr>
                 <th style={{ padding: '12px 24px' }}>Group Name</th>

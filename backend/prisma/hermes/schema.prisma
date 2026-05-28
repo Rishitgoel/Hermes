@@ -1,6 +1,6 @@
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL_ATLAS")
+  url      = env("DATABASE_URL_HERMES")
 }
 
 generator client {
@@ -218,4 +218,3 @@ enum RequestStatus {
   EXPIRED
   REVOKED
 }
-

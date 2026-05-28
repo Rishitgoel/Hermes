@@ -3,7 +3,7 @@ import { QueryClient } from '@tanstack/react-query';
 /**
  * Single app-wide React Query client.
  *
- * Defaults tuned for Atlas:
+ * Defaults tuned for Hermes:
  *  - 30s staleTime so navigating between pages doesn't refetch immediately,
  *    but data still gets refreshed on a reasonable cadence.
  *  - retry: 1 — most failures here are auth/permission errors that won't

@@ -9,12 +9,12 @@ router.get('/me', authenticateToken, (req: Request, res: Response, next: NextFun
   controller.getMyAccess(req, res, next).catch(next);
 });
 
-router.get('/group/:groupId', authenticateToken, requireRole(['atlas_super_admin', 'atlas_group_admin']), (req: Request, res: Response, next: NextFunction) => {
+router.get('/group/:groupId', authenticateToken, requireRole(['hermes_super_admin', 'hermes_group_admin']), (req: Request, res: Response, next: NextFunction) => {
   const controller = new UserAccessController(req, res, next);
   controller.getGroupAccessList(req, res, next).catch(next);
 });
 
-router.delete('/:id', authenticateToken, requireRole(['atlas_super_admin', 'atlas_group_admin']), (req: Request, res: Response, next: NextFunction) => {
+router.delete('/:id', authenticateToken, requireRole(['hermes_super_admin', 'hermes_group_admin']), (req: Request, res: Response, next: NextFunction) => {
   const controller = new UserAccessController(req, res, next);
   controller.revokeAccess(req, res, next).catch(next);
 });

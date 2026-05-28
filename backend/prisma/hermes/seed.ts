@@ -60,7 +60,7 @@ const initialGroups = [
 ];
 
 async function main() {
-  console.log('Seeding initial Atlas groups...');
+  console.log('Seeding initial Hermes groups...');
 
   for (const group of initialGroups) {
     const upserted = await prisma.group.upsert({

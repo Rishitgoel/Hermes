@@ -1,10 +1,10 @@
-# Atlas — Project Guide for Claude
+# Hermes — Project Guide for Claude
 
 Read this first whenever you start a chat in this repo. It encodes how the project works and how the user (solo dev, Rishit) wants to work in it.
 
 ## TL;DR
 
-Atlas is an internal **access-management portal**. Users request access to groups; admins approve; the backend provisions the user on the target platform (currently only Redash; AWS / Jira / etc. are stubs in the UI). Stack: Node/Express + Prisma + Postgres on the backend, React + Vite on the frontend, Keycloak for auth.
+Hermes is an internal **access-management portal**. Users request access to groups; admins approve; the backend provisions the user on the target platform (currently only Redash; AWS / Jira / etc. are stubs in the UI). Stack: Node/Express + Prisma + Postgres on the backend, React + Vite on the frontend, Keycloak for auth.
 
 If the user asks for "the roadmap" or for the next thing to work on, check **`ROADMAP.md`** at the repo root — that's the prioritized backlog (P1 → P3).
 
@@ -31,9 +31,9 @@ These preferences came up explicitly. Don't violate them without asking.
 ## Project layout
 
 ```
-D:\Bachatt\Atlas 2\
+D:\Bachatt\Hermes 2\
 ├── backend/                       # Node + Express + Prisma
-│   ├── prisma/atlas/              # ⚠ non-default Prisma path
+│   ├── prisma/hermes/             # ⚠ non-default Prisma path
 │   │   ├── schema.prisma
 │   │   ├── seed.ts
 │   │   └── migrations/
@@ -69,11 +69,11 @@ D:\Bachatt\Atlas 2\
 
 | Service | Container | Host port | Note |
 |---|---|---|---|
-| Atlas Postgres | `atlas_postgres` | **15433** | non-default port (5432 → 15433) |
-| Keycloak | `atlas_keycloak` | 8080 | admin/admin_password |
-| Redis | `atlas_redis` | **16379** | shared with Redash |
-| Redash Postgres | `atlas_redash_postgres` | **15434** | |
-| Redash server | `atlas_redash` | **5500** | login at http://localhost:5500 |
+| Hermes Postgres | `hermes_postgres` | **15433** | non-default port (5432 → 15433) |
+| Keycloak | `hermes_keycloak` | 8080 | admin/admin_password |
+| Redis | `hermes_redis` | **16379** | shared with Redash |
+| Redash Postgres | `hermes_redash_postgres` | **15434** | |
+| Redash server | `hermes_redash` | **5500** | login at http://localhost:5500 |
 | Redash worker/scheduler | — | — | background |
 
 ### Environment files
@@ -82,7 +82,7 @@ D:\Bachatt\Atlas 2\
 - `.env.example` files **don't exist yet** (see P1-4 in ROADMAP.md).
 - Key flags:
   - `KEYCLOAK_SIMULATION=true|false` (backend). When `true`, the backend accepts `Bearer super_admin`, `Bearer group_admin`, or `Bearer user` as the entire token. Default user UUIDs are hardcoded in `backend/src/middleware/auth.middleware.ts`.
-  - `VITE_KEYCLOAK_SIMULATION=true|false` (frontend). When `true`, AuthContext skips Keycloak entirely and reads a mock role from `localStorage['atlas_mock_token']`.
+  - `VITE_KEYCLOAK_SIMULATION=true|false` (frontend). When `true`, AuthContext skips Keycloak entirely and reads a mock role from `localStorage['hermes_mock_token']`.
   - `REDASH_SIMULATION=true|false` (backend). When `true`, `redash.service.ts` returns mock users/groups instead of hitting Redash.
 - All three default to live mode in the current `.env` files.
 - **The user typically runs in live mode** (`KEYCLOAK_SIMULATION=false`, `REDASH_SIMULATION=true` for local dev).
@@ -91,7 +91,7 @@ D:\Bachatt\Atlas 2\
 
 ```powershell
 # Boot infra
-cd "D:\Bachatt\Atlas 2"
+cd "D:\Bachatt\Hermes 2"
 docker compose up -d
 
 # Backend
@@ -99,9 +99,9 @@ cd backend
 npm run dev                              # nodemon, port 8001
 npm run build                            # tsc → dist/
 npm run prisma:migrate                   # creates+applies a new migration (will prompt for name)
-npm run prisma:seed                      # runs prisma/atlas/seed.ts
-npx prisma generate --schema=prisma/atlas/schema.prisma   # ⚠ always pass --schema flag
-npx prisma validate --schema=prisma/atlas/schema.prisma
+npm run prisma:seed                      # runs prisma/hermes/seed.ts
+npx prisma generate --schema=prisma/hermes/schema.prisma   # ⚠ always pass --schema flag
+npx prisma validate --schema=prisma/hermes/schema.prisma
 npx tsc --noEmit                         # typecheck only
 
 # Frontend
@@ -112,7 +112,7 @@ npm run lint                             # eslint
 npx tsc --noEmit                         # typecheck only
 ```
 
-⚠ **The Prisma schema lives at `prisma/atlas/schema.prisma`, not the default `prisma/schema.prisma`.** Every prisma CLI call from outside the npm scripts must include `--schema=prisma/atlas/schema.prisma`. The npm scripts already do this.
+⚠ **The Prisma schema lives at `prisma/hermes/schema.prisma`, not the default `prisma/schema.prisma`.** Every prisma CLI call from outside the npm scripts must include `--schema=prisma/hermes/schema.prisma`. The npm scripts already do this.
 
 ---
 
@@ -162,7 +162,7 @@ Hierarchy in `backend/src/utils/errors.ts`:
 
 - Live mode: `express-jwt` validates the Keycloak JWT (RS256, fetched via JWKS). `mapLiveKeycloakUser` populates `req.user`.
 - Simulation mode: `checkJwtSimulated` reads the bearer string and maps to one of three hardcoded mock users.
-- **`requireRole(['atlas_super_admin', ...])`** middleware does basic role checks.
+- **`requireRole(['hermes_super_admin', ...])`** middleware does basic role checks.
 - **Group-admin checks** are currently duplicated in 4 controllers — see P1-1 in ROADMAP.md for the cleanup plan.
 - **Keycloak token refresh is wired** on the frontend (P0-1 fix in commit `36dbcad3`). The default 5-min access token lifespan no longer breaks the UI — `AuthContext` has `onTokenExpired` + 60s heartbeat, `apiClient` does proactive `updateToken(30)` + one-shot 401 retry.
 
@@ -224,14 +224,14 @@ Storage for cached platform state is currently Redash-specific (`redash_users`, 
 
 ```powershell
 # Always
-cd "D:\Bachatt\Atlas 2\backend"; npx tsc --noEmit
-cd "D:\Bachatt\Atlas 2\frontend"; npx tsc --noEmit
+cd "D:\Bachatt\Hermes 2\backend"; npx tsc --noEmit
+cd "D:\Bachatt\Hermes 2\frontend"; npx tsc --noEmit
 
 # If you changed Prisma schema
-cd "D:\Bachatt\Atlas 2\backend"; npx prisma validate --schema=prisma/atlas/schema.prisma
+cd "D:\Bachatt\Hermes 2\backend"; npx prisma validate --schema=prisma/hermes/schema.prisma
 
 # If you changed frontend
-cd "D:\Bachatt\Atlas 2\frontend"; npm run lint
+cd "D:\Bachatt\Hermes 2\frontend"; npm run lint
 
 # Tests don't exist yet (P2-1). Backend lint doesn't exist yet (P2-3). CI doesn't exist yet (P2-4).
 ```

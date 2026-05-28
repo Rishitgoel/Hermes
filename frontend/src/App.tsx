@@ -32,11 +32,11 @@ export const App: React.FC = () => {
               {/* Request history and active status */}
               <Route path="my-requests" element={<MyRequests />} />
               
-              {/* Administrative Approvals Queue */}
+                            {/* Administrative Approvals Queue */}
               <Route 
                 path="pending-approvals" 
                 element={
-                  <ProtectedRoute allowedRoles={['atlas_super_admin', 'atlas_group_admin']}>
+                  <ProtectedRoute allowedRoles={['hermes_super_admin', 'hermes_group_admin']}>
                     <PendingApprovals />
                   </ProtectedRoute>
                 } 
@@ -46,7 +46,7 @@ export const App: React.FC = () => {
               <Route 
                 path="audit-log" 
                 element={
-                  <ProtectedRoute allowedRoles={['atlas_super_admin']}>
+                  <ProtectedRoute allowedRoles={['hermes_super_admin']}>
                     <AuditLog />
                   </ProtectedRoute>
                 } 

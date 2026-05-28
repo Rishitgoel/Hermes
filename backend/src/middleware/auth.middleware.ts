@@ -70,14 +70,14 @@ const checkJwtSimulated = (req: Request, res: Response, next: NextFunction) => {
       id: 'super-admin-uuid-1111',
       username: 'Mayank_Aggarwal',
       email: 'mayank.aggarwal@bachatt.app',
-      roles: ['atlas_super_admin', 'atlas_user'],
+      roles: ['hermes_super_admin', 'hermes_user'],
     };
   } else if (token === 'group_admin') {
     req.user = {
       id: 'group-admin-uuid-2222',
       username: 'Yogesh_Verma',
       email: 'yogesh.verma@bachatt.app',
-      roles: ['atlas_group_admin', 'atlas_group_admin_growth', 'atlas_user'],
+      roles: ['hermes_group_admin', 'hermes_group_admin_growth', 'hermes_user'],
     };
   } else {
     // Default or user
@@ -85,7 +85,7 @@ const checkJwtSimulated = (req: Request, res: Response, next: NextFunction) => {
       id: 'regular-user-uuid-3333',
       username: 'Rishit_Goel',
       email: 'rishit.goel@bachatt.app',
-      roles: ['atlas_user'],
+      roles: ['hermes_user'],
     };
   }
 
@@ -165,7 +165,7 @@ export const requireRole = (requiredRoles: string[]) => {
 };
 
 export const getAdminGroupSlugsFromRoles = (userRoles: string[]): string[] => {
-  const prefixes = ['atlas_group_admin_', 'group_admin_'];
+  const prefixes = ['hermes_group_admin_', 'group_admin_'];
   const slugs: string[] = [];
   
   for (const role of userRoles) {
@@ -185,8 +185,8 @@ export const checkIsGroupAdmin = (userRoles: string[], groupSlug: string): boole
   const underscoreSlug = normalizedSlug.replace(/-/g, '_');
   
   const possibleRoles = [
-    `atlas_group_admin_${normalizedSlug}`,
-    `atlas_group_admin_${underscoreSlug}`,
+    `hermes_group_admin_${normalizedSlug}`,
+    `hermes_group_admin_${underscoreSlug}`,
     `group_admin_${normalizedSlug}`,
     `group_admin_${underscoreSlug}`
   ];

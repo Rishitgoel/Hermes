@@ -14,7 +14,7 @@ router.get('/my', authenticateToken, (req: Request, res: Response, next: NextFun
   controller.getMyRequests(req, res, next).catch(next);
 });
 
-router.get('/pending', authenticateToken, requireRole(['atlas_super_admin', 'atlas_group_admin']), (req: Request, res: Response, next: NextFunction) => {
+router.get('/pending', authenticateToken, requireRole(['hermes_super_admin', 'hermes_group_admin']), (req: Request, res: Response, next: NextFunction) => {
   const controller = new AccessRequestController(req, res, next);
   controller.getPendingRequests(req, res, next).catch(next);
 });
@@ -24,7 +24,7 @@ router.get('/:id', authenticateToken, (req: Request, res: Response, next: NextFu
   controller.getRequestDetail(req, res, next).catch(next);
 });
 
-router.put('/:id/review', authenticateToken, requireRole(['atlas_super_admin', 'atlas_group_admin']), (req: Request, res: Response, next: NextFunction) => {
+router.put('/:id/review', authenticateToken, requireRole(['hermes_super_admin', 'hermes_group_admin']), (req: Request, res: Response, next: NextFunction) => {
   const controller = new AccessRequestController(req, res, next);
   controller.reviewRequest(req, res, next).catch(next);
 });

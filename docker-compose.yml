@@ -1,25 +1,25 @@
 services:
   postgres:
     image: postgres:15-alpine
-    container_name: atlas_postgres
+    container_name: hermes_postgres
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-atlas_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-atlas_pass}
-      POSTGRES_DB: ${POSTGRES_DB:-atlas}
+      POSTGRES_USER: ${POSTGRES_USER:-hermes_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hermes_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-hermes}
     ports:
       - '15433:5432'
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: always
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U atlas_user -d atlas']
+      test: ['CMD-SHELL', 'pg_isready -U hermes_user -d hermes']
       interval: 10s
       timeout: 5s
       retries: 5
 
   keycloak:
     image: quay.io/keycloak/keycloak:24.0
-    container_name: atlas_keycloak
+    container_name: hermes_keycloak
     command: start-dev --http-port 8080 --health-enabled=true
     environment:
       KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
@@ -40,7 +40,7 @@ services:
   # ── Redash Dependencies ──
   redis:
     image: redis:7-alpine
-    container_name: atlas_redis
+    container_name: hermes_redis
     ports:
       - '16379:6379'
     restart: always
@@ -52,7 +52,7 @@ services:
 
   redash-postgres:
     image: postgres:15-alpine
-    container_name: atlas_redash_postgres
+    container_name: hermes_redash_postgres
     environment:
       POSTGRES_USER: redash
       POSTGRES_PASSWORD: redash_pass
@@ -71,7 +71,7 @@ services:
   # ── Redash Server ──
   redash:
     image: redash/redash:latest
-    container_name: atlas_redash
+    container_name: hermes_redash
     command: server
     environment:
       REDASH_DATABASE_URL: 'postgresql://redash:redash_pass@redash-postgres:5432/redash'
@@ -97,7 +97,7 @@ services:
   # ── Redash Workers (background jobs) ──
   redash-worker:
     image: redash/redash:latest
-    container_name: atlas_redash_worker
+    container_name: hermes_redash_worker
     command: worker
     environment:
       REDASH_DATABASE_URL: 'postgresql://redash:redash_pass@redash-postgres:5432/redash'
@@ -117,7 +117,7 @@ services:
   # ── Redash Scheduler ──
   redash-scheduler:
     image: redash/redash:latest
-    container_name: atlas_redash_scheduler
+    container_name: hermes_redash_scheduler
     command: scheduler
     environment:
       REDASH_DATABASE_URL: 'postgresql://redash:redash_pass@redash-postgres:5432/redash'

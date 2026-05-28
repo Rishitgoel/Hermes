@@ -93,7 +93,7 @@ export const LoadingSpinner: React.FC<LoadingSpinnerProps> = ({
               WebkitTextFillColor: 'transparent',
               marginBottom: '6px'
             }}>
-              ATLAS
+              HERMES
             </h1>
             <p style={{
               fontSize: '11px',

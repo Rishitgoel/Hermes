@@ -14,7 +14,7 @@ const PORT = config.port;
 
 async function bootstrap() {
   try {
-    logger.info('🚀 Atlas Backend starting up...');
+    logger.info('🚀 Hermes Backend starting up...');
 
     // 0. Register event listeners
     registerEventListeners();
@@ -37,9 +37,9 @@ async function bootstrap() {
         logger.warn('⚠️ Initial Redash sync failed. Cache might be stale. Proceeding...', err.message);
       });
 
-    // 5. Start Express server
+        // 5. Start Express server
     const server = app.listen(PORT, () => {
-      logger.info(`🚀 Atlas Backend listening on http://localhost:${PORT}`);
+      logger.info(`🚀 Hermes Backend listening on http://localhost:${PORT}`);
     });
 
     // Graceful shutdown
@@ -56,7 +56,7 @@ async function bootstrap() {
     process.on('SIGINT', shutdown);
 
   } catch (error: any) {
-    logger.fatal('❌ Failed to bootstrap Atlas Application:', error.message);
+    logger.fatal('❌ Failed to bootstrap Hermes Application:', error.message);
     process.exit(1);
   }
 }

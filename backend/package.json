@@ -1,14 +1,14 @@
 {
-  "name": "atlas-backend",
+  "name": "hermes-backend",
   "version": "1.0.0",
   "main": "dist/app.js",
   "scripts": {
     "dev": "nodemon --watch src --ext ts --exec ts-node src/app.ts",
     "build": "tsc",
     "start": "node dist/app.js",
-    "prisma:generate": "prisma generate --schema=prisma/atlas/schema.prisma",
-    "prisma:migrate": "prisma migrate dev --schema=prisma/atlas/schema.prisma",
-    "prisma:seed": "ts-node prisma/atlas/seed.ts"
+    "prisma:generate": "prisma generate --schema=prisma/hermes/schema.prisma",
+    "prisma:migrate": "prisma migrate dev --schema=prisma/hermes/schema.prisma",
+    "prisma:seed": "ts-node prisma/hermes/seed.ts"
   },
   "dependencies": {
     "@aws-sdk/client-secrets-manager": "^3.1053.0",

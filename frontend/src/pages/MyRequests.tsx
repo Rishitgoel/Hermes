@@ -60,7 +60,7 @@ export const MyRequests: React.FC = () => {
         </div>
       ) : (
         <div className="table-container">
-          <table className="atlas-table">
+          <table className="hermes-table">
             <thead>
               <tr>
                 <th>Group</th>

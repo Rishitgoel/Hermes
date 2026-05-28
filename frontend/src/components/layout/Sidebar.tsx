@@ -16,8 +16,8 @@ export const Sidebar: React.FC = () => {
   const { user, logout, isSimulated, switchSimulatedRole } = useAuth();
   const { unreadCount } = useNotifications();
 
-  const isSuperAdmin = user?.roles.includes('atlas_super_admin') || false;
-  const isGroupAdmin = user?.roles.includes('atlas_group_admin') || false;
+  const isSuperAdmin = user?.roles.includes('hermes_super_admin') || false;
+  const isGroupAdmin = user?.roles.includes('hermes_group_admin') || false;
   const showApprovals = isSuperAdmin || isGroupAdmin;
 
   const handleRoleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -35,7 +35,7 @@ export const Sidebar: React.FC = () => {
       {/* Logo Section */}
       <div className="logo-container">
         <img src="/assets/logo.png" alt="Bachatt Logo" className="logo-img" />
-        <span className="logo-text">ATLAS</span>
+        <span className="logo-text">HERMES</span>
       </div>
 
       {/* Navigation Links */}

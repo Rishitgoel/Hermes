@@ -12,7 +12,7 @@ export class AuditController extends BaseController {
       if (!userId) return;
 
       // Authorization Check: Super Admin only
-      const isSuperAdmin = this.user!.roles.includes('atlas_super_admin');
+      const isSuperAdmin = this.user!.roles.includes('hermes_super_admin');
       if (!isSuperAdmin) {
         throw new AuthorizationError('Only super admins can view platform audit logs');
       }

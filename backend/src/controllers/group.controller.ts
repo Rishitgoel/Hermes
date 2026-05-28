@@ -33,7 +33,7 @@ export class GroupController extends BaseController {
         })
       ]);
 
-      const isSuperAdmin = this.user?.roles.includes('atlas_super_admin') || false;
+      const isSuperAdmin = this.user?.roles.includes('hermes_super_admin') || false;
 
       const enrichedGroups = groups.map(g => {
         let accessStatus = 'NONE';
@@ -110,7 +110,7 @@ export class GroupController extends BaseController {
         where: { requesterId: userId, groupId: group.id, status: RequestStatus.PENDING },
       });
 
-      const isSuperAdmin = this.user?.roles.includes('atlas_super_admin') || false;
+      const isSuperAdmin = this.user?.roles.includes('hermes_super_admin') || false;
       const isKeycloakAdmin = this.user?.roles ? checkIsGroupAdmin(this.user.roles, group.slug) : false;
       const isAdminOfGroup = group.admins.some(adm => adm.userId === userId) || isKeycloakAdmin;
       let accessStatus = 'NONE';
