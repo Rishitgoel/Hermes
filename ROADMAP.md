@@ -54,7 +54,7 @@ The first applies the new index. The second refreshes the generated Prisma clien
 | ~~P1-2~~ | ~~Periodic Redash sync~~ — Done in `f5982fca` | S | Low |
 | ~~P1-3~~ | ~~Reconcile THREE_MONTHS duration~~ — Done in `d042c097` | XS | Low |
 | ~~P1-4~~ | ~~Add .env.example files~~ — Done in `989d9da9` | XS | Low |
-| ~~P1-5~~ | ~~Frontend data-fetching hook~~ — Done (commit pending) | M | Low |
+| ~~P1-5~~ | ~~Frontend data-fetching hook~~ — Done in `008739e4` | M | Low |
 | **P2** | **Hardening (next sprint)** | | |
 | P2-1 | Tests (vitest) | L | Low |
 | P2-2 | Bulk endpoints | M | Low |
