@@ -28,6 +28,7 @@ If you ever forget the IDs, just say "show me the roadmap" and Claude will read 
 | P1-1 | Extracted `isGroupAdminOf` helper; collapsed 4 duplicated admin-check blocks into one call | `backend/src/utils/authz.ts`, `backend/src/controllers/user-access.controller.ts`, `backend/src/controllers/access-request.controller.ts` |
 | P1-2 | Periodic Redash sync cron (15 min prod / 5 min dev) + `lastRedashSyncAt` on `/health` | `backend/src/services/scheduler.service.ts`, `backend/src/services/sync.service.ts`, `backend/src/index.ts` |
 | P1-3 | Wired up `THREE_MONTHS` duration option in modal + bulk panel (backend `calculateExpiry` already handled it) | `frontend/src/components/access/AccessRequestModal.tsx`, `frontend/src/pages/Groups.tsx` |
+| P1-4 | Added repo-level `.gitignore` and `backend/.env.example` + `frontend/.env.example` so a fresh clone has a runnable starting point | `.gitignore`, `backend/.env.example`, `frontend/.env.example` |
 
 All in commit `36dbcad3`, on `main`, on `origin/main`.
 
@@ -50,8 +51,8 @@ The first applies the new index. The second refreshes the generated Prisma clien
 | **P1** | **Cleanup & drift (this week)** | | |
 | ~~P1-1~~ | ~~Extract admin-check helper~~ — Done in `afeafccc` | S | Low |
 | ~~P1-2~~ | ~~Periodic Redash sync~~ — Done in `f5982fca` | S | Low |
-| ~~P1-3~~ | ~~Reconcile THREE_MONTHS duration~~ — Done (commit pending) | XS | Low |
-| P1-4 | Add .env.example files | XS | Low |
+| ~~P1-3~~ | ~~Reconcile THREE_MONTHS duration~~ — Done in `d042c097` | XS | Low |
+| ~~P1-4~~ | ~~Add .env.example files~~ — Done (commit pending) | XS | Low |
 | P1-5 | Frontend data-fetching hook | M | Low |
 | **P2** | **Hardening (next sprint)** | | |
 | P2-1 | Tests (vitest) | L | Low |
