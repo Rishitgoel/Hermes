@@ -54,5 +54,52 @@ export function registerEventListeners(): void {
     }
   });
 
+  // Group access request approved but waiting for the user to finish Redash setup.
+  eventBus.on('access.queued-for-setup', async (event) => {
+    try {
+      const { requesterId, groupName, reviewerName } = event.payload as any;
+      await notificationService.notifyAccessQueuedForSetup(requesterId, groupName, reviewerName);
+    } catch (err: any) {
+      logger.error('Failed to notify access.queued-for-setup event:', err.message);
+    }
+  });
+
+  // User-creation lifecycle
+  eventBus.on('user-creation.submitted', async (event) => {
+    try {
+      const { requestId, userName, userEmail, justification } = event.payload as any;
+      await notificationService.notifyUserCreationSubmitted(requestId, userName, userEmail, justification);
+    } catch (err: any) {
+      logger.error('Failed to notify user-creation.submitted event:', err.message);
+    }
+  });
+
+  eventBus.on('user-creation.invited', async (event) => {
+    try {
+      const { userId, userEmail, reviewerName } = event.payload as any;
+      await notificationService.notifyUserCreationApproved(userId, userEmail, reviewerName);
+    } catch (err: any) {
+      logger.error('Failed to notify user-creation.invited event:', err.message);
+    }
+  });
+
+  eventBus.on('user-creation.rejected', async (event) => {
+    try {
+      const { userId, reviewerName, note } = event.payload as any;
+      await notificationService.notifyUserCreationRejected(userId, reviewerName, note);
+    } catch (err: any) {
+      logger.error('Failed to notify user-creation.rejected event:', err.message);
+    }
+  });
+
+  eventBus.on('user-creation.completed', async (event) => {
+    try {
+      const { userId, userEmail } = event.payload as any;
+      await notificationService.notifyUserCreationCompleted(userId, userEmail);
+    } catch (err: any) {
+      logger.error('Failed to notify user-creation.completed event:', err.message);
+    }
+  });
+
   logger.info('📡 Event listeners registered.');
 }

@@ -11,4 +11,5 @@ export const queryKeys = {
   audit: (params: { page: number; pageSize: number; action: string; search: string }) =>
     ['audit', params] as const,
   platformStatus: (platform: string) => ['platform-status', platform] as const,
+  pendingUserCreations: () => ['pending-user-creations'] as const,
 };

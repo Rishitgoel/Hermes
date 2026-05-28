@@ -96,17 +96,28 @@ export class RedashService {
     }
   }
 
-  // Find or Invite User: Checks if email exists, if not, creates/invites user in Redash. Returns Redash user ID.
-  async findOrInviteUser(email: string, name: string): Promise<number> {
+  /**
+   * Result of `findOrInviteUser`:
+   *  - `id` is the Redash user ID, populated either way.
+   *  - `inviteLink` is the Redash-issued one-time setup URL, present ONLY when
+   *    we just created a fresh invited user. Returns undefined when the user
+   *    already existed (no setup needed).
+   */
+  async findOrInviteUser(email: string, name: string): Promise<{ id: number; inviteLink?: string }> {
     if (this.isSimulation) {
       logger.info(`📊 Redash findOrInviteUser (Simulation): Mocking lookup/invite for ${email}`);
       const lowerEmail = email.toLowerCase();
-      // Return a stable mock ID based on the email
-      if (lowerEmail === 'mayank.aggarwal@bachatt.app') return 1;
-      if (lowerEmail === 'yogesh.verma@bachatt.app') return 2;
-      if (lowerEmail === 'rishit.goel@bachatt.app') return 3;
-      if (lowerEmail === 'ankit.sharma@bachatt.app') return 4;
-      return Math.floor(Math.random() * 9000) + 1000;
+      // Stable mock IDs for seeded users — and no inviteLink because they already exist.
+      if (lowerEmail === 'mayank.aggarwal@bachatt.app') return { id: 1 };
+      if (lowerEmail === 'yogesh.verma@bachatt.app') return { id: 2 };
+      if (lowerEmail === 'rishit.goel@bachatt.app') return { id: 3 };
+      if (lowerEmail === 'ankit.sharma@bachatt.app') return { id: 4 };
+      // For any other email, simulate a fresh invite — return a fake inviteLink so
+      // the rest of the workflow can be exercised end-to-end in sim mode.
+      const fakeId = Math.floor(Math.random() * 9000) + 1000;
+      const baseUrl = config.redash.baseUrl?.replace(/\/$/, '') || 'https://redash.bachatt.app';
+      const fakeToken = Math.random().toString(36).slice(2, 18);
+      return { id: fakeId, inviteLink: `${baseUrl}/invitations/${fakeToken}` };
     }
 
     try {
@@ -117,17 +128,22 @@ export class RedashService {
 
       if (existing) {
         logger.info(`📊 Redash findOrInviteUser: Found existing user ${email} with ID ${existing.id}`);
-        return existing.id;
+        return { id: existing.id };
       }
 
-      // Create new user (invite)
+      // Create new user (invite). Redash returns `invite_link` in the response body
+      // when a fresh invite is created — we capture and surface it inside Hermes.
       logger.info(`📊 Redash findOrInviteUser: User ${email} not found. Sending invite...`);
       const inviteRes = await client.post('/api/users', {
         name,
         email,
       });
-      logger.info(`📊 Redash findOrInviteUser: Successfully invited user ${email} with ID ${inviteRes.data.id}`);
-      return inviteRes.data.id;
+      const inviteLink: string | undefined =
+        typeof inviteRes.data?.invite_link === 'string' ? inviteRes.data.invite_link : undefined;
+      logger.info(
+        `📊 Redash findOrInviteUser: Successfully invited user ${email} with ID ${inviteRes.data.id}${inviteLink ? ' (captured invite link)' : ''}`,
+      );
+      return { id: inviteRes.data.id, inviteLink };
     } catch (error: any) {
       logger.error(`Failed to find/invite user ${email} in Redash:`, error.message);
       throw new Error(`Redash API invite error: ${error.message}`);

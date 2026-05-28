@@ -108,6 +108,103 @@ export class NotificationService {
     const slackMsg = `🚫 *Hermes Access Revoked*\n--------------------------\nAccess to *${groupName}* group was revoked by ${revokerName} for User ID: ${userId}.${reason ? `\nReason: "${reason}"` : ''}`;
     await slackService.sendPing(slackMsg);
   }
+
+  // Group request approved but the requester hasn't finished Redash setup yet — queued.
+  async notifyAccessQueuedForSetup(
+    requesterId: string,
+    groupName: string,
+    reviewerName: string,
+  ): Promise<void> {
+    await this.createNotification(
+      requesterId,
+      'Access queued',
+      `${reviewerName} approved your request to ${groupName}. It will activate once you finish setting up your Redash account.`,
+      '/account-status',
+    );
+  }
+
+  // Slack-flavoured mention of a user that linkifies their email in the channel.
+  private formatUserMention(email: string): string {
+    return `<mailto:${email}|${email}>`;
+  }
+
+  // User submitted a user-creation request → notify all super-admins.
+  async notifyUserCreationSubmitted(
+    requestId: string,
+    userName: string,
+    userEmail: string,
+    justification: string | null,
+  ): Promise<void> {
+    const slackMsg = `🆕 *Hermes — New User Creation Request*\n--------------------------\n*${userName}* (${userEmail}) wants a Hermes/Redash account.\n${justification ? `Reason: "${justification}"\n` : ''}\n👉 Review: ${config.frontend.url}/pending-approvals`;
+    await slackService.sendPing(slackMsg);
+
+    try {
+      const superAdmins = await prisma.groupAdmin.findMany({
+        // Bit of a hack — we don't have a 'super admin' table. Notify every distinct
+        // GroupAdmin user so somebody with admin privileges is in the loop. Super-admins
+        // will also see this row in the in-app bell because they always see all admin work.
+        distinct: ['userId'],
+      });
+      const seen = new Set<string>();
+      for (const admin of superAdmins) {
+        if (seen.has(admin.userId)) continue;
+        seen.add(admin.userId);
+        await this.createNotification(
+          admin.userId,
+          'Pending user approval',
+          `${userName} requested a Hermes account.`,
+          `/pending-approvals`,
+        );
+      }
+    } catch (err: any) {
+      logger.error('Failed to fan out user-creation.submitted notifications:', err.message);
+    }
+  }
+
+  // Admin approved a user-creation request → tell the user (Redash will email them separately).
+  async notifyUserCreationApproved(
+    requesterId: string,
+    userEmail: string,
+    reviewerName: string,
+  ): Promise<void> {
+    await this.createNotification(
+      requesterId,
+      'Your account is approved',
+      `${reviewerName} approved your Hermes account. Check your email — Redash has sent you a link to set your password.`,
+      '/account-status',
+    );
+
+    const slackMsg = `✅ *Hermes — Account Approved*\n--------------------------\n${this.formatUserMention(userEmail)} your Hermes account is ready! Check your inbox for the Redash setup email.\n\n👉 ${config.frontend.url}/account-status`;
+    await slackService.sendPing(slackMsg);
+  }
+
+  async notifyUserCreationRejected(
+    requesterId: string,
+    reviewerName: string,
+    note?: string,
+  ): Promise<void> {
+    await this.createNotification(
+      requesterId,
+      'Account request rejected',
+      `${reviewerName} declined your Hermes account request.${note ? ` Reason: "${note}"` : ''}`,
+      '/account-status',
+    );
+  }
+
+  async notifyUserCreationCompleted(
+    requesterId: string,
+    userEmail: string,
+  ): Promise<void> {
+    await this.createNotification(
+      requesterId,
+      'Account setup complete',
+      'You are now fully set up on Redash. Any group requests already approved by admin have been provisioned.',
+      '/',
+    );
+
+    const slackMsg = `🎉 *Hermes — Account Setup Complete*\n--------------------------\n${this.formatUserMention(userEmail)} has finished Redash setup and any pending group memberships have been provisioned.`;
+    await slackService.sendPing(slackMsg);
+  }
 }
 
 export const notificationService = new NotificationService();

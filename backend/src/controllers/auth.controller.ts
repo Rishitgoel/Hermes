@@ -1,15 +1,51 @@
 import { Request, Response, NextFunction } from 'express';
 import BaseController from './base.controller';
+import userCreationService from '../services/user-creation.service';
+import logger from '../utils/logger';
 
 export class AuthController extends BaseController {
   // GET /auth/me
+  // Returns the authenticated user plus their UserCreationRequest summary.
+  // ensureDraftForUser is called here as the explicit, lazy auto-create hook —
+  // we want exactly one row per Keycloak user, created lazily on first session load.
   async getMe(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       if (!this.user) {
         this.sendErrorResponse('User session not found', 401);
         return;
       }
-      this.sendResponse(this.user, 'Session authenticated successfully');
+
+      let userCreation: unknown = null;
+      try {
+        const row = await userCreationService.ensureDraftForUser({
+          id: this.user.id,
+          username: this.user.username,
+          email: this.user.email,
+        });
+        userCreation = {
+          id: row.id,
+          status: row.status,
+          justification: row.justification,
+          submittedAt: row.submittedAt,
+          approvedAt: row.approvedAt,
+          inviteSentAt: row.inviteSentAt,
+          inviteError: row.inviteError,
+          inviteLink: row.inviteLink,
+          completedAt: row.completedAt,
+          externalUserId: row.externalUserId,
+          rejectionReason: row.rejectionReason,
+          reviewerName: row.reviewerName,
+          reviewedAt: row.reviewedAt,
+        };
+      } catch (err: any) {
+        // Don't fail /auth/me if the user-creation lookup blows up — log and continue.
+        logger.error({ err: err.message, userId: this.user.id }, 'ensureDraftForUser failed in /auth/me');
+      }
+
+      this.sendResponse(
+        { ...this.user, userCreation },
+        'Session authenticated successfully',
+      );
     } catch (error) {
       this.handleError(error, 'Failed to authenticate session');
     }

@@ -125,6 +125,20 @@ export class ConflictError extends BaseError {
   }
 }
 
+// 409 — admin tried to approve a group request before the requester's user-creation
+// request was approved. Frontend keys off errorCode === 'USER_NOT_APPROVED' to show
+// "Approve user first" instead of the generic conflict message.
+export class UserNotApprovedError extends BaseError {
+  constructor(
+    message: string,
+    context?: Record<string, unknown>,
+    userId?: string,
+    requestId?: string,
+  ) {
+    super(message, 409, 'USER_NOT_APPROVED', true, context, userId, requestId);
+  }
+}
+
 // External service errors (502)
 export class ExternalServiceError extends BaseError {
   constructor(

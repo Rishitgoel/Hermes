@@ -6,7 +6,7 @@ export class RedashProvisioner implements PlatformAdapter {
   readonly platform = 'redash';
 
   async provision(ctx: ProvisionContext): Promise<ProvisionResult> {
-    const redashUserId = await redashService.findOrInviteUser(ctx.email, ctx.name);
+    const { id: redashUserId } = await redashService.findOrInviteUser(ctx.email, ctx.name);
     if (ctx.externalGroupId) {
       await redashService.addUserToGroup(redashUserId, parseInt(ctx.externalGroupId, 10));
     }
@@ -34,7 +34,7 @@ export class RedashProvisioner implements PlatformAdapter {
   }
 
   async inviteUser(email: string, name: string): Promise<ProvisionResult> {
-    const redashUserId = await redashService.findOrInviteUser(email, name);
+    const { id: redashUserId } = await redashService.findOrInviteUser(email, name);
     await prisma.redashUser.upsert({
       where: { email: email.toLowerCase() },
       update: {

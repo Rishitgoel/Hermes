@@ -1,5 +1,6 @@
 import prisma from '../config/prisma';
 import redashService from './redash.service';
+import userCreationService from './user-creation.service';
 import logger from '../utils/logger';
 
 export class SyncService {
@@ -85,6 +86,26 @@ export class SyncService {
         });
       });
       await prisma.$transaction(updates);
+
+      // Notify user-creation workflow about every active Redash user. The handler
+      // is a cheap no-op for users with no pending request; it only acts when a
+      // UserCreationRequest exists in APPROVED/AWAITING_SETUP. Per-user try/catch
+      // so one failure can't break the rest of the batch.
+      for (const u of redashUsers) {
+        if (u.is_disabled) continue;
+        try {
+          await userCreationService.handleRedashUserDetected({
+            id: u.id,
+            email: u.email,
+            name: u.name,
+          });
+        } catch (err: any) {
+          logger.error(
+            { redashUserId: u.id, email: u.email, error: err.message },
+            'handleRedashUserDetected failed for one user; continuing batch',
+          );
+        }
+      }
 
       this.lastSyncedAt = new Date();
       logger.info('🔄 SyncService: Redash synchronization completed successfully.');

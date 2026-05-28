@@ -17,25 +17,25 @@
   #     timeout: 5s
   #     retries: 5
 
-  # keycloak:
-  #   image: quay.io/keycloak/keycloak:24.0
-  #   container_name: hermes_keycloak
-  #   command: start-dev --http-port 8080 --health-enabled=true
-  #   environment:
-  #     KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
-  #     KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin_password}
-  #   ports:
-  #     - '8080:8080'
-  #   # depends_on:
-  #   #   postgres:
-  #   #     condition: service_healthy
-  #   restart: always
-  #   healthcheck:
-  #     test: ['CMD', 'bash', '-c', 'exec 3<>/dev/tcp/localhost/8080 && echo -e "GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3 && cat <&3 | grep -q "UP"']
-  #     interval: 15s
-  #     timeout: 10s
-  #     retries: 10
-  #     start_period: 30s
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    container_name: hermes_keycloak
+    command: start-dev --http-port 8080 --health-enabled=true
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin_password}
+    ports:
+      - '8080:8080'
+    # depends_on:
+    #   postgres:
+    #     condition: service_healthy
+    restart: always
+    healthcheck:
+      test: ['CMD', 'bash', '-c', 'exec 3<>/dev/tcp/localhost/8080 && echo -e "GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3 && cat <&3 | grep -q "UP"']
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
 
   # ── Redash Dependencies ──
   # redis:

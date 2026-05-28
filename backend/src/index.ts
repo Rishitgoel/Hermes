@@ -10,6 +10,7 @@ import userAccessRouter from './routes/user-access.route';
 import notificationRouter from './routes/notification.route';
 import auditRouter from './routes/audit.route';
 import adminRouter from './routes/admin.route';
+import userCreationRouter from './routes/user-creation.route';
 
 import config from './config/config';
 import prisma from './config/prisma';
@@ -88,6 +89,7 @@ app.use('/api/user-access', userAccessRouter);
 app.use('/api/notifications', notificationRouter);
 app.use('/api/audit', auditRouter);
 app.use('/api/admin', adminRouter);
+app.use('/api/user-creation-requests', userCreationRouter);
 
 // Fallbacks
 app.use(notFoundHandler);

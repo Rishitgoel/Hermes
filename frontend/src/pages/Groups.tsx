@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useAuth } from '../contexts/AuthContext';
 import apiClient from '../services/apiClient';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import PlatformInviteModal from '../components/access/PlatformInviteModal';
@@ -106,6 +107,7 @@ const PLATFORMS: PlatformMetadata[] = [
 export const Groups: React.FC = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const activePlatform = searchParams.get('platform');
 
@@ -132,12 +134,19 @@ export const Groups: React.FC = () => {
     queryFn: () => apiClient.get('/api/groups').then((r) => r.data),
   });
 
-  const platformStatusQuery = useQuery<{ exists: boolean }>({
-    queryKey: queryKeys.platformStatus(activePlatform ?? ''),
-    queryFn: () =>
-      apiClient.get(`/api/user-access/platform-status/${activePlatform}`).then((r) => r.data),
-    enabled: !!activePlatform,
-  });
+  // Gate group requests by the user's user-creation status rather than the legacy
+  // platform-status check. The user can queue group requests as soon as they've
+  // submitted an account request (PENDING/APPROVED/AWAITING_SETUP) — those will
+  // auto-provision once they complete Redash setup. Only DRAFT (haven't submitted)
+  // and REJECTED states are blocked. COMPLETED is the normal already-on-Redash case.
+  const userCreationStatus = user?.userCreation?.status ?? null;
+  const canQueueRequests =
+    userCreationStatus === 'PENDING' ||
+    userCreationStatus === 'APPROVED' ||
+    userCreationStatus === 'AWAITING_SETUP' ||
+    userCreationStatus === 'COMPLETED';
+  const needsAccountAction =
+    userCreationStatus === 'DRAFT' || userCreationStatus === 'REJECTED';
 
   const bulkSubmitMutation = useMutation({
     mutationFn: async (
@@ -177,9 +186,8 @@ export const Groups: React.FC = () => {
 
   const groups = groupsQuery.data ?? [];
   const isLoading = groupsQuery.isLoading;
-  // Treat the user as on-platform until proven otherwise. Default to `true` so
-  // the invite-prompt CTA only triggers when we know `exists === false`.
-  const isPlatformUser = !activePlatform || (platformStatusQuery.data?.exists ?? true);
+  // Submission is allowed unless the user explicitly needs to act on their account first.
+  const isPlatformUser = !activePlatform || !needsAccountAction;
 
   const handleSelectPlatform = (platform: PlatformMetadata | null) => {
     if (platform && platform.status === 'ACTIVE') {
@@ -446,7 +454,7 @@ export const Groups: React.FC = () => {
         </div>
       </div>
 
-      {/* Account Warning Banner */}
+      {/* Account Action Banner — only shown when the user needs to submit (DRAFT) or has been rejected. */}
       {!isPlatformUser && (
         <div style={{
           backgroundColor: 'var(--status-pending-bg)',
@@ -465,17 +473,41 @@ export const Groups: React.FC = () => {
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <Icons.AlertTriangle size={20} />
             <span>
-              You do not have a Redash account yet. Initialize your account to enable group access requests.
+              {userCreationStatus === 'REJECTED'
+                ? 'Your account request was rejected. Contact an admin before requesting group access.'
+                : 'Submit a Hermes account request before you can queue group access requests.'}
             </span>
           </div>
-          <button 
-            type="button" 
-            className="btn btn-primary" 
+          <button
+            type="button"
+            className="btn btn-primary"
             style={{ padding: '6px 14px', fontSize: '12px' }}
             onClick={() => setIsInviteModalOpen(true)}
           >
-            Create Redash Account
+            {userCreationStatus === 'REJECTED' ? 'View status' : 'Request account'}
           </button>
+        </div>
+      )}
+
+      {/* Informational banner — they've submitted but Redash isn't ready yet. Requests are queued. */}
+      {isPlatformUser && canQueueRequests && userCreationStatus !== 'COMPLETED' && (
+        <div style={{
+          backgroundColor: 'hsla(262, 60%, 48%, 0.06)',
+          color: 'var(--primary)',
+          padding: '12px 16px',
+          borderRadius: 'var(--radius-md)',
+          fontSize: '13.5px',
+          fontWeight: 600,
+          marginBottom: '20px',
+          border: '1px solid var(--border-focus)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '10px'
+        }}>
+          <Icons.Info size={18} />
+          <span style={{ flex: 1, color: 'var(--text-muted)', fontWeight: 500 }}>
+            You can request group access now — any requests admins approve will activate as soon as your Redash setup is complete.
+          </span>
         </div>
       )}
 

@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import apiClient from '../services/apiClient';
 import LoadingSpinner from '../components/common/LoadingSpinner';
+import UserApprovalsTable from '../components/user-creation/UserApprovalsTable';
+import { listPendingUserCreations } from '../services/api/userCreation';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../lib/queryKeys';
 
@@ -28,6 +30,14 @@ export const PendingApprovals: React.FC = () => {
     queryKey: queryKeys.pendingRequests(),
     queryFn: () => apiClient.get('/api/access-requests/pending').then((r) => r.data),
   });
+
+  // Set of userIds whose group requests are blocked (no approved user-creation row yet).
+  // We treat anyone with a row in PENDING as "blocked"; admin must approve user-creation first.
+  const { data: pendingUserCreations = [] } = useQuery({
+    queryKey: queryKeys.pendingUserCreations(),
+    queryFn: listPendingUserCreations,
+  });
+  const blockedUserIds = new Set(pendingUserCreations.map((r) => r.userId));
 
   // Selection & custom notes state
   const [selectedRequests, setSelectedRequests] = useState<Record<string, boolean>>({});
@@ -73,14 +83,16 @@ export const PendingApprovals: React.FC = () => {
   };
 
   const checkedRequestIds = Object.keys(selectedRequests).filter((id) => selectedRequests[id]);
-  const allChecked = requests.length > 0 && requests.every((r) => selectedRequests[r.id]);
+  const selectableRequests = requests.filter((r) => !blockedUserIds.has(r.requesterId));
+  const allChecked =
+    selectableRequests.length > 0 && selectableRequests.every((r) => selectedRequests[r.id]);
 
   const handleToggleSelectAll = () => {
     if (allChecked) {
       setSelectedRequests({});
     } else {
       const copy: Record<string, boolean> = {};
-      requests.forEach((r) => {
+      selectableRequests.forEach((r) => {
         copy[r.id] = true;
       });
       setSelectedRequests(copy);
@@ -122,7 +134,12 @@ export const PendingApprovals: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.myAccess() });
     },
     onError: (err: any) => {
-      setBulkError(err.message || 'An error occurred during submission.');
+      // Surface USER_NOT_APPROVED specially so the admin knows to approve the user first.
+      if (err?.errorCode === 'USER_NOT_APPROVED') {
+        setBulkError('One or more requests can\'t be approved yet — approve the requester\'s account in the User Approvals section first.');
+      } else {
+        setBulkError(err.message || 'An error occurred during submission.');
+      }
     },
   });
 
@@ -160,6 +177,9 @@ export const PendingApprovals: React.FC = () => {
 
   return (
     <div>
+      {/* User-creation approvals (must be cleared before group approvals for the same user). */}
+      <UserApprovalsTable />
+
       <div className="section-header">
         <h1 style={{ fontSize: '28px', fontFamily: 'Outfit, sans-serif' }}>Pending Access Approvals</h1>
         <span style={{ fontSize: '13px', color: 'var(--text-muted)', fontWeight: 700 }}>
@@ -252,15 +272,22 @@ export const PendingApprovals: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {requests.map((req) => (
-                  <tr key={req.id}>
+                {requests.map((req) => {
+                  const isBlocked = blockedUserIds.has(req.requesterId);
+                  return (
+                  <tr key={req.id} style={isBlocked ? { opacity: 0.65 } : undefined}>
                     <td style={{ textAlign: 'center' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+                      <div
+                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}
+                        title={isBlocked ? 'Approve this user in User Approvals first' : undefined}
+                      >
                         <label className="custom-checkbox-container">
-                          <input 
+                          <input
                             type="checkbox"
                             checked={!!selectedRequests[req.id]}
+                            disabled={isBlocked}
                             onChange={(e) => {
+                              if (isBlocked) return;
                               setSelectedRequests(prev => ({
                                 ...prev,
                                 [req.id]: e.target.checked
@@ -336,7 +363,25 @@ export const PendingApprovals: React.FC = () => {
                         <span style={{ fontWeight: 700, color: 'var(--text-main)', fontSize: '15px' }}>
                           {req.requesterName.replace('_', ' ')}
                         </span>
-                        
+
+                        {isBlocked && (
+                          <span
+                            style={{
+                              fontSize: '11px',
+                              fontWeight: 700,
+                              padding: '2px 8px',
+                              borderRadius: '999px',
+                              background: 'hsl(38, 92%, 94%)',
+                              color: 'hsl(32, 85%, 33%)',
+                              border: '1px solid hsl(32, 85%, 60%)',
+                              whiteSpace: 'nowrap',
+                            }}
+                            title="Approve this user in User Approvals first"
+                          >
+                            Approve user first
+                          </span>
+                        )}
+
                         <div className="info-tooltip-container">
                           <Icons.Info size={14} />
                           <div className="info-tooltip">
@@ -374,7 +419,8 @@ export const PendingApprovals: React.FC = () => {
                       </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
-import apiClient from '../../services/apiClient';
-import { UserPlus, Mail, AlertCircle, CheckCircle, Loader } from 'lucide-react';
+import UserCreationFormModal from '../user-creation/UserCreationFormModal';
+import { UserPlus, Mail, Clock, AlertTriangle } from 'lucide-react';
 
 interface PlatformInviteModalProps {
   isOpen: boolean;
@@ -11,170 +12,176 @@ interface PlatformInviteModalProps {
   onSuccess: () => void;
 }
 
+/**
+ * Shown when a user tries to act on a platform they don't have access to yet.
+ *
+ * Previously this modal fired an instant Redash invitation. With the new
+ * admin-approval gate, instead it routes the user to the right next step
+ * depending on their UserCreationRequest status:
+ *  - DRAFT          → open the submission form
+ *  - PENDING        → "waiting on admin" passive message + link to /account-status
+ *  - AWAITING_SETUP → "check your email" + link to /account-status
+ *  - REJECTED       → message + link to /account-status
+ *
+ * The actual Redash invite is now triggered server-side when an admin approves
+ * the user-creation request, not from this modal.
+ */
 export const PlatformInviteModal: React.FC<PlatformInviteModalProps> = ({
   isOpen,
   onClose,
-  platformId,
   platformName,
   onSuccess,
 }) => {
   const { user } = useAuth();
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
+  const navigate = useNavigate();
+  const [showForm, setShowForm] = useState(false);
 
   if (!isOpen) return null;
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSubmitting(true);
-    setError(null);
-
-    try {
-      await apiClient.post(`/api/user-access/platform-user/${platformId}`);
-      setSuccess(true);
-      setTimeout(() => {
-        onSuccess();
-        onClose();
-      }, 2000);
-    } catch (err: any) {
-      console.error(`Failed to invite user to platform ${platformId}:`, err);
-      setError(err.response?.data?.message || err.message || 'An error occurred while sending the invitation.');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  // Human-readable username representation
+  const uc = user?.userCreation ?? null;
   const displayName = user?.username.split('_').join(' ') || '';
 
-  return (
-    <div className="modal-overlay">
-      <div className="modal-content" style={{ maxWidth: '480px' }}>
-        <div className="modal-header">
-          <h3 className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <UserPlus size={20} style={{ color: 'var(--primary)' }} />
-            Initialize {platformName} Account
-          </h3>
-          <button className="modal-close-btn" onClick={onClose} disabled={isSubmitting}>
-            &times;
-          </button>
+  const goToStatus = () => {
+    onClose();
+    navigate('/account-status');
+  };
+
+  let icon: React.ReactNode = <UserPlus size={20} style={{ color: 'var(--primary)' }} />;
+  let title = `Set up your ${platformName} account`;
+  let body: React.ReactNode = null;
+  let primary: { label: string; action: () => void } | null = null;
+
+  if (!uc || uc.status === 'DRAFT') {
+    body = (
+      <>
+        <p style={{ fontSize: '14px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+          You don't have a {platformName} account yet. Submit a quick request and an admin will
+          approve creating one for you. You can keep using Hermes while you wait — any group
+          access you request now will activate as soon as your account is set up.
+        </p>
+        <div
+          style={{
+            backgroundColor: 'var(--bg-app)',
+            padding: '14px',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--border)',
+          }}
+        >
+          <div style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>
+            Your details
+          </div>
+          <div style={{ fontSize: '14px', fontWeight: 700 }}>
+            {displayName}{' '}
+            <span style={{ color: 'var(--text-muted)', fontWeight: 500 }}>· {user?.email}</span>
+          </div>
         </div>
+      </>
+    );
+    primary = { label: 'Request account', action: () => setShowForm(true) };
+  } else if (uc.status === 'PENDING') {
+    icon = <Clock size={20} style={{ color: 'hsl(32, 85%, 33%)' }} />;
+    title = 'Account request pending';
+    body = (
+      <p style={{ fontSize: '14px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+        An admin is reviewing your account request. You'll be able to act on {platformName}{' '}
+        groups once it's approved and you've completed setup. You can queue group access
+        requests in the meantime.
+      </p>
+    );
+    primary = { label: 'View status', action: goToStatus };
+  } else if (uc.status === 'AWAITING_SETUP') {
+    icon = <Mail size={20} style={{ color: 'var(--primary)' }} />;
+    title = `Finish setting up ${platformName}`;
+    body = (
+      <p style={{ fontSize: '14px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+        Your account was approved. Click the link below to set your Redash password — once
+        you finish, any approved group memberships will activate automatically.
+      </p>
+    );
+    // Prefer opening Redash directly from here when we have the link.
+    if (uc.inviteLink) {
+      primary = {
+        label: 'Continue to Redash setup',
+        action: () => {
+          window.open(uc.inviteLink!, '_blank', 'noopener,noreferrer');
+        },
+      };
+    } else {
+      primary = { label: 'Open account setup', action: goToStatus };
+    }
+  } else if (uc.status === 'APPROVED') {
+    icon = <Mail size={20} style={{ color: 'var(--primary)' }} />;
+    title = `Finish setting up ${platformName}`;
+    body = (
+      <p style={{ fontSize: '14px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+        Your account was approved but Hermes hit an error generating your setup link.
+        Open account setup to retry.
+      </p>
+    );
+    primary = { label: 'Open account setup', action: goToStatus };
+  } else if (uc.status === 'REJECTED') {
+    icon = <AlertTriangle size={20} style={{ color: 'var(--status-rejected-text)' }} />;
+    title = 'Account request rejected';
+    body = (
+      <p style={{ fontSize: '14px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+        Your account request was declined. Contact an admin if you'd like to appeal.
+      </p>
+    );
+    primary = { label: 'View details', action: goToStatus };
+  } else {
+    // COMPLETED — shouldn't normally land here because callers check status first.
+    body = (
+      <p style={{ fontSize: '14px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+        Your {platformName} account is already set up. Try refreshing the page.
+      </p>
+    );
+  }
 
-        <form onSubmit={handleSubmit}>
-          <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            {success ? (
-              <div style={{
-                textAlign: 'center',
-                padding: '24px 8px',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                gap: '12px'
-              }}>
-                <CheckCircle size={48} style={{ color: 'var(--status-approved-text)' }} />
-                <h4 style={{ color: 'var(--status-approved-text)', fontSize: '18px' }}>Invitation Sent!</h4>
-                <p style={{ fontSize: '14px', color: 'var(--text-muted)' }}>
-                  A Redash invitation was sent to your email. You can now request access to Redash groups!
-                </p>
-              </div>
-            ) : (
-              <>
-                <p style={{ fontSize: '14px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
-                  You don't have a registered account on the <strong>{platformName}</strong> platform yet.
-                  To request permissions for any data groups, you must first create your platform user account.
-                </p>
-
-                <div style={{
-                  backgroundColor: 'var(--bg-app)',
-                  padding: '16px',
-                  borderRadius: 'var(--radius-md)',
-                  border: '1px solid var(--border)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '8px'
-                }}>
-                  <div style={{ fontSize: '11px', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                    Account Details (from Hermes profile)
-                  </div>
-                  <div style={{ fontSize: '14px', fontWeight: 700 }}>
-                    Name: <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>{displayName}</span>
-                  </div>
-                  <div style={{ fontSize: '14px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    Email: <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>{user?.email}</span>
-                  </div>
-                </div>
-
-                <div style={{ 
-                  display: 'flex', 
-                  alignItems: 'flex-start', 
-                  gap: '8px', 
-                  backgroundColor: 'hsla(262, 60%, 48%, 0.05)', 
-                  border: '1px solid var(--border-focus)',
-                  borderRadius: 'var(--radius-md)',
-                  padding: '12px'
-                }}>
-                  <Mail size={16} style={{ color: 'var(--primary)', marginTop: '2px', flexShrink: 0 }} />
-                  <span style={{ fontSize: '12.5px', color: 'var(--text-muted)', lineHeight: 1.4 }}>
-                    By clicking <strong>Send Invitation</strong>, an automated setup email will be sent to your inbox.
-                    Your account will be instantly recognized by Hermes.
-                  </span>
-                </div>
-
-                {error && (
-                  <div style={{
-                    backgroundColor: 'var(--status-rejected-bg)',
-                    color: 'var(--status-rejected-text)',
-                    padding: '12px',
-                    borderRadius: 'var(--radius-sm)',
-                    fontSize: '13px',
-                    fontWeight: 600,
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    border: '1px solid var(--status-rejected-text)'
-                  }}>
-                    <AlertCircle size={16} />
-                    <span>{error}</span>
-                  </div>
-                )}
-              </>
-            )}
+  return (
+    <>
+      <div className="modal-overlay">
+        <div className="modal-content" style={{ maxWidth: '480px' }}>
+          <div className="modal-header">
+            <h3 className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {icon}
+              {title}
+            </h3>
+            <button className="modal-close-btn" onClick={onClose}>
+              &times;
+            </button>
           </div>
 
-          {!success && (
-            <div className="modal-footer">
+          <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {body}
+          </div>
+
+          <div className="modal-footer">
+            <button type="button" className="btn btn-outline" onClick={onClose}>
+              Close
+            </button>
+            {primary && (
               <button
                 type="button"
-                className="btn btn-outline"
-                onClick={onClose}
-                disabled={isSubmitting}
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
                 className="btn btn-primary"
-                disabled={isSubmitting}
+                onClick={primary.action}
                 style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
               >
-                {isSubmitting ? (
-                  <>
-                    <Loader size={14} className="animate-spin" style={{ animation: 'spin 1s linear infinite' }} />
-                    Sending Invite...
-                  </>
-                ) : (
-                  <>
-                    <UserPlus size={14} />
-                    Send Invitation
-                  </>
-                )}
+                {primary.label}
               </button>
-            </div>
-          )}
-        </form>
+            )}
+          </div>
+        </div>
       </div>
-    </div>
+
+      <UserCreationFormModal
+        isOpen={showForm}
+        onClose={() => setShowForm(false)}
+        onSubmitted={() => {
+          // After submit, let the caller know so it can refresh & close.
+          onSuccess();
+        }}
+      />
+    </>
   );
 };
 

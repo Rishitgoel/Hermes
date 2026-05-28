@@ -32,6 +32,7 @@ export const TopBar: React.FC = () => {
     if (path === '/my-requests') return 'My Requests';
     if (path === '/pending-approvals') return 'Pending Approvals';
     if (path === '/audit-log') return 'Audit Log';
+    if (path === '/account-status') return 'Account Status';
     return 'Hermes';
   };
 
@@ -121,9 +122,26 @@ export const TopBar: React.FC = () => {
           )}
         </div>
 
-        {/* User Profile Info */}
+        {/* User Profile Info — click the name to jump to your account status page */}
         {user && (
-          <div className="user-profile">
+          <button
+            type="button"
+            className="user-profile"
+            onClick={() => navigate('/account-status')}
+            title="Open account status"
+            aria-label="Open account status"
+            style={{
+              background: 'transparent',
+              border: 'none',
+              padding: 0,
+              font: 'inherit',
+              color: 'inherit',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 'inherit',
+            }}
+          >
             <div className="user-avatar">
               {getInitials(user.username)}
             </div>
@@ -133,7 +151,7 @@ export const TopBar: React.FC = () => {
                 <span className="user-role-badge">{getPrimaryRoleLabel(user.roles)}</span>
               )}
             </div>
-          </div>
+          </button>
         )}
       </div>
     </header>

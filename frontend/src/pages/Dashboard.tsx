@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../contexts/AuthContext';
 import apiClient from '../services/apiClient';
 import LoadingSpinner from '../components/common/LoadingSpinner';
+import UserCreationBanner from '../components/user-creation/UserCreationBanner';
 import { queryKeys } from '../lib/queryKeys';
 import * as Icons from 'lucide-react';
 
@@ -95,6 +96,9 @@ export const Dashboard: React.FC = () => {
 
   return (
     <div>
+      {/* Account-creation banner (renders only when status !== COMPLETED) */}
+      <UserCreationBanner />
+
       {/* Welcome Banner */}
       <div style={{
         background: 'linear-gradient(135deg, var(--primary), var(--secondary))',

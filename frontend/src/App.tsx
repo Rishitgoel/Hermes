@@ -13,6 +13,7 @@ import GroupDetail from './pages/GroupDetail';
 import MyRequests from './pages/MyRequests';
 import PendingApprovals from './pages/PendingApprovals';
 import AuditLog from './pages/AuditLog';
+import AccountStatus from './pages/AccountStatus';
 
 import './styles/global.css';
 
@@ -30,6 +31,7 @@ export const App: React.FC = () => {
                 <Route path="groups/:slug" element={<GroupDetail />} />
 
                 <Route path="my-requests" element={<MyRequests />} />
+                <Route path="account-status" element={<AccountStatus />} />
 
                 <Route
                   path="pending-approvals"

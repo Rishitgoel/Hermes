@@ -55,16 +55,16 @@ export const GroupDetail: React.FC = () => {
     enabled: !!slug,
   });
 
-  const platformStatusQuery = useQuery<{ exists: boolean }>({
-    queryKey: queryKeys.platformStatus('redash'),
-    queryFn: () => apiClient.get('/api/user-access/platform-status/redash').then((r) => r.data),
-  });
-
   const group = groupQuery.data;
   const isLoading = groupQuery.isLoading;
-  // Default to `true` while loading so the "request access" CTA stays hidden
-  // behind the invite modal only when we *know* the user is not on platform.
-  const isPlatformUser = platformStatusQuery.data?.exists ?? true;
+
+  // Gate by the user's user-creation status — see Groups.tsx for the same logic.
+  // DRAFT or REJECTED users must act on their account first; everyone else can
+  // queue an access request, which will auto-provision once Redash setup completes.
+  const userCreationStatus = user?.userCreation?.status ?? null;
+  const needsAccountAction =
+    userCreationStatus === 'DRAFT' || userCreationStatus === 'REJECTED';
+  const isPlatformUser = !needsAccountAction;
 
   // If the group fetch errors (e.g. 404), bounce back to the listing.
   React.useEffect(() => {
@@ -333,14 +333,16 @@ export const GroupDetail: React.FC = () => {
         />
       )}
 
-      {/* Platform Invite Modal */}
+      {/* Platform Invite Modal — routes the user into the account-creation flow when needed. */}
       <PlatformInviteModal
         isOpen={isInviteModalOpen}
         onClose={() => setIsInviteModalOpen(false)}
         platformId="redash"
         platformName="Redash"
         onSuccess={() => {
-          queryClient.invalidateQueries({ queryKey: queryKeys.platformStatus('redash') });
+          // After submission, the modal closes itself; just refetch group data
+          // in case the user's status changed.
+          queryClient.invalidateQueries({ queryKey: queryKeys.groupDetail(slug ?? '') });
         }}
       />
     </div>
