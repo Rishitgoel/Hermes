@@ -272,27 +272,81 @@ export class AccessWorkflowService {
       });
       const externalUserId = result.externalUserId;
 
+      // Recompute expiry at provision time using the request's duration. Using the
+      // value stored on AccessRequest (computed at request-create time) means a
+      // 1-day request approved 3 days later would expire immediately.
       const grantedAt = new Date();
-      const userAccess = await prisma.userAccess.create({
-        data: {
-          userId: request.requesterId,
-          userName: request.requesterName,
-          userEmail: request.requesterEmail,
-          groupId: request.groupId,
-          externalUserId: externalUserId,
-          isActive: true,
-          grantedAt,
-          expiresAt: request.expiresAt,
-          grantedBy: performer.name,
-          accessRequestId: request.id,
-        },
-      });
+      const expiresAt = this.calculateExpiry(request.duration);
+
+      let userAccess;
+      try {
+        userAccess = await prisma.userAccess.create({
+          data: {
+            userId: request.requesterId,
+            userName: request.requesterName,
+            userEmail: request.requesterEmail,
+            groupId: request.groupId,
+            externalUserId: externalUserId,
+            isActive: true,
+            grantedAt,
+            expiresAt,
+            grantedBy: performer.name,
+            accessRequestId: request.id,
+          },
+        });
+      } catch (createErr: any) {
+        // Partial unique index (user_id, group_id) WHERE is_active = true fired.
+        // Someone else just granted the same access — treat as already provisioned,
+        // not a hard failure, and point back to the existing grant.
+        if (createErr?.code === 'P2002') {
+          const existing = await prisma.userAccess.findFirst({
+            where: { userId: request.requesterId, groupId: request.groupId, isActive: true },
+          });
+          if (existing) {
+            logger.info(
+              { requestId: request.id, userAccessId: existing.id },
+              'Active grant already exists for this user+group — short-circuiting to PROVISIONED',
+            );
+            const concurrentRequest = await prisma.accessRequest.update({
+              where: { id: request.id },
+              data: {
+                status: RequestStatus.PROVISIONED,
+                provisionedAt: new Date(),
+                provisionError: 'Already provisioned by another admin',
+              },
+            });
+            await prisma.auditEntry.create({
+              data: {
+                action: 'ACCESS_GRANTED',
+                performerId: performer.id,
+                performerName: performer.name,
+                targetUserId: request.requesterId,
+                targetUserName: request.requesterName,
+                groupId: request.groupId,
+                accessRequestId: request.id,
+                details: {
+                  userAccessId: existing.id,
+                  platform,
+                  externalUserId,
+                  externalGroupId,
+                  expiresAt: existing.expiresAt,
+                  note: 'Concurrent approval — reused existing UserAccess row',
+                },
+              },
+            });
+            return concurrentRequest;
+          }
+        }
+        throw createErr;
+      }
 
       const finalRequest = await prisma.accessRequest.update({
         where: { id: request.id },
         data: {
           status: RequestStatus.PROVISIONED,
           provisionedAt: new Date(),
+          // Sync the request's expiry to the actual grant so the UI shows the truth.
+          expiresAt,
         },
       });
 
@@ -310,7 +364,7 @@ export class AccessWorkflowService {
             platform,
             externalUserId,
             externalGroupId,
-            expiresAt: request.expiresAt,
+            expiresAt,
           },
         },
       });

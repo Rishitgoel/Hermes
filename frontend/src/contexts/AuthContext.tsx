@@ -49,8 +49,10 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Setup simulation flags
-const useSimulation = import.meta.env.VITE_KEYCLOAK_SIMULATION !== 'false';
+// Setup simulation flags — opt-in only. A missing/typo'd env var must NOT silently
+// enable simulation (which would read the localStorage mock token as the bearer).
+const useSimulation =
+  import.meta.env.VITE_KEYCLOAK_SIMULATION === 'true' && import.meta.env.MODE !== 'production';
 
 // Keycloak client singleton (for live mode)
 let keycloakInstance: Keycloak | null = null;

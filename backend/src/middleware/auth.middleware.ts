@@ -79,14 +79,25 @@ const checkJwtSimulated = (req: Request, res: Response, next: NextFunction) => {
       email: 'yogesh.verma@bachatt.app',
       roles: ['hermes_group_admin', 'hermes_group_admin_growth', 'hermes_user'],
     };
-  } else {
-    // Default or user
+  } else if (token === 'user') {
     req.user = {
       id: 'regular-user-uuid-3333',
       username: 'Rishit_Goel',
       email: 'rishit.goel@bachatt.app',
       roles: ['hermes_user'],
     };
+  } else {
+    // Unknown sim token — reject. Previously this fell back to the regular user
+    // identity, which silently authenticated any garbage bearer string.
+    res.status(401).json({
+      success: false,
+      error: 'Invalid simulation token. Use Bearer super_admin, Bearer group_admin, or Bearer user.',
+      metadata: {
+        timestamp: new Date().toISOString(),
+        errorCode: 'AUTHENTICATION_ERROR',
+      },
+    });
+    return;
   }
 
   logger.debug(

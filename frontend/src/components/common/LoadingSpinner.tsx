@@ -28,16 +28,6 @@ export const LoadingSpinner: React.FC<LoadingSpinnerProps> = ({
       }}>
         {/* Style definitions */}
         <style>{`
-          @keyframes float {
-            0% { transform: translateY(0px); }
-            50% { transform: translateY(-10px); }
-            100% { transform: translateY(0px); }
-          }
-          @keyframes pulse-glow {
-            0% { box-shadow: 0 0 0 0 hsla(262, 60%, 48%, 0.15); }
-            70% { box-shadow: 0 0 0 15px hsla(262, 60%, 48%, 0); }
-            100% { box-shadow: 0 0 0 0 hsla(262, 60%, 48%, 0); }
-          }
           @keyframes progress-run {
             0% { left: -30%; width: 30%; }
             50% { left: 20%; width: 60%; }
@@ -49,7 +39,7 @@ export const LoadingSpinner: React.FC<LoadingSpinnerProps> = ({
           }
         `}</style>
 
-        {/* Logo and Brand */}
+        {/* Brand */}
         <div style={{
           display: 'flex',
           flexDirection: 'column',
@@ -57,31 +47,6 @@ export const LoadingSpinner: React.FC<LoadingSpinnerProps> = ({
           gap: '24px',
           animation: 'fade-in-up 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards'
         }}>
-          {/* Logo container with pulsing glow and floating effect */}
-          <div style={{
-            width: '96px',
-            height: '96px',
-            borderRadius: '24px',
-            backgroundColor: '#ffffff',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            boxShadow: 'var(--shadow-lg)',
-            border: '1px solid var(--border)',
-            animation: 'float 3s ease-in-out infinite, pulse-glow 2s infinite',
-            position: 'relative'
-          }}>
-            <img 
-              src="/assets/logo.png" 
-              alt="Bachatt Logo" 
-              style={{
-                height: '52px',
-                width: 'auto',
-                objectFit: 'contain'
-              }} 
-            />
-          </div>
-
           {/* Text branding */}
           <div style={{ textAlign: 'center' }}>
             <h1 style={{

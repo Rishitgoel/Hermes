@@ -2,7 +2,60 @@ import logger from '../utils/logger';
 import axios from 'axios';
 import config from './config';
 
+const SUPER_ADMIN_ROLE = 'hermes_super_admin';
+
+// Sim-mode identity for the super-admin user. Mirrors checkJwtSimulated in
+// auth.middleware.ts so notifications fan out to the right local user.
+const SIM_SUPER_ADMIN_USER_ID = 'super-admin-uuid-1111';
+
 export class KeycloakSetupService {
+  private async getAdminAccessToken(): Promise<string | null> {
+    try {
+      const tokenUrl = `${config.keycloak.adminUrl}/realms/${config.keycloak.realm}/protocol/openid-connect/token`;
+      const res = await axios.post(
+        tokenUrl,
+        new URLSearchParams({
+          grant_type: 'password',
+          client_id: config.keycloak.adminClientId,
+          username: config.keycloak.adminUsername,
+          password: config.keycloak.adminPassword || '',
+        }).toString(),
+        { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } },
+      );
+      return res.data.access_token;
+    } catch (err: any) {
+      logger.warn(`Failed to obtain Keycloak admin token: ${err.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Returns the Keycloak user IDs of every user holding the realm role
+   * `hermes_super_admin`. In simulation mode (or when Keycloak isn't reachable)
+   * returns the sim super-admin UUID so notifications still fan out locally.
+   */
+  async getSuperAdminUserIds(): Promise<string[]> {
+    if (config.isSimulation || !config.keycloak.adminPassword) {
+      return [SIM_SUPER_ADMIN_USER_ID];
+    }
+
+    const accessToken = await this.getAdminAccessToken();
+    if (!accessToken) return [];
+
+    try {
+      const url = `${config.keycloak.adminUrl}/admin/realms/${config.keycloak.realm}/roles/${SUPER_ADMIN_ROLE}/users`;
+      const res = await axios.get(url, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        params: { max: 200 },
+      });
+      const users: any[] = Array.isArray(res.data) ? res.data : [];
+      return users.map(u => u.id).filter((id): id is string => typeof id === 'string');
+    } catch (err: any) {
+      logger.warn(`Failed to fetch super-admin users from Keycloak: ${err.message}`);
+      return [];
+    }
+  }
+
   async ensureClientAndRolesExist(): Promise<void> {
     if (config.isSimulation || !config.keycloak.adminPassword) {
       logger.info('🔑 Keycloak setup: Running in SIMULATION mode. Auto-configuring hermes-prod client and roles locally in memory.');

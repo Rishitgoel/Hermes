@@ -225,6 +225,7 @@ export default abstract class BaseController {
     const result = schema.safeParse(data);
     if (!result.success) {
       this.sendErrorResponse(errorMessage, 400, {
+        errorCode: 'VALIDATION_ERROR',
         context: result.error.errors.map(err => ({
           path: err.path.join('.'),
           message: err.message,

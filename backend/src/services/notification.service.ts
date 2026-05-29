@@ -2,6 +2,21 @@ import prisma from '../config/prisma';
 import slackService from './slack.service';
 import logger from '../utils/logger';
 import config from '../config/config';
+import keycloakSetupService from '../config/keycloak-setup';
+
+/**
+ * Escape user-supplied text before interpolating into a Slack message.
+ * Slack's mrkdwn would otherwise let a `<!here>` or `<@U123>` in a justification
+ * ping channels or impersonate user links. Replace the four mrkdwn metacharacters
+ * with HTML entities Slack renders as plain text.
+ */
+function escapeSlackText(text: string | null | undefined): string {
+  if (!text) return '';
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
 
 export class NotificationService {
   // Create a general in-app notification
@@ -36,7 +51,7 @@ export class NotificationService {
     duration: string
   ): Promise<void> {
     // 1. Send Slack Ping
-    const slackMsg = `📋 *Hermes Access Request*\n--------------------------\n*${requesterName}* requested access to the *${groupName}* group.\nReason: "${justification}"\nDuration: ${duration.replace('_', ' ').toLowerCase()}\n\n👉 Review in Hermes: ${config.frontend.url}/pending-approvals`;
+    const slackMsg = `📋 *Hermes Access Request*\n--------------------------\n*${escapeSlackText(requesterName)}* requested access to the *${escapeSlackText(groupName)}* group.\nReason: "${escapeSlackText(justification)}"\nDuration: ${duration.replace('_', ' ').toLowerCase()}\n\n👉 Review in Hermes: ${config.frontend.url}/pending-approvals`;
     await slackService.sendPing(slackMsg);
 
     // 2. Query Group Admins from DB and send in-app notification
@@ -75,7 +90,7 @@ export class NotificationService {
     await this.createNotification(requesterId, title, message, approved ? '/' : '/my-requests');
 
     // Notify requester via Slack if possible (simulation simply pings admin webhook channel)
-    const slackMsg = `📢 *Hermes Access Update*\n--------------------------\nAccess request to *${groupName}* was *${statusText}* by ${reviewerName}.${note ? `\nNote: "${note}"` : ''}`;
+    const slackMsg = `📢 *Hermes Access Update*\n--------------------------\nAccess request to *${escapeSlackText(groupName)}* was *${statusText}* by ${escapeSlackText(reviewerName)}.${note ? `\nNote: "${escapeSlackText(note)}"` : ''}`;
     await slackService.sendPing(slackMsg);
   }
 
@@ -89,7 +104,7 @@ export class NotificationService {
 
     await this.createNotification(userId, title, message, '/groups');
 
-    const slackMsg = `⏳ *Hermes Access Expired*\n--------------------------\nAccess to *${groupName}* group has expired for User ID: ${userId}`;
+    const slackMsg = `⏳ *Hermes Access Expired*\n--------------------------\nAccess to *${escapeSlackText(groupName)}* group has expired for User ID: ${escapeSlackText(userId)}`;
     await slackService.sendPing(slackMsg);
   }
 
@@ -105,7 +120,7 @@ export class NotificationService {
 
     await this.createNotification(userId, title, message, '/groups');
 
-    const slackMsg = `🚫 *Hermes Access Revoked*\n--------------------------\nAccess to *${groupName}* group was revoked by ${revokerName} for User ID: ${userId}.${reason ? `\nReason: "${reason}"` : ''}`;
+    const slackMsg = `🚫 *Hermes Access Revoked*\n--------------------------\nAccess to *${escapeSlackText(groupName)}* group was revoked by ${escapeSlackText(revokerName)} for User ID: ${escapeSlackText(userId)}.${reason ? `\nReason: "${escapeSlackText(reason)}"` : ''}`;
     await slackService.sendPing(slackMsg);
   }
 
@@ -135,25 +150,38 @@ export class NotificationService {
     userEmail: string,
     justification: string | null,
   ): Promise<void> {
-    const slackMsg = `🆕 *Hermes — New User Creation Request*\n--------------------------\n*${userName}* (${userEmail}) wants a Hermes/Redash account.\n${justification ? `Reason: "${justification}"\n` : ''}\n👉 Review: ${config.frontend.url}/pending-approvals`;
+    const slackMsg = `🆕 *Hermes — New User Creation Request*\n--------------------------\n*${escapeSlackText(userName)}* (${escapeSlackText(userEmail)}) wants a Hermes/Redash account.\n${justification ? `Reason: "${escapeSlackText(justification)}"\n` : ''}\n👉 Review: ${config.frontend.url}/pending-approvals`;
     await slackService.sendPing(slackMsg);
 
     try {
-      const superAdmins = await prisma.groupAdmin.findMany({
-        // Bit of a hack — we don't have a 'super admin' table. Notify every distinct
-        // GroupAdmin user so somebody with admin privileges is in the loop. Super-admins
-        // will also see this row in the in-app bell because they always see all admin work.
-        distinct: ['userId'],
-      });
+      // Super-admins are the only ones who can approve user-creation. Look them
+      // up directly via Keycloak (or the sim super-admin UUID in dev). Then also
+      // fan out to every distinct GroupAdmin so they see new-user signups
+      // without needing approval rights.
+      const [superAdminIds, groupAdmins] = await Promise.all([
+        keycloakSetupService.getSuperAdminUserIds(),
+        prisma.groupAdmin.findMany({ distinct: ['userId'] }),
+      ]);
+
       const seen = new Set<string>();
-      for (const admin of superAdmins) {
-        if (seen.has(admin.userId)) continue;
-        seen.add(admin.userId);
+      const fanOut = async (userId: string) => {
+        if (seen.has(userId)) return;
+        seen.add(userId);
         await this.createNotification(
-          admin.userId,
+          userId,
           'Pending user approval',
           `${userName} requested a Hermes account.`,
           `/pending-approvals`,
+        );
+      };
+
+      for (const userId of superAdminIds) await fanOut(userId);
+      for (const admin of groupAdmins) await fanOut(admin.userId);
+
+      if (seen.size === 0) {
+        logger.warn(
+          { requestId },
+          'notifyUserCreationSubmitted: no super-admins or group-admins to notify',
         );
       }
     } catch (err: any) {

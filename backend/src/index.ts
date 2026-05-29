@@ -45,7 +45,7 @@ app.use(
   })
 );
 
-app.use(express.json());
+app.use(express.json({ limit: '50kb' }));
 app.use(requestIdMiddleware);
 app.use(performanceMiddleware);
 app.use(generalRateLimiter);
@@ -54,13 +54,14 @@ app.use(generalRateLimiter);
 app.get('/health', async (req, res) => {
   const checks: Record<string, any> = { timestamp: new Date().toISOString() };
 
-  // Database check
+  // Database check. Don't surface raw error text in prod — Prisma error messages
+  // can leak DB hostnames, usernames, and schema hints.
   try {
     await prisma.$queryRaw`SELECT 1`;
     checks.database = 'healthy';
   } catch (err: any) {
     checks.database = 'unhealthy';
-    checks.databaseError = err.message;
+    if (config.isDev) checks.databaseError = err.message;
   }
 
   // Platform checks (via registry)
@@ -68,7 +69,7 @@ app.get('/health', async (req, res) => {
     checks.platforms = await provisioningRegistry.healthCheckAll();
   } catch (err: any) {
     checks.platforms = 'error';
-    checks.platformsError = err.message;
+    if (config.isDev) checks.platformsError = err.message;
   }
 
   // Last successful Redash sync (null if never run)

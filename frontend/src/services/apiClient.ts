@@ -39,8 +39,10 @@ apiClient.interceptors.request.use(
 
     let token = kc?.token;
 
-    // Fallback to localStorage mock token in simulation mode ONLY
-    const useSimulation = import.meta.env.VITE_KEYCLOAK_SIMULATION !== 'false';
+    // Fallback to localStorage mock token in simulation mode ONLY. Opt-in: the
+    // env var must be explicitly 'true' and we must not be in a production build.
+    const useSimulation =
+      import.meta.env.VITE_KEYCLOAK_SIMULATION === 'true' && import.meta.env.MODE !== 'production';
     if (!token && useSimulation) {
       token = localStorage.getItem('hermes_mock_token');
     }
@@ -77,6 +79,13 @@ apiClient.interceptors.response.use(
     return response;
   },
   async (error) => {
+    // If the success interceptor already produced an ApiClientError (e.g. 200 OK
+    // with `success: false`), pass it through untouched. Otherwise we'd wrap it
+    // again and lose the original statusCode/errorCode.
+    if (error instanceof ApiClientError) {
+      return Promise.reject(error);
+    }
+
     if (error.response) {
       const status = error.response.status;
       const resData = error.response.data;
@@ -97,7 +106,15 @@ apiClient.interceptors.response.use(
               return apiClient(originalRequest);
             }
           } catch {
-            // fall through to the normal error path
+            // Refresh token itself is dead (or refresh endpoint unreachable).
+            // Kick back to the SSO login redirect so the user isn't stuck staring
+            // at a generic "Authentication required" toast.
+            if (typeof kc.login === 'function') {
+              kc.login();
+              // Tab is being redirected; resolve with a never-settling promise so
+              // downstream `.then`s don't fire on a broken session.
+              return new Promise(() => {});
+            }
           }
         }
       }

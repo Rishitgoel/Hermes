@@ -4,6 +4,7 @@ import apiClient from '../services/apiClient';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import UserApprovalsTable from '../components/user-creation/UserApprovalsTable';
 import { listPendingUserCreations } from '../services/api/userCreation';
+import { useAuth } from '../contexts/AuthContext';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../lib/queryKeys';
 
@@ -25,6 +26,8 @@ interface PendingRequest {
 
 export const PendingApprovals: React.FC = () => {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const isSuperAdmin = !!user?.roles?.includes('hermes_super_admin');
 
   const { data: requests = [], isLoading } = useQuery<PendingRequest[]>({
     queryKey: queryKeys.pendingRequests(),
@@ -33,9 +36,11 @@ export const PendingApprovals: React.FC = () => {
 
   // Set of userIds whose group requests are blocked (no approved user-creation row yet).
   // We treat anyone with a row in PENDING as "blocked"; admin must approve user-creation first.
+  // Only super-admins can hit /api/user-creation-requests/pending — skip the query for group admins.
   const { data: pendingUserCreations = [] } = useQuery({
     queryKey: queryKeys.pendingUserCreations(),
     queryFn: listPendingUserCreations,
+    enabled: isSuperAdmin,
   });
   const blockedUserIds = new Set(pendingUserCreations.map((r) => r.userId));
 
@@ -177,8 +182,9 @@ export const PendingApprovals: React.FC = () => {
 
   return (
     <div>
-      {/* User-creation approvals (must be cleared before group approvals for the same user). */}
-      <UserApprovalsTable />
+      {/* User-creation approvals — super-admins only. Group admins can't approve org-wide
+          identity creation. */}
+      {isSuperAdmin && <UserApprovalsTable />}
 
       <div className="section-header">
         <h1 style={{ fontSize: '28px', fontFamily: 'Outfit, sans-serif' }}>Pending Access Approvals</h1>

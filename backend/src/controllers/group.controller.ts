@@ -122,6 +122,11 @@ export class GroupController extends BaseController {
         accessStatus = 'PENDING';
       }
 
+      // Only insiders (super-admin, group admin, or current member) get the full
+      // member list. Random authenticated users get the public group card without
+      // others' names/emails.
+      const isInsider = isSuperAdmin || isAdminOfGroup || !!activeAccess;
+
       const responseData = {
         id: group.id,
         name: group.name,
@@ -138,15 +143,18 @@ export class GroupController extends BaseController {
           userEmail: adm.userEmail,
           assignedAt: adm.assignedAt,
         })),
-        members: group.userAccesses.map(m => ({
-          id: m.id,
-          userId: m.userId,
-          userName: m.userName,
-          userEmail: m.userEmail,
-          grantedAt: m.grantedAt,
-          expiresAt: m.expiresAt,
-          grantedBy: m.grantedBy,
-        })),
+        memberCount: group.userAccesses.length,
+        members: isInsider
+          ? group.userAccesses.map(m => ({
+              id: m.id,
+              userId: m.userId,
+              userName: m.userName,
+              userEmail: m.userEmail,
+              grantedAt: m.grantedAt,
+              expiresAt: m.expiresAt,
+              grantedBy: m.grantedBy,
+            }))
+          : [],
       };
 
       this.sendResponse(responseData, 'Group details retrieved successfully');

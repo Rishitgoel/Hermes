@@ -69,20 +69,36 @@ async function main() {
   console.log('');
 
   // ── 1.5. Clean up non-admin users in Redash database ──────────────────
-  console.log('Step 1.5/3 — Deleting non-admin users from Redash PostgreSQL database…');
-  try {
-    const checkDocker = execSync('docker ps -q -f name=hermes_redash_postgres', { encoding: 'utf8' }).trim();
-    if (checkDocker) {
-      // Clear events first to prevent FK violation
-      execSync('docker exec -i hermes_redash_postgres psql -U redash -d redash -c "DELETE FROM events WHERE user_id > 1;"', { stdio: 'ignore' });
-      // Clear users
-      execSync('docker exec -i hermes_redash_postgres psql -U redash -d redash -c "DELETE FROM users WHERE id > 1;"', { stdio: 'ignore' });
-      console.log('  ✓ Deleted non-admin users from Redash PostgreSQL.');
-    } else {
-      console.log('  ✗ Redash Postgres container (hermes_redash_postgres) is not running; skipping user cleanup.');
+  // Only runs when REDASH_BASE_URL points at the local docker stack. For a
+  // remote Redash (e.g. redash.bachatt.app) we have no business issuing
+  // `docker exec` against a container that does not exist on this machine and
+  // would not own that data anyway — exec-ing the local container while the
+  // API key points to prod would leave the two ends desynchronized.
+  const isLocalRedash = /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:|\/|$)/.test(
+    config.redash.baseUrl,
+  );
+
+  if (isLocalRedash) {
+    console.log('Step 1.5/3 — Deleting non-admin users from local Redash PostgreSQL container…');
+    try {
+      const checkDocker = execSync('docker ps -q -f name=hermes_redash_postgres', { encoding: 'utf8' }).trim();
+      if (checkDocker) {
+        // Clear events first to prevent FK violation
+        execSync('docker exec -i hermes_redash_postgres psql -U redash -d redash -c "DELETE FROM events WHERE user_id > 1;"', { stdio: 'ignore' });
+        // Clear users
+        execSync('docker exec -i hermes_redash_postgres psql -U redash -d redash -c "DELETE FROM users WHERE id > 1;"', { stdio: 'ignore' });
+        console.log('  ✓ Deleted non-admin users from Redash PostgreSQL.');
+      } else {
+        console.log('  ✗ Redash Postgres container (hermes_redash_postgres) is not running; skipping user cleanup.');
+      }
+    } catch (err: any) {
+      console.log(`  ✗ Failed to delete users from Redash Postgres: ${err.message}`);
     }
-  } catch (err: any) {
-    console.log(`  ✗ Failed to delete users from Redash Postgres: ${err.message}`);
+  } else {
+    console.log('Step 1.5/3 — Remote Redash detected; skipping local container user wipe.');
+    console.log('  ⚠ Hermes-side state will be wiped, but Redash users on');
+    console.log(`     ${config.redash.baseUrl} are untouched.`);
+    console.log('     Disable / delete unwanted users via the Redash admin UI manually.');
   }
   console.log('');
 

@@ -3,7 +3,11 @@ import { AccessDuration } from '@prisma/client';
 
 export const createRequestSchema = z.object({
   groupId: z.string().uuid('Invalid Group ID format'),
-  justification: z.string().min(10, 'Justification must be at least 10 characters long'),
+  justification: z
+    .string()
+    .trim()
+    .min(10, 'Justification must be at least 10 characters long')
+    .max(1000, 'Justification must not exceed 1000 characters'),
   duration: z.nativeEnum(AccessDuration, {
     errorMap: () => ({ message: 'Invalid access duration value' }),
   }),

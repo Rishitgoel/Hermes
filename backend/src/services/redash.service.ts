@@ -208,6 +208,32 @@ export class RedashService {
     }
   }
 
+  /**
+   * Generate a fresh invite link for an existing Redash user. Use this in the
+   * resend-invite path: relying on `findOrInviteUser` to also regenerate links
+   * is fragile because that path swallows invite-endpoint failures.
+   *
+   * Returns the normalized invite URL, or null in simulation mode / on failure.
+   */
+  async regenerateInviteLink(redashUserId: number): Promise<string | null> {
+    if (this.isSimulation) {
+      const baseUrl = config.redash.baseUrl?.replace(/\/$/, '') || 'https://redash.bachatt.app';
+      const fakeToken = Math.random().toString(36).slice(2, 18);
+      return `${baseUrl}/invitations/${fakeToken}`;
+    }
+
+    try {
+      const client = this.getClient();
+      const res = await client.post(`/api/users/${redashUserId}/invite`);
+      const rawLink: string | undefined =
+        typeof res.data?.invite_link === 'string' ? res.data.invite_link : undefined;
+      return normalizeRedashInviteLink(rawLink) ?? null;
+    } catch (err: any) {
+      logger.error(`Failed to regenerate invite link for Redash user ${redashUserId}: ${err.message}`);
+      throw new Error(`Redash API regenerateInviteLink error: ${err.message}`);
+    }
+  }
+
   // Add User to Group
   async addUserToGroup(redashUserId: number, redashGroupId: number): Promise<void> {
     if (this.isSimulation) {

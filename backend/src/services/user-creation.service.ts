@@ -324,7 +324,9 @@ export class UserCreationService {
   }
 
   /**
-   * Re-trigger the Redash invite (idempotent: findOrInviteUser returns the existing ID if it's already there).
+   * Re-trigger the Redash invite. Always re-issues a fresh invite link via
+   * POST /api/users/<id>/invite rather than reusing whatever was stored — old
+   * links can be stale (different host/port) if REDASH_BASE_URL changed.
    * Only meaningful in APPROVED (retry after failure) or AWAITING_SETUP (user wants a fresh email).
    */
   async resendInvite(userId: string) {
@@ -343,10 +345,16 @@ export class UserCreationService {
     }
 
     try {
-      const { id: externalUserId, inviteLink } = await redashService.findOrInviteUser(
+      // First make sure we know the Redash user ID.
+      const { id: externalUserId } = await redashService.findOrInviteUser(
         row.userEmail,
         row.userName,
       );
+
+      // Then explicitly regenerate the invite link so the row always points at
+      // a token that still exists in the configured Redash instance.
+      const freshLink = await redashService.regenerateInviteLink(externalUserId);
+
       const updated = await prisma.userCreationRequest.update({
         where: { id: row.id },
         data: {
@@ -354,12 +362,10 @@ export class UserCreationService {
           externalUserId,
           inviteSentAt: new Date(),
           inviteError: null,
-          // Only overwrite inviteLink when we actually got a fresh one back. Keep
-          // the existing one otherwise so the user doesn't lose it on retry.
-          ...(inviteLink ? { inviteLink } : {}),
+          ...(freshLink ? { inviteLink: freshLink } : {}),
         },
       });
-      logger.info({ userId, externalUserId, hadNewLink: !!inviteLink }, '📨 Resent Redash invite');
+      logger.info({ userId, externalUserId, hadNewLink: !!freshLink }, '📨 Resent Redash invite');
       return normalizeInviteLink(updated);
     } catch (err: any) {
       await prisma.userCreationRequest.update({
