@@ -41,3 +41,6 @@ coverage/
 # Misc
 *.tsbuildinfo
 .eslintcache
+
+# graphify knowledge-graph output (build artifact, regenerate with /graphify)
+graphify-out/

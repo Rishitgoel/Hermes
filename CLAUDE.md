@@ -4,7 +4,7 @@ Read this first whenever you start a chat in this repo. It encodes how the proje
 
 ## TL;DR
 
-Hermes is an internal **access-management portal**. Users request access to groups; admins approve; the backend provisions the user on the target platform (currently only Redash; AWS / Jira / etc. are stubs in the UI). Stack: Node/Express + Prisma + Postgres on the backend, React + Vite on the frontend, Keycloak for auth.
+Hermes is an internal **access-management portal**. Users request access to groups; admins approve; the backend provisions the user on the target platform (currently only Redash has a live adapter; AWS / Jira / etc. are stubs in the UI). The provisioning layer is platform-agnostic — Redash is one adapter among N, registered behind `PlatformAdapter` / `ProvisioningRegistry`. AWS is the next adapter to land. Stack: Node/Express + Prisma + Postgres on the backend, React + Vite on the frontend, Keycloak for auth.
 
 If the user asks for "the roadmap" or for the next thing to work on, check **`ROADMAP.md`** at the repo root — that's the prioritized backlog (P1 → P3).
 
@@ -115,12 +115,12 @@ npx tsc --noEmit                         # typecheck only
 
 ### Backend (Express + Prisma)
 
-- **`backend/src/app.ts`** is the entrypoint. Order on boot: load env → register event listeners → load AWS secrets → ensure Keycloak client/roles exist → start scheduler → run initial Redash sync (non-blocking) → `app.listen()`.
+- **`backend/src/app.ts`** is the entrypoint. Order on boot: load env → register event listeners → load AWS secrets → ensure Keycloak client/roles exist → start scheduler → run initial platform sync (`syncService.syncAllPlatforms()`, non-blocking) → `app.listen()`.
 - **Routes** in `src/routes/<resource>.route.ts`. Pattern: `authenticateToken` middleware, optional `requireRole`, then `new Controller(req, res, next).method(req, res, next).catch(next)`.
 - **Controllers** all extend `BaseController` (`src/controllers/base.controller.ts`). Use `this.sendResponse(data, msg)`, `this.handleError(err, msg)`, `this.validateWithZod(schema, data)`, `this.getUserId()`.
 - **Services** in `src/services/`. Workflow logic lives in `access-workflow.service.ts`. Provisioning is abstracted behind `provisioner.interface.ts` + `provisioning.registry.ts`.
 - **Event bus** (`src/services/event-bus.ts`) is an in-process EventEmitter. Subscribers in `event-listeners.ts`. Notifications + Slack come off this. (Will move to BullMQ — P3-2.)
-- **Scheduler** (`src/services/scheduler.service.ts`) runs hourly in prod, every 5 min in dev. Currently only handles auto-expiry of time-bound grants.
+- **Scheduler** (`src/services/scheduler.service.ts`) runs three cron jobs: **auto-expiry** of time-bound grants (hourly in prod, every 5 min in dev; revocations run concurrently via `Promise.allSettled`), a **periodic platform sync** (every 15 min in prod, every 5 min in dev) that calls `syncService.syncAllPlatforms()`, and an **admin reconciliation** (every 30 min in prod, every 10 min in dev) that calls `adminReconciliationService.reconcileAll()` to repair Keycloak↔mirror drift (no-op when Keycloak isn't live).
 
 ### Response shape (enforced)
 
@@ -156,10 +156,30 @@ Hierarchy in `backend/src/utils/errors.ts`:
 ### Auth
 
 - Live mode: `express-jwt` validates the Keycloak JWT (RS256, fetched via JWKS). `mapLiveKeycloakUser` populates `req.user`.
-- Simulation mode: `checkJwtSimulated` reads the bearer string and maps to one of three hardcoded mock users.
-- **`requireRole(['hermes_super_admin', ...])`** middleware does basic role checks.
-- **Group-admin checks** are currently duplicated in 4 controllers — see P1-1 in ROADMAP.md for the cleanup plan.
-- **Keycloak token refresh is wired** on the frontend (P0-1 fix in commit `36dbcad3`). The default 5-min access token lifespan no longer breaks the UI — `AuthContext` has `onTokenExpired` + 60s heartbeat, `apiClient` does proactive `updateToken(30)` + one-shot 401 retry.
+- Simulation mode: `checkJwtSimulated` reads the bearer string and maps to one of **four** hardcoded mock users — `super_admin`, `platform_admin`, `group_admin`, `user`.
+- **`requireRole([...])`** middleware does coarse role-string checks. Finer tier checks live in `backend/src/utils/authz.ts` (below) — use those in controllers, not duplicated inline blocks.
+- **Keycloak token refresh is wired** on the frontend (P0-1 fix in commit `36dbcad3`). `AuthContext` has `onTokenExpired` + 60s heartbeat, `apiClient` does proactive `updateToken(30)` + one-shot 401 retry.
+
+#### Admin tiers (super → platform → group)
+
+Three tiers, highest to lowest:
+
+| Tier | Keycloak role | DB mirror | Scope |
+|------|---------------|-----------|-------|
+| Super admin | `hermes_super_admin` — assigned **manually in Keycloak** (the only role you set by hand) | — | everything, all platforms |
+| Platform admin | `hermes_platform_admin_<platform>` (composite of `hermes_platform_admin`) | `platform_admins` table | all groups on one platform |
+| Group admin | `hermes_group_admin_<platform>_<slug>` (composite of `hermes_group_admin`) | `group_admins` table | one group |
+
+- **Keycloak is the source of truth** for roles (what lands in the JWT). The DB mirror tables exist so listings, notifications, auto-enroll, and authorization work cheaply — and in simulation mode where Keycloak isn't running.
+- **All assignments below super_admin go through Hermes** (the Admin Management UI → `/api/admin/*`), which calls `keycloak-admin.service.ts` to create the composite role + map it to the user, **and** writes the mirror row + an audit entry. Scoped roles are created on demand as composites of the blanket marker, so Keycloak expands them into `realm_access.roles` (the JWT carries both `hermes_group_admin` and `hermes_group_admin_<platform>_<slug>`).
+- ⚠ A role change only reaches a user's JWT on their **next login / token refresh** — but the mirror row makes authorization work immediately. On **removal**, Hermes also force-logs-out the user's Keycloak sessions (`keycloakAdminService.logoutUser`) so the revoked role leaves their JWT right away instead of lingering until expiry.
+- **Reconciliation**: a scheduler job (`adminReconciliationService.reconcileAll`, every 30 min prod / 10 min dev) repairs Keycloak↔mirror drift left by a partial failure — Keycloak → DB only, live-mode only (never wipes seeded sim rows), deletes only after a successful Keycloak read. Super admins can force it via `POST /api/admin/reconcile`.
+- **Role naming is platform-qualified** (`hermes_group_admin_redash_growth`), matching the platform tier. Legacy slug-only roles (`hermes_group_admin_growth`) are still recognized for back-compat; `backend/scripts/migrate-group-admin-roles.ts` is the one-shot migrator. Platform keys are single lowercase tokens (no underscores), so `<platform>_<slug>` parses cleanly.
+- **Authorization helpers** in `backend/src/utils/authz.ts` are the single home for the hierarchy: `isSuperAdmin`, `isPlatformAdminOf(user, platform)`, `isGroupAdminOf(user, groupId, slug?)` (a platform admin passes for any group on their platform), `getManageablePlatforms(user)`, `computeAdminScopes(user)`. Use these in controllers — don't re-derive admin status inline.
+- **`/auth/me` returns `adminScopes: { superAdmin, platforms[], groups[] }`** (via `computeAdminScopes`). The frontend gates nav + the Admin Management page on this, not on raw role strings.
+- **Group admins are auto-enrolled** as real members of the groups they administer once their platform account is `COMPLETED` — `accessWorkflowService.ensureGroupAdminEnrollment`, triggered lazily from `/auth/me` and right after a group-admin assignment. Removing the admin role does **not** auto-revoke membership (revoke manually).
+
+The Admin Management surface is `backend/src/controllers/admin-management.controller.ts` (routes under `/api/admin` in `admin.route.ts`): super admins manage platform admins + group admins + members; platform admins manage group admins + members within their platform(s). All routes are `authenticateToken` only — fine-grained tier checks happen in the controller via the `authz.ts` helpers (the tiers don't map onto a single blanket role). Frontend: `frontend/src/pages/AdminManagement.tsx` + `frontend/src/services/api/admin.ts`.
 
 ### Provisioning (key extension point)
 
@@ -172,19 +192,23 @@ interface PlatformAdapter {
   deprovision(ctx): Promise<void>;
   checkUserStatus(email): Promise<PlatformUserStatus>;
   inviteUser(email, name): Promise<ProvisionResult>;
+  syncUsers?(): Promise<{ count: number }>;   // optional: refresh cached users
+  syncGroups?(): Promise<{ count: number }>;   // optional: refresh cached groups
   healthCheck(): Promise<{ healthy, message? }>;
 }
 ```
 
-Then register in `provisioning.registry.ts` constructor. The workflow service picks the right adapter based on `Group.platform`.
+Then register in `provisioning.registry.ts` constructor (one line — `this.register('aws', awsProvisioner)`). The workflow service resolves the adapter via `provisioningRegistry.get(group.platform)`; **`Group.platform` is required (no DB default)** — `access-workflow.service.ts` throws a `ValidationError` if it's ever null. `SyncService` is a thin orchestrator that loops every registered platform and calls the adapter's own `syncUsers()` / `syncGroups()`; the actual Redash sync logic lives in `redash.provisioner.ts`, not in `SyncService`.
 
-Storage for cached platform state is currently Redash-specific (`redash_users`, `redash_groups`). Generic tables come with P3-1.
+Cached platform state lives in **generic, platform-keyed tables** `platform_external_users` / `platform_external_groups` (each row carries a `platform` column, e.g. `'redash'`). The old Redash-specific `redash_users` / `redash_groups` tables were dropped (P3-1, done). A new adapter reuses these tables with its own `platform` value — **do not** add per-platform cache tables.
+
+The admin model keys off the **same** `platform` string (see Auth → Admin tiers). Onboarding a platform is therefore: register the adapter → create `Group` rows with that `platform` → assign a platform admin via the Admin Management UI. No schema migration, no Keycloak role config (scoped roles are created on demand), and the admin-management layer needs no changes — `getManageablePlatforms` reads the registry, so the new platform appears automatically.
 
 ### Frontend
 
 - React 19, Vite 6, React Router 7.
-- **No data-fetching library** yet — pages use raw `apiClient.get` inside `useEffect`. Migrating to React Query is P1-5.
-- `AuthContext` wraps the app; `useAuth()` returns `{ user, isAuthenticated, isLoading, login, logout, switchSimulatedRole }`.
+- **Data fetching is TanStack Query** (P1-5, done) — pages use `useQuery` / `useMutation` with centralised keys in `frontend/src/lib/queryKeys.ts`; mutations `invalidateQueries`. Don't reintroduce raw `apiClient.get` in `useEffect`.
+- `AuthContext` wraps the app; `useAuth()` returns `{ user, isAuthenticated, isLoading, isSimulated, login, logout, switchSimulatedRole, refreshUserCreation }`. `user.adminScopes` carries the resolved admin tiers; `switchSimulatedRole` accepts `super_admin | platform_admin | group_admin | user`.
 - `NotificationContext` polls `/api/notifications` every 60s. SSE replacement is P2-6.
 - `apiClient` is the only HTTP client. It owns the response unwrap + 401 retry. Don't `import axios` directly in components.
 
@@ -195,8 +219,8 @@ Storage for cached platform state is currently Redash-specific (`redash_users`, 
 - **Validation** at the controller boundary using Zod schemas in `backend/src/validations/`. Call via `this.validateWithZod(schema, input, 'msg')`. Don't validate inside services.
 - **Errors**: throw `BaseError` subclasses. Don't `res.status(...).json(...)` directly in controllers — go through `BaseController` helpers.
 - **Logging**: `import logger from '../utils/logger'` (pino). Don't `console.log` in backend.
-- **Config access**: import `config from '../config/config'`. **Don't read `process.env.NODE_ENV` directly** — use `config.isDev`, `config.isProd`. (There are still a few violations in the codebase; fix them when you touch those files.)
-- **Audit logs**: every state-changing action should write a row to `audit_entries` via `prisma.auditEntry.create({...})`. Patterns: `REQUEST_CREATED`, `REQUEST_REJECTED`, `ACCESS_GRANTED`, `ACCESS_REVOKED`, `ACCESS_EXPIRED`, `PROVISION_FAILED`, `MANUAL_SYNC_TRIGGERED`.
+- **Config access**: import `config from '../config/config'`. **Don't read `process.env.NODE_ENV` directly** — use `config.isDev`, `config.isProd`. (All known violations are fixed; `config.ts` itself is the only place that reads `process.env.NODE_ENV`.)
+- **Audit logs**: every state-changing action should write a row to `audit_entries` via `prisma.auditEntry.create({...})`. Patterns: `REQUEST_CREATED`, `REQUEST_REJECTED`, `ACCESS_GRANTED`, `ACCESS_REVOKED`, `ACCESS_EXPIRED`, `PROVISION_FAILED`, `MANUAL_SYNC_TRIGGERED`, `PLATFORM_ADMIN_ASSIGNED`, `PLATFORM_ADMIN_REVOKED`, `GROUP_ADMIN_ASSIGNED`, `GROUP_ADMIN_REVOKED`, `ADMIN_RECONCILE_TRIGGERED`, `USER_CREATION_*`. (`action` is a free string — no enum.)
 - **Events**: after a state change, also emit on `eventBus` (`backend/src/services/event-bus.ts`) so notifications/Slack fire async.
 - **Frontend types**: each page redeclares its data shape as an `interface`. Until P3-5 (OpenAPI codegen), this is the convention — match the backend response shape exactly.
 - **CSS**: there's a `frontend/src/styles/global.css` with CSS variables (`--primary`, `--text-muted`, `--radius-md`, `--shadow-md`, etc.). Use them. Inline styles are heavily used today but should be migrating out (smaller-wins list in ROADMAP.md).
@@ -206,7 +230,7 @@ Storage for cached platform state is currently Redash-specific (`redash_users`, 
 ## Don'ts
 
 - ❌ Don't add `--name <x>` to `prisma:migrate` in package.json — that's what caused the duplicate `_init` migration folders before P0-4.
-- ❌ Don't create Redash-specific tables for new platforms (use the generic pattern that P3-1 will land).
+- ❌ Don't create Redash-specific (or any per-platform) cache tables. Reuse the generic `platform_external_users` / `platform_external_groups` tables with a new `platform` value (P3-1 landed this pattern).
 - ❌ Don't swallow errors in controllers (`try { ... } catch {}` with no log). Always `this.handleError(err, 'message')`.
 - ❌ Don't bypass `apiClient` on the frontend (axios directly). It owns auth + retry + unwrap.
 - ❌ Don't push to `origin/main` with force unless the user explicitly asks.
@@ -228,7 +252,7 @@ cd "D:\Bachatt\Hermes 2\backend"; npx prisma validate --schema=prisma/hermes/sch
 # If you changed frontend
 cd "D:\Bachatt\Hermes 2\frontend"; npm run lint
 
-# Tests don't exist yet (P2-1). Backend lint doesn't exist yet (P2-3). CI doesn't exist yet (P2-4).
+# Frontend lint exists (eslint flat config). Tests don't exist yet (P2-1). Backend lint doesn't exist yet (P2-3). CI doesn't exist yet (P2-4).
 ```
 
 Tell the user what passed/failed before reporting "done."
@@ -240,13 +264,17 @@ Tell the user what passed/failed before reporting "done."
 - ✅ Token refresh works (P0-1, commit 36dbcad3)
 - ✅ Schema and migrations are in sync (P0-2, P0-3, commit 36dbcad3)
 - ✅ Error response shape is uniform (P0-5, commit 36dbcad3)
+- ✅ Platform provisioning is fully adapter-based; generic cache tables `platform_external_users` / `platform_external_groups` (P3-1, done)
+- ✅ Periodic platform sync runs on the scheduler (every 15 min prod / 5 min dev) — no longer boot-only
+- ✅ Backend `Dockerfile` + `.dockerignore` exist (multi-stage; entrypoint runs `prisma migrate deploy` then `node dist/app.js`)
+- ✅ Admin authorization consolidated in `backend/src/utils/authz.ts` (P1-1, done) — no more duplicated inline checks
+- ✅ Frontend on TanStack Query (P1-5, done) — no raw fetch in `useEffect`
+- ✅ `.env.example` files exist for backend + frontend (P1-4, done)
+- ✅ Three-tier admin model (super → platform → group) + Admin Management UI; Keycloak-authoritative roles with `platform_admins` / `group_admins` DB mirror
+- ✅ Frontend ESLint wired (`cd frontend; npm run lint`)
 - ❌ No tests
 - ❌ No CI
-- ❌ No backend linter
-- ❌ No `.env.example`
-- ❌ Redash sync only at boot (drifts during the day)
-- ❌ Group-admin authorization check is duplicated in 4 places
-- ❌ Frontend pages do raw fetch in useEffect (no caching)
+- ❌ No backend linter (frontend has one)
 
 When the user asks "what's next?" — open `ROADMAP.md` and suggest the next P1 item that fits the time they have.
 
@@ -259,3 +287,13 @@ Ask. The user prefers a quick clarifying question over you going down the wrong 
 - touching migrations
 - adding any new top-level dependency
 - doing anything visible on `origin/main`
+
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+Rules:
+- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
