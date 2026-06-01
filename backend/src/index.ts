@@ -72,8 +72,8 @@ app.get('/health', async (req, res) => {
     if (config.isDev) checks.platformsError = err.message;
   }
 
-  // Last successful Redash sync (null if never run)
-  checks.lastRedashSyncAt = syncService.getLastSyncedAt()?.toISOString() ?? null;
+  // Last successful platform sync of any platform (null if never run)
+  checks.lastSyncAt = syncService.getLastSyncedAt()?.toISOString() ?? null;
 
   const allHealthy = checks.database === 'healthy';
   res.status(allHealthy ? 200 : 503).json({

@@ -14,6 +14,7 @@ import MyRequests from './pages/MyRequests';
 import PendingApprovals from './pages/PendingApprovals';
 import AuditLog from './pages/AuditLog';
 import AccountStatus from './pages/AccountStatus';
+import AdminManagement from './pages/AdminManagement';
 
 import './styles/global.css';
 
@@ -36,8 +37,28 @@ export const App: React.FC = () => {
                 <Route
                   path="pending-approvals"
                   element={
-                    <ProtectedRoute allowedRoles={['hermes_super_admin', 'hermes_group_admin']}>
+                    <ProtectedRoute
+                      allowIf={(u) =>
+                        (u.adminScopes?.superAdmin ?? u.roles.includes('hermes_super_admin')) ||
+                        (u.adminScopes?.platforms?.length ?? 0) > 0 ||
+                        (u.adminScopes?.groups?.length ?? 0) > 0
+                      }
+                    >
                       <PendingApprovals />
+                    </ProtectedRoute>
+                  }
+                />
+
+                <Route
+                  path="admin"
+                  element={
+                    <ProtectedRoute
+                      allowIf={(u) =>
+                        (u.adminScopes?.superAdmin ?? u.roles.includes('hermes_super_admin')) ||
+                        (u.adminScopes?.platforms?.length ?? 0) > 0
+                      }
+                    >
+                      <AdminManagement />
                     </ProtectedRoute>
                   }
                 />

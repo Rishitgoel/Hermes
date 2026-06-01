@@ -12,6 +12,37 @@ import { registerEventListeners } from './services/event-listeners';
 
 const PORT = config.port;
 
+/**
+ * Log how the notification channels resolved once secrets are in env. Loudly
+ * warns on the silent-simulation footgun (e.g. EMAIL_SIMULATION=false but no
+ * sender configured → emails would be quietly dropped instead of sent).
+ */
+function reportNotificationReadiness(): void {
+  if (config.email.isSimulation) {
+    if (process.env.EMAIL_SIMULATION === 'false') {
+      logger.warn('📧 Email: EMAIL_SIMULATION=false but EMAIL_FROM is unset — emails will be SIMULATED (not sent). Set a verified SES sender to go live.');
+    } else if (config.isProd) {
+      logger.warn('📧 Email: running in SIMULATION mode in production — no emails will be sent. Set EMAIL_FROM + EMAIL_SIMULATION=false to enable.');
+    } else {
+      logger.info('📧 Email: simulation mode (emails are logged, not sent).');
+    }
+  } else {
+    logger.info(`📧 Email: LIVE via SES (sender: ${config.email.from}, region: ${config.email.region ?? 'default'}).`);
+  }
+
+  if (config.slack.dmSimulation) {
+    if (process.env.SLACK_SIMULATION === 'false') {
+      logger.warn('💬 Slack DMs: SLACK_SIMULATION=false but SLACK_BOT_TOKEN is unset — DMs will be SIMULATED. Add a bot token to enable.');
+    } else if (config.isProd) {
+      logger.warn('💬 Slack DMs: running in SIMULATION mode in production — no DMs will be sent.');
+    } else {
+      logger.info('💬 Slack DMs: simulation mode (DMs are logged, not sent).');
+    }
+  } else {
+    logger.info('💬 Slack DMs: LIVE via bot token.');
+  }
+}
+
 async function bootstrap() {
   try {
     logger.info('🚀 Hermes Backend starting up...');
@@ -22,19 +53,22 @@ async function bootstrap() {
     // 1. Load AWS secrets (in production)
     await loadSecrets();
 
+    // 1.5 Report notification channel readiness (now that secrets are in env)
+    reportNotificationReadiness();
+
     // 2. Perform Keycloak check / client setup
     await keycloakSetupService.ensureClientAndRolesExist();
 
     // 3. Start auto-revocation scheduler
     schedulerService.start();
 
-    // 4. Run an initial Redash Cache sync in the background
-    syncService.syncWithRedash()
+    // 4. Run an initial platform cache sync in the background
+    syncService.syncAllPlatforms()
       .then((res) => {
-        logger.info(`🔄 Initial Redash sync complete. Cached ${res.usersSynced} users and ${res.groupsSynced} groups.`);
+        logger.info(`🔄 Initial platform sync complete. Cached ${res.usersSynced} users and ${res.groupsSynced} groups.`);
       })
       .catch((err) => {
-        logger.warn('⚠️ Initial Redash sync failed. Cache might be stale. Proceeding...', err.message);
+        logger.warn('⚠️ Initial platform sync failed. Cache might be stale. Proceeding...', err.message);
       });
 
         // 5. Start Express server

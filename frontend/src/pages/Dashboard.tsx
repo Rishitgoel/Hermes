@@ -171,7 +171,7 @@ export const Dashboard: React.FC = () => {
           <Icons.ShieldCheck size={44} className="empty-state-icon" />
           <h3 className="empty-state-title">No Active Access</h3>
           <p className="empty-state-desc">You do not currently hold active permissions for any data groups. Browse data groups to submit access requests.</p>
-          <button className="btn btn-primary" onClick={() => navigate('/groups?platform=redash')}>
+          <button className="btn btn-primary" onClick={() => navigate('/groups')}>
             Browse Groups
           </button>
         </div>

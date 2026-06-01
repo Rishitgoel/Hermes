@@ -1,4 +1,5 @@
 import logger from './logger';
+import config from '../config/config';
 
 // Base error class with enhanced properties
 export abstract class BaseError extends Error {
@@ -44,7 +45,7 @@ export abstract class BaseError extends Error {
       context: this.context,
       userId: this.userId,
       requestId: this.requestId,
-      stack: process.env.NODE_ENV === 'production' ? undefined : this.stack,
+      stack: config.isProd ? undefined : this.stack,
     };
   }
 }

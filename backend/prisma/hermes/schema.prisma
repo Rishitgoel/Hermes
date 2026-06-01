@@ -18,15 +18,18 @@ model Group {
   description      String                              // What tables/data this gives access to
   icon             String?                              // Lucide icon name
   color            String?                              // Hex color for card
-  externalGroupId  String?          @map("external_group_id")  // Redash group ID
+  externalGroupId  String?          @map("external_group_id")  // ID of the matching group on the target platform
   isActive         Boolean          @default(true) @map("is_active")
   createdAt        DateTime         @default(now()) @map("created_at")
   updatedAt        DateTime         @updatedAt @map("updated_at")
   tables           String[]
   // Stored as a lowercase platform key ("redash", "aws", "jira", ...).
-  // Not a Prisma enum because new platforms are added at runtime via the
-  // provisioning registry and we don't want a migration per platform.
-  platform         String           @default("redash")
+  // Required — set explicitly on group creation. There is no default: the
+  // platform determines which adapter provisions access, so guessing it would
+  // silently route requests to the wrong system. Not a Prisma enum because new
+  // platforms are registered at runtime via the provisioning registry and we
+  // don't want a schema migration per platform.
+  platform         String
 
   admins           GroupAdmin[]
   accessRequests   AccessRequest[]
@@ -48,6 +51,28 @@ model GroupAdmin {
 
   @@unique([groupId, userId])
   @@map("group_admins")
+}
+
+// Platform-scoped admin: can manage the group admins + members of every group
+// on one platform. Sits between hermes_super_admin (all platforms) and
+// GroupAdmin (one group). Keycloak is the source of truth for the matching
+// `hermes_platform_admin_<platform>` role; this table mirrors assignments so
+// listings, notifications, and authorization work cheaply (and in simulation
+// mode, where Keycloak isn't running). `platform` is a free string matching
+// Group.platform and the provisioning-registry key — no FK, so onboarding a new
+// platform needs no schema migration.
+model PlatformAdmin {
+  id               String           @id @default(uuid())
+  userId           String           @map("user_id")           // Keycloak user ID
+  userName         String           @map("user_name")
+  userEmail        String           @map("user_email")
+  platform         String                                     // "redash", "aws", ...
+  assignedAt       DateTime         @default(now()) @map("assigned_at")
+  assignedBy       String           @map("assigned_by")
+
+  @@unique([userId, platform])
+  @@index([platform])
+  @@map("platform_admins")
 }
 
 // ══════════════════════════════════════════
@@ -104,7 +129,7 @@ model UserAccess {
   userName         String           @map("user_name")
   userEmail        String           @map("user_email")
   groupId          String           @map("group_id")
-  externalUserId   String?          @map("external_user_id")  // Redash user ID
+  externalUserId   String?          @map("external_user_id")  // ID of this user on the target platform
 
   isActive         Boolean          @default(true) @map("is_active")
   grantedAt        DateTime         @default(now()) @map("granted_at")
@@ -219,31 +244,47 @@ model UserCreationRequest {
 }
 
 // ══════════════════════════════════════════
-// REDASH CACHE (synced from Redash on setup)
+// PLATFORM CACHE (synced from each platform's API)
+//
+// Generic, platform-keyed mirror of users/groups living on the external
+// platforms Hermes provisions into (Redash today; AWS/Jira next). Each adapter
+// owns the rows tagged with its own `platform` key — there is no per-platform
+// table, so adding a platform needs no schema migration.
 // ══════════════════════════════════════════
 
-model RedashUser {
-  id                  Int              @id
-  name                String
-  email               String           @unique
-  isDisabled          Boolean          @default(false) @map("is_disabled")
-  isInvitationPending Boolean          @default(false) @map("is_invitation_pending")
-  groupIds            Int[]            @map("group_ids")
-  lastSyncedAt        DateTime         @map("last_synced_at")
-  createdAt           DateTime         @default(now()) @map("created_at")
+model PlatformExternalUser {
+  id               String   @id @default(uuid())
+  platform         String                                    // "redash", "aws", ...
+  externalId       String   @map("external_id")              // String — AWS/Jira use non-numeric IDs
+  email            String
+  name             String
+  isDisabled       Boolean  @default(false) @map("is_disabled")
+  isPending        Boolean  @default(false) @map("is_pending")        // generic "invitation pending"
+  externalGroupIds String[] @map("external_group_ids")               // group IDs on the platform, as strings
+  metadata         Json?                                              // platform-specific extras (ARN, etc.)
+  lastSyncedAt     DateTime @map("last_synced_at")
+  createdAt        DateTime @default(now()) @map("created_at")
 
-  @@map("redash_users")
+  @@unique([platform, externalId])
+  @@unique([platform, email])
+  @@index([platform, email])
+  @@map("platform_external_users")
 }
 
-model RedashGroup {
-  id               Int              @id
-  name             String
-  type             String
-  memberCount      Int              @default(0) @map("member_count")
-  lastSyncedAt     DateTime         @map("last_synced_at")
-  createdAt        DateTime         @default(now()) @map("created_at")
+model PlatformExternalGroup {
+  id           String   @id @default(uuid())
+  platform     String
+  externalId   String   @map("external_id")
+  name         String
+  type         String?
+  memberCount  Int      @default(0) @map("member_count")
+  metadata     Json?
+  lastSyncedAt DateTime @map("last_synced_at")
+  createdAt    DateTime @default(now()) @map("created_at")
 
-  @@map("redash_groups")
+  @@unique([platform, externalId])
+  @@index([platform])
+  @@map("platform_external_groups")
 }
 
 // ══════════════════════════════════════════

@@ -15,6 +15,7 @@ interface GroupData {
   description: string;
   icon: string | null;
   color: string | null;
+  platform: string;
   memberCount: number;
   accessStatus: 'ACTIVE' | 'PENDING' | 'NONE';
 }
@@ -206,11 +207,17 @@ export const Groups: React.FC = () => {
     return <LoadingSpinner />;
   }
 
-  // Filter groups
-  const filteredGroups = groups.filter((g) =>
-    g.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    g.description.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  // Metadata for the platform currently being viewed (drives the page heading
+  // and the invite-modal labels instead of hardcoding "Redash").
+  const activePlatformMeta = PLATFORMS.find((p) => p.id === activePlatform) ?? null;
+
+  // Filter groups: only those belonging to the active platform, then by search.
+  const filteredGroups = groups
+    .filter((g) => !activePlatform || g.platform === activePlatform)
+    .filter((g) =>
+      g.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      g.description.toLowerCase().includes(searchQuery.toLowerCase())
+    );
 
   const renderIcon = (iconName: string | null, color: string | null, size = 24) => {
     const LucideIcon = (Icons as any)[iconName || 'HelpCircle'] || Icons.HelpCircle;
@@ -347,8 +354,11 @@ export const Groups: React.FC = () => {
         <div className="cards-grid">
           {PLATFORMS.map((platform) => {
             const isActive = platform.status === 'ACTIVE';
-            const groupCount = platform.id === 'redash' ? groups.length : 0;
-            const memberCount = platform.id === 'redash' ? groups.reduce((acc, curr) => acc + curr.memberCount, 0) : 0;
+            // Count only the groups that belong to this platform, so each card
+            // reflects its own platform once AWS / Jira groups exist alongside Redash.
+            const platformGroups = groups.filter((g) => g.platform === platform.id);
+            const groupCount = platformGroups.length;
+            const memberCount = platformGroups.reduce((acc, curr) => acc + curr.memberCount, 0);
 
             return (
               <div
@@ -430,7 +440,7 @@ export const Groups: React.FC = () => {
 
       {/* Page Header */}
       <div className="section-header">
-        <h1 style={{ fontSize: '28px', fontFamily: 'Outfit, sans-serif' }}>Redash Data Groups</h1>
+        <h1 style={{ fontSize: '28px', fontFamily: 'Outfit, sans-serif' }}>{activePlatformMeta?.name ?? 'Platform'} Data Groups</h1>
         
         {/* Search Bar */}
         <div style={{ position: 'relative', width: '300px' }}>
@@ -851,8 +861,8 @@ export const Groups: React.FC = () => {
       <PlatformInviteModal
         isOpen={isInviteModalOpen}
         onClose={() => setIsInviteModalOpen(false)}
-        platformId="redash"
-        platformName="Redash"
+        platformId={activePlatform ?? ''}
+        platformName={activePlatformMeta?.name ?? 'the platform'}
         onSuccess={() => {
           if (activePlatform) {
             queryClient.invalidateQueries({

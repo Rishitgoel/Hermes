@@ -1,12 +1,14 @@
 import { Request, Response, NextFunction } from 'express';
 import BaseController from './base.controller';
 import syncService from '../services/sync.service';
+import adminReconciliationService from '../services/admin-reconciliation.service';
 import prisma from '../config/prisma';
 import { AuthorizationError } from '../utils/errors';
 import logger from '../utils/logger';
 
 export class AdminController extends BaseController {
-  // POST /api/admin/sync
+  // POST /api/admin/sync[?platform=redash]
+  // With ?platform set, syncs only that platform; otherwise syncs all registered platforms.
   async triggerSync(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const userId = this.getUserId();
@@ -17,8 +19,14 @@ export class AdminController extends BaseController {
         throw new AuthorizationError('Only super admins can trigger manual synchronization');
       }
 
-      logger.info(`Super admin ${this.user!.username} triggered manual Redash sync`);
-      const syncResult = await syncService.syncWithRedash();
+      const platform = typeof req.query.platform === 'string' ? req.query.platform : undefined;
+
+      logger.info(
+        `Super admin ${this.user!.username} triggered manual platform sync${platform ? ` (${platform})` : ''}`,
+      );
+      const syncResult = platform
+        ? await syncService.syncSinglePlatform(platform)
+        : await syncService.syncAllPlatforms();
 
       // Create Audit Log entry
       await prisma.auditEntry.create({
@@ -26,13 +34,52 @@ export class AdminController extends BaseController {
           action: 'MANUAL_SYNC_TRIGGERED',
           performerId: userId,
           performerName: this.user!.username,
-          details: { ...syncResult },
+          details: { ...syncResult, platform: platform ?? 'all' },
         },
       });
 
-      this.sendResponse(syncResult, 'Redash synchronization completed successfully');
+      this.sendResponse(syncResult, 'Platform synchronization completed successfully');
     } catch (error) {
       this.handleError(error, 'Synchronization triggered manual task failure');
+    }
+  }
+
+  // POST /api/admin/reconcile[?dryRun=true]
+  // Force a Keycloak↔mirror reconciliation for platform/group admins (super only).
+  // dryRun=true reports the drift without writing anything.
+  async triggerReconcile(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const userId = this.getUserId();
+      if (!userId) return;
+
+      if (!this.user!.roles.includes('hermes_super_admin')) {
+        throw new AuthorizationError('Only super admins can trigger admin reconciliation');
+      }
+
+      const dryRun = req.query.dryRun === 'true';
+      logger.info(
+        `Super admin ${this.user!.username} triggered manual admin reconciliation${dryRun ? ' (dry-run)' : ''}`,
+      );
+      const result = await adminReconciliationService.reconcileAll({ dryRun });
+
+      // Only audit real (non-dry-run) reconciliations — a dry-run changes nothing.
+      if (!dryRun) {
+        await prisma.auditEntry.create({
+          data: {
+            action: 'ADMIN_RECONCILE_TRIGGERED',
+            performerId: userId,
+            performerName: this.user!.username,
+            details: result as object,
+          },
+        });
+      }
+
+      this.sendResponse(
+        result,
+        dryRun ? 'Admin reconciliation dry-run completed (no changes made)' : 'Admin reconciliation completed successfully',
+      );
+    } catch (error) {
+      this.handleError(error, 'Admin reconciliation failed');
     }
   }
 }

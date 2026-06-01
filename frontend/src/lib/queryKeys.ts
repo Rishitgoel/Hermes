@@ -12,4 +12,12 @@ export const queryKeys = {
     ['audit', params] as const,
   platformStatus: (platform: string) => ['platform-status', platform] as const,
   pendingUserCreations: () => ['pending-user-creations'] as const,
+
+  // Admin Management
+  adminPlatforms: () => ['admin', 'platforms'] as const,
+  adminUsers: (search: string) => ['admin', 'users', search] as const,
+  adminGroups: (platform: string) => ['admin', 'groups', platform] as const,
+  adminPlatformAdmins: (platform: string) => ['admin', 'platform-admins', platform] as const,
+  adminGroupAdmins: (platform: string) => ['admin', 'group-admins', platform] as const,
+  adminGroupMembers: (groupId: string) => ['admin', 'group-members', groupId] as const,
 };

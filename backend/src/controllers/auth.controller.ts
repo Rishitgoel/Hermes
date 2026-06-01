@@ -1,6 +1,10 @@
 import { Request, Response, NextFunction } from 'express';
 import BaseController from './base.controller';
 import userCreationService from '../services/user-creation.service';
+import accessWorkflowService from '../services/access-workflow.service';
+import prisma from '../config/prisma';
+import { computeAdminScopes, AdminScopes } from '../utils/authz';
+import { UserCreationStatus } from '@prisma/client';
 import logger from '../utils/logger';
 
 export class AuthController extends BaseController {
@@ -42,8 +46,48 @@ export class AuthController extends BaseController {
         logger.error({ err: err.message, userId: this.user.id }, 'ensureDraftForUser failed in /auth/me');
       }
 
+      // Auto-enroll group-admins into the groups they administer. This is the one
+      // place with both their Keycloak roles and a finalized Redash account, so we
+      // do it lazily here. Fire-and-forget: it provisions on Redash and shouldn't
+      // delay the session response (the Groups list already shows admins as ACTIVE;
+      // this just makes the membership real on the next poll). Only runs once the
+      // Redash account is COMPLETED — otherwise there's no account to add to a group.
+      const userCreationStatus = (userCreation as { status?: UserCreationStatus } | null)?.status;
+      if (userCreationStatus === UserCreationStatus.COMPLETED) {
+        // Group admins (mirror-authoritative) are auto-enrolled into the groups
+        // they administer once their platform account is COMPLETED. Idempotent.
+        const adminGroups = await prisma.groupAdmin.findMany({
+          where: { userId: this.user.id },
+          select: { group: { select: { slug: true } } },
+        });
+        const adminSlugs = adminGroups.map((g) => g.group.slug);
+        if (adminSlugs.length > 0) {
+          const enrollUser = { id: this.user.id, username: this.user.username, email: this.user.email };
+          accessWorkflowService.ensureGroupAdminEnrollment(enrollUser, adminSlugs).catch((err: any) => {
+            logger.error(
+              { err: err.message, userId: enrollUser.id },
+              'ensureGroupAdminEnrollment failed in /auth/me',
+            );
+          });
+        }
+      }
+
+      // Resolve admin scopes (super / platform / group) so the frontend can gate
+      // nav + scope the Admin Management UI without guessing from role strings.
+      // Default to "no admin powers" if the lookup fails — never block /auth/me.
+      let adminScopes: AdminScopes = {
+        superAdmin: this.user.roles.includes('hermes_super_admin'),
+        platforms: [],
+        groups: [],
+      };
+      try {
+        adminScopes = await computeAdminScopes(this.user);
+      } catch (err: any) {
+        logger.error({ err: err.message, userId: this.user.id }, 'computeAdminScopes failed in /auth/me');
+      }
+
       this.sendResponse(
-        { ...this.user, userCreation },
+        { ...this.user, userCreation, adminScopes },
         'Session authenticated successfully',
       );
     } catch (error) {

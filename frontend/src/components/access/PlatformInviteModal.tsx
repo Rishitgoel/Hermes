@@ -94,14 +94,14 @@ export const PlatformInviteModal: React.FC<PlatformInviteModalProps> = ({
     title = `Finish setting up ${platformName}`;
     body = (
       <p style={{ fontSize: '14px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
-        Your account was approved. Click the link below to set your Redash password — once
+        Your account was approved. Click the link below to complete your {platformName} setup — once
         you finish, any approved group memberships will activate automatically.
       </p>
     );
-    // Prefer opening Redash directly from here when we have the link.
+    // Prefer opening the platform's setup link directly from here when we have it.
     if (uc.inviteLink) {
       primary = {
-        label: 'Continue to Redash setup',
+        label: `Continue to ${platformName} setup`,
         action: () => {
           window.open(uc.inviteLink!, '_blank', 'noopener,noreferrer');
         },

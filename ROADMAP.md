@@ -1,6 +1,14 @@
-# Hermes — Post-P0 Roadmap
+# Hermes — Roadmap
 
-This is the implementation backlog for Hermes after the P0 fixes landed in commit `36dbcad3`. Each item has enough detail that you can paste a single section to Claude in a new chat and we can start.
+The prioritized implementation backlog for Hermes, grouped **P2 → P3** (P0/P1 are finished — see the Done table). Each open item has enough detail that you can paste a single section into a new chat and start.
+
+> **Re-verified against the codebase on 2026-06-01** (branch `main`, latest commit `42b20006`).
+> This doc was originally the "post-P0" backlog written right after commit `36dbcad3`. A lot has shipped since, so several items moved to Done and stale references were corrected. The biggest changes since the first draft:
+> - **Dev stack moved off Docker onto Supabase.** The database is a cloud Postgres (Supabase); Keycloak, Redash, and email all run in **simulation mode** by default for local dev. `docker-compose.yml` services are mostly commented out.
+> - **Provisioner layer was generalized** (old P3-1): the Redash-specific `redash_users` / `redash_groups` tables were dropped in favour of generic `platform_external_users` / `platform_external_groups`.
+> - **Three-tier admin model** (super → platform → group) + Admin Management UI landed.
+> - **New features not in the original doc:** a user-creation-with-admin-approval workflow, and AWS SES transactional email (alongside Slack).
+> - "Redash sync" is now **platform sync** (adapter-agnostic). Update your mental model when reading older notes below.
 
 ---
 
@@ -8,54 +16,49 @@ This is the implementation backlog for Hermes after the P0 fixes landed in commi
 
 When you want to tackle an item, open a new chat in `D:\Bachatt\Hermes 2` and paste something like:
 
-> Implement **P1-1** from `ROADMAP.md` (Extract admin-check helper).
+> Implement **P2-3** from `ROADMAP.md` (Backend lint + Prettier).
 
-Claude will re-read this doc, read the relevant files, ask any clarifying questions, and implement. For larger items (P2-1 Tests, P3-1 Generalize provisioner) we may split across multiple chats to keep each commit focused — that's fine, just say "continue P3-1 step 2" in the next chat.
+Claude will re-read this doc, read the relevant files, ask any clarifying questions, and implement. For larger items (P2-1 Tests) we may split across multiple chats to keep each commit focused — that's fine, just say "continue P2-1 step 2" in the next chat.
 
 If you ever forget the IDs, just say "show me the roadmap" and Claude will read this file.
 
+For setup/commands (how to run, migrate, typecheck), see **`CLAUDE.md`** — this doc no longer duplicates them. The dev DB is Supabase and migrations are already applied there; you only run `npm run prisma:migrate` when you add a *new* migration. After pulling, run `npx prisma generate --schema=prisma/hermes/schema.prisma` to refresh the client.
+
 ---
 
-## What's already done (P0)
+## Done
 
-| # | Item | Where |
-|---|------|-------|
-| P0-1 | Keycloak token refresh (fixes 5-min vanish bug) | `frontend/src/contexts/AuthContext.tsx`, `frontend/src/services/apiClient.ts` |
-| P0-2 | Replace stale unique index with partial unique | `backend/prisma/hermes/migrations/20260526120000_replace_user_access_unique/` |
+Everything below is on `main` / `origin/main`. Verified present in the tree on 2026-06-01.
+
+| # | Item | Where / evidence |
+|---|------|------------------|
+| P0-1 | Keycloak token refresh (fixes 5-min vanish bug) | `frontend/src/contexts/AuthContext.tsx`, `frontend/src/services/apiClient.ts` (commit `36dbcad3`) |
+| P0-2 | Replace stale unique index with partial unique | migration `20260526120000_replace_user_access_unique` |
 | P0-3 | `Group.platform` enum → String to match DB | `backend/prisma/hermes/schema.prisma` |
-| P0-4 | Removed hardcoded `--name init` from prisma:migrate | `backend/package.json` |
+| P0-4 | Removed hardcoded `--name init` from `prisma:migrate` | `backend/package.json` |
 | P0-5 | Standardised auth-middleware error response shape | `backend/src/middleware/auth.middleware.ts` |
-| P1-1 | Extracted `isGroupAdminOf` helper; collapsed 4 duplicated admin-check blocks into one call | `backend/src/utils/authz.ts`, `backend/src/controllers/user-access.controller.ts`, `backend/src/controllers/access-request.controller.ts` |
-| P1-2 | Periodic Redash sync cron (15 min prod / 5 min dev) + `lastRedashSyncAt` on `/health` | `backend/src/services/scheduler.service.ts`, `backend/src/services/sync.service.ts`, `backend/src/index.ts` |
-| P1-3 | Wired up `THREE_MONTHS` duration option in modal + bulk panel (backend `calculateExpiry` already handled it) | `frontend/src/components/access/AccessRequestModal.tsx`, `frontend/src/pages/Groups.tsx` |
-| P1-4 | Added repo-level `.gitignore` and `backend/.env.example` + `frontend/.env.example` so a fresh clone has a runnable starting point | `.gitignore`, `backend/.env.example`, `frontend/.env.example` |
-| P1-5 | Migrated every page off `useState + useEffect + apiClient` onto TanStack Query (`useQuery` / `useMutation` + `invalidateQueries`). Caching, retry, devtools | `frontend/src/main.tsx`, `frontend/src/lib/queryClient.ts`, `frontend/src/lib/queryKeys.ts`, all `frontend/src/pages/*.tsx` |
+| P1-1 | Extracted admin-check helpers; collapsed duplicated blocks | `backend/src/utils/authz.ts` (commit `afeafccc`) |
+| P1-2 | Periodic platform sync cron + `lastSyncAt` on `/health` | `backend/src/services/scheduler.service.ts`, `sync.service.ts` (commit `f5982fca`) |
+| P1-3 | Wired up `THREE_MONTHS` duration option | `frontend/src/components/access/AccessRequestModal.tsx`, `frontend/src/pages/Groups.tsx` (commit `d042c097`) |
+| P1-4 | `.gitignore` + `backend/.env.example` + `frontend/.env.example` | repo root, `backend/`, `frontend/` (commit `989d9da9`) |
+| P1-5 | Migrated every page onto TanStack Query | `frontend/src/main.tsx`, `lib/queryClient.ts`, `lib/queryKeys.ts`, all `pages/*.tsx` (commit `008739e4`) |
+| **P3-1** | **Generalized provisioner storage** — generic `platform_external_users` / `platform_external_groups`; dropped Redash-specific cache tables | migrations `20260529100000_add_generic_platform_tables`, `20260529100100_drop_redash_cache_tables`; `backend/src/services/redash.provisioner.ts`, `sync.service.ts` |
+| **Admin tiers** | **Three-tier admin model** (super → platform → group) + Admin Management UI. Keycloak-authoritative roles mirrored in `platform_admins` / `group_admins` tables; `adminScopes` on `/auth/me`; group admins auto-enrolled. See **CLAUDE.md → Auth → Admin tiers**. | `backend/src/utils/authz.ts`, `keycloak-admin.service.ts`, `admin-management.controller.ts`, `admin.route.ts`, `scripts/migrate-group-admin-roles.ts`, `frontend/src/pages/AdminManagement.tsx`; migration `20260529110000_add_platform_admins` |
+| **User creation** | **User-creation-with-admin-approval workflow** (request account → admin approves → invite link). Not in the original roadmap. | `backend/src/controllers/user-creation.controller.ts`, `services/user-creation.service.ts`; migrations `20260528101716_add_user_creation_workflow`, `20260528104309_add_user_creation_invite_link`, `20260528122344_add_is_invitation_pending`; `frontend/src/pages/AccountStatus.tsx` |
+| **Email (SES)** | **AWS SES transactional email** alongside Slack, with shared templates and an `EMAIL_SIMULATION` flag. | `backend/src/services/email.service.ts`, `utils/email-templates.ts`, `notification.service.ts` |
+| **Dev stack** | **Docker → Supabase**, Docker-free local dev, simulation flags for Keycloak/Redash/email. | `docker-compose.yml` (commented), `backend/.env.example`, `CLAUDE.md` |
 
-All in commit `36dbcad3`, on `main`, on `origin/main`.
+**Completed "smaller wins"** (were in the original tail list, now verified done): `process.env.NODE_ENV` reads consolidated into `config.isDev`/`config.isProd` (only `config.ts` reads the raw env); `expireAccess` calls parallelised with `Promise.allSettled` in the scheduler; `ErrorBoundary` added (`frontend/src/components/common/ErrorBoundary.tsx`, wired in `App.tsx`); redash provisioner no longer hardcodes `groupIds: [1]` for invited users; Slack/email message strings extracted to `backend/src/utils/email-templates.ts`.
 
-**Before continuing**, run these once locally:
-
-```powershell
-cd D:\Bachatt\Hermes 2\backend
-npm run prisma:migrate  
-npx prisma generate --schema=prisma/hermes/schema.prisma
-```
-
-The first applies the new index. The second refreshes the generated Prisma client so `Group.platform` is now `string` and the old `userId_groupId_isActive` composite key is gone.
+> ⚠️ **Removed as moot:** the old "add a Redis ping to `/health`" win. Redis isn't referenced anywhere in `backend/src/` (it's only a commented service in `docker-compose.yml`). Revisit only if P3-2 (BullMQ) lands.
 
 ---
 
-## Quick index — P1 through P3
+## Quick index — open items
 
 | ID | Item | Effort | Risk |
 |----|------|--------|------|
-| **P1** | **Cleanup & drift (this week)** | | |
-| ~~P1-1~~ | ~~Extract admin-check helper~~ — Done in `afeafccc` | S | Low |
-| ~~P1-2~~ | ~~Periodic Redash sync~~ — Done in `f5982fca` | S | Low |
-| ~~P1-3~~ | ~~Reconcile THREE_MONTHS duration~~ — Done in `d042c097` | XS | Low |
-| ~~P1-4~~ | ~~Add .env.example files~~ — Done in `989d9da9` | XS | Low |
-| ~~P1-5~~ | ~~Frontend data-fetching hook~~ — Done in `008739e4` | M | Low |
-| **P2** | **Hardening (next sprint)** | | |
+| **P2** | **Hardening** | | |
 | P2-1 | Tests (vitest) | L | Low |
 | P2-2 | Bulk endpoints | M | Low |
 | P2-3 | Backend lint + Prettier | S | Low |
@@ -63,10 +66,10 @@ The first applies the new index. The second refreshes the generated Prisma clien
 | P2-5 | Audit log filtering | S | Low |
 | P2-6 | Replace polling with SSE | M | Med |
 | **P3** | **Architecture for scale** | | |
-| P3-1 | Generalize provisioner pattern | L | Med |
+| ~~P3-1~~ | ~~Generalize provisioner pattern~~ — **Done** (see Done table) | — | — |
 | P3-2 | Event bus → BullMQ | L | Med |
 | P3-3 | Idempotency keys on provisioning | M | Med |
-| P3-4 | Split Groups.tsx | M | Low |
+| P3-4 | Split Groups.tsx (and other large pages) | M | Low |
 | P3-5 | OpenAPI spec from Zod | M | Low |
 | P3-6 | OpenTelemetry traces | M | Low |
 
@@ -74,135 +77,19 @@ Effort: XS ≈ 15 min · S ≈ 1–2 h · M ≈ half day · L ≈ 1–2 days. Ri
 
 ---
 
-# P1 — Cleanup & drift (do this week)
-
-## P1-1 — Extract admin-check helper
-
-**Why:** the same "is this user a group admin of this group?" block is copy-pasted in four places. A bug fixed in one won't propagate. This is also the highest-touch code path for security, so duplication is risky.
-
-**Files where it appears (each one greps `groupAdmin.findUnique` paired with `checkIsGroupAdmin`):**
-- `backend/src/controllers/user-access.controller.ts:36-60` (`getGroupAccessList`)
-- `backend/src/controllers/user-access.controller.ts:95-115` (`revokeAccess`)
-- `backend/src/controllers/access-request.controller.ts:152-167` (`getRequestDetail`)
-- `backend/src/controllers/access-request.controller.ts:199-216` (`reviewRequest`)
-
-**Approach:**
-1. Add `isGroupAdminOf(user, groupId): Promise<boolean>` to `backend/src/middleware/auth.middleware.ts` (or a new `backend/src/utils/authz.ts` if you prefer to keep middleware lean). Behaviour:
-   - returns `true` if user has `hermes_super_admin`
-   - else if user has `hermes_group_admin` AND either has a `GroupAdmin` DB row for that group, OR has a `hermes_group_admin_<slug>` Keycloak role matching the group's slug → `true`
-   - else `false`
-2. Replace the four blocks. Each becomes ~2 lines: call helper, throw `AuthorizationError` if false.
-3. (Optional) Also expose `requireGroupAdmin(groupIdParam: string)` as an Express middleware so route definitions can do the check before reaching the controller. Useful for the `revokeAccess` route which already needs the group id from the access row.
-
-**Done when:**
-- `grep -r 'groupAdmin.findUnique' backend/src/controllers/` returns nothing (only the helper itself, in `auth.middleware.ts` or `utils/authz.ts`).
-- All four endpoints still allow / reject the same cases as before: super admin, DB-only group admin, Keycloak-only group admin, non-admin, requester themselves.
-
----
-
-## P1-2 — Periodic Redash sync
-
-**Why:** sync only happens on backend boot ([`backend/src/app.ts:32-38`](backend/src/app.ts)). If a Redash user is added or disabled during the day, Hermes's cached `redash_users` / `redash_groups` drift until restart. This makes `checkUserStatus` and the "invite missing user" flow unreliable, which is what the user-facing "Create Redash Account" banner depends on.
-
-**Files:**
-- `backend/src/services/scheduler.service.ts` — add a second cron job.
-- `backend/src/services/sync.service.ts` — already idempotent, just call `syncWithRedash()`.
-
-**Approach:**
-1. Extend `SchedulerService` with a second job alongside the existing expiry one:
-   - Pattern: `*/15 * * * *` (every 15 min) in prod, `*/5 * * * *` in dev (gate via `config.isDev`).
-   - Body: `await syncService.syncWithRedash()`. Wrap in try/catch; log errors but never throw — a transient Redash hiccup shouldn't crash the scheduler.
-2. Log the next sync time on startup so you can see it's running.
-3. Make sure both jobs are stopped on `SIGTERM` (extend the existing `stop()` method).
-4. (Optional) Add `lastRedashSyncAt` to the `/health` response so you can see drift externally.
-
-**Done when:**
-- Backend log shows a sync line every 15 min in prod / 5 min in dev.
-- Adding a user directly in the Redash UI shows up in Hermes's cache within 15 min without restart.
-
----
-
-## P1-3 — Reconcile THREE_MONTHS duration
-
-**Why:** the Prisma `AccessDuration` enum (`backend/prisma/hermes/schema.prisma:200-206`) has `THREE_MONTHS`, but no frontend dropdown exposes it. Dead value. Either remove it or wire it up.
-
-**Recommend (B) — wire it up.** Less migration risk; users sometimes ask for a quarter.
-
-**Option B files:**
-- `frontend/src/components/access/AccessRequestModal.tsx:118-122` — add `<option value="THREE_MONTHS">3 Months</option>`.
-- `frontend/src/pages/Groups.tsx:779-783` — same `<option>` in the bulk request panel.
-
-**Option A (remove) is heavier:** Postgres enums can't drop a value cleanly. You'd either recreate the type or convert the column to text. If you want to remove it instead of expose it, ping Claude and we'll do the conversion safely.
-
-**Done when:** "3 Months" appears in every place "1 Month" does, and a created request with `duration: 'THREE_MONTHS'` gets the correct +3-month expiry.
-
----
-
-## P1-4 — Add .env.example files
-
-**Why:** the real `.env` is the only source of truth for required vars. A fresh clone of the repo (or a teammate joining) has no template. Also, secrets shouldn't be tracked — `.env.example` is the right home for "here's the shape, fill in your own values".
-
-**Files to create:**
-- `backend/.env.example`
-- `frontend/.env.example`
-
-**Content:** copy the current `.env` files structurally; replace any secret value (`KEYCLOAK_ADMIN_PASSWORD`, `REDASH_API_KEY`, `SLACK_WEBHOOK_URL`, `AWS_*`) with `<set-me>` or an empty string. Add a comment header per section explaining required vs optional.
-
-**Verify .gitignore:**
-- `*.env` or `.env` is ignored (it currently shouldn't be tracked but verify).
-- `.env.example` is NOT ignored.
-
-**Done when:** running `cp backend/.env.example backend/.env && cp frontend/.env.example frontend/.env` on a fresh clone gives a runnable starting point (after filling in secrets).
-
----
-
-## P1-5 — Frontend data-fetching hook (React Query)
-
-**Why:** every page (`Dashboard.tsx`, `Groups.tsx`, `MyRequests.tsx`, `PendingApprovals.tsx`, `GroupDetail.tsx`, `AuditLog.tsx`) reimplements the same `useState + useEffect + isLoading + try/catch` pattern. Each navigation re-fetches; nothing is cached. After every mutation (`approve`, `revoke`, `create request`) there's a manual `fetchX()` call to refresh — easy to forget.
-
-**Recommended: TanStack Query (React Query).** ~13kb gzipped; industry standard; built-in retry/cache/refetch-on-focus.
-
-**Approach:**
-1. `cd frontend && npm install @tanstack/react-query`.
-2. In `frontend/src/main.tsx`, wrap `<App />` in `<QueryClientProvider client={queryClient}>` where `queryClient` is a single module-level instance.
-3. Replace each page's fetch boilerplate. Example for `Groups.tsx`:
-   ```ts
-   const { data: groups = [], isLoading, refetch } = useQuery({
-     queryKey: ['groups'],
-     queryFn: () => apiClient.get('/api/groups').then(r => r.data),
-   });
-   ```
-4. Mutations use `useMutation` and invalidate relevant queries on success — removes the manual `fetchGroups()` / `fetchPending()` after every action.
-   ```ts
-   const createRequestMutation = useMutation({
-     mutationFn: (body) => apiClient.post('/api/access-requests', body),
-     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['groups'] }),
-   });
-   ```
-5. Delete the now-unused `isLoading` state, `useEffect` fetch blocks, and `fetch*()` helpers.
-
-**Bonus:** install `@tanstack/react-query-devtools` for visibility — toggle in dev only.
-
-**Done when:**
-- No direct `apiClient.get(...)` inside `useEffect` in any page.
-- Navigating `Groups → GroupDetail → Groups` doesn't re-fetch the groups list (you see cached state instantly, then a background refetch if stale).
-- After approving a request, the pending list updates without a manual `await fetchPending()` line.
-
----
-
-# P2 — Hardening (next sprint)
+# P2 — Hardening
 
 ## P2-1 — Tests (vitest)
 
-**Why:** zero test coverage today. The access workflow (request → approve → provision → revoke → expire) is the riskiest code and has the most state transitions. Regressions here will silently break authorization.
+**Why:** zero test coverage today (verified — no `*.test.ts` / `*.spec.ts` anywhere). The access workflow (request → approve → provision → revoke → expire) is the riskiest code and has the most state transitions. Regressions here will silently break authorization. The newer **user-creation** and **admin-tier authorization** paths are now equally worth covering.
 
 **Stack:**
 - **vitest** for both backend and frontend (same runner, simpler than jest + babel).
-- **@testcontainers/postgresql** for backend integration tests against a real Postgres (not SQLite — Prisma's behaviour differs).
+- **@testcontainers/postgresql** for backend integration tests against a real Postgres. ⚠️ Don't point integration tests at the Supabase dev DB — spin up an ephemeral local Postgres so tests can't pollute shared data.
 - **@testing-library/react** for component tests.
 
 **Backend tests, in priority order:**
-1. **Unit:** `AccessWorkflowService.calculateExpiry` — pure function, easy first win.
+1. **Unit:** `AccessWorkflowService.calculateExpiry` — pure function, easy first win. Also `backend/src/utils/authz.ts` helpers (`isSuperAdmin`, `isPlatformAdminOf`, `isGroupAdminOf`) — pure-ish and security-critical.
 2. **Integration (high-value):** full lifecycle
    - Seed: a group + a regular user.
    - `createRequest()` → assert request row exists with status PENDING, audit entry created.
@@ -212,9 +99,10 @@ Effort: XS ≈ 15 min · S ≈ 1–2 h · M ≈ half day · L ≈ 1–2 days. Ri
    - Re-requesting access when already active → ConflictError.
    - Approving as wrong group admin → AuthorizationError.
    - Provisioner throwing → request goes to PROVISION_FAILED, audit entry includes error.
+4. **(New) user-creation flow:** request account → admin approve → invite link issued; reject path; duplicate-request guard.
 
 **Frontend tests:**
-1. `AuthContext` simulation-mode role switcher (no Keycloak needed).
+1. `AuthContext` simulation-mode role switcher (four roles: super_admin / platform_admin / group_admin / user).
 2. Each page renders without crashing given a mocked `apiClient`.
 3. (Stretch) one Playwright/Cypress happy-path end-to-end run.
 
@@ -226,18 +114,18 @@ Effort: XS ≈ 15 min · S ≈ 1–2 h · M ≈ half day · L ≈ 1–2 days. Ri
 
 ## P2-2 — Bulk endpoints
 
-**Why:** `Groups.tsx` bulk-requests N groups by firing N parallel HTTP calls. `PendingApprovals.tsx` does the same for review. Each call hits the DB independently, fires its own events, sends its own Slack ping — no transaction, partial failures are confusing, and Slack gets N pings for what should be one summary.
+**Why:** verified still N parallel HTTP calls. `Groups.tsx` bulk-requests groups via `Promise.allSettled(requestsToSubmit.map(...))` (`frontend/src/pages/Groups.tsx:156`), and `PendingApprovals.tsx` does the same for review (`:117`). Each call hits the DB independently, fires its own events, sends its own Slack/email — no transaction, partial failures are confusing, and notifications get N pings for what should be one summary.
 
 **Files:**
 - `backend/src/routes/access-request.route.ts` — add `POST /bulk` and `PUT /bulk/review`.
 - `backend/src/controllers/access-request.controller.ts` — new controller methods.
 - `backend/src/services/access-workflow.service.ts` — `createRequestsBulk` and `reviewRequestsBulk` inside a single Prisma transaction.
-- `frontend/src/pages/Groups.tsx` — replace the `Promise.allSettled(checkedGroupIds.map(...))` with a single call.
+- `frontend/src/pages/Groups.tsx` — replace the `Promise.allSettled(...)` with a single call.
 - `frontend/src/pages/PendingApprovals.tsx` — same for review.
 
 **Approach:**
 - Wrap in `prisma.$transaction(async (tx) => {...})`. If any item validates as a duplicate or violates an invariant, fail the whole batch and return per-item error details so the UI can show "3 succeeded, 2 had errors: ...".
-- The event bus emits one summary event per bulk call (`requests.bulk.created` with `{requestIds[]}`) instead of N. Notification service formats it as one Slack message.
+- The event bus emits one summary event per bulk call (`requests.bulk.created` with `{requestIds[]}`) instead of N. Notification service formats it as one Slack/email message.
 - Audit log gets one bulk audit entry referencing all the request IDs in `details`.
 
 **Done when:** one HTTP call from the frontend; one transaction in the DB; one Slack message; one audit entry referencing all items.
@@ -246,12 +134,14 @@ Effort: XS ≈ 15 min · S ≈ 1–2 h · M ≈ half day · L ≈ 1–2 days. Ri
 
 ## P2-3 — Backend lint + Prettier
 
+**Why:** verified — frontend has ESLint (`npm run lint` works), backend has **none** (no `.eslintrc*` / `eslint.config.*` / `.prettierrc`, no `lint`/`format` scripts in `backend/package.json`).
+
 **Files:**
-- `backend/.eslintrc.cjs` or `backend/eslint.config.js`
+- `backend/eslint.config.js` (flat config, to match frontend)
 - `backend/.prettierrc`
 - `backend/package.json` — add `lint` and `format` scripts.
 
-**Approach:** mirror the frontend's eslint config; add `@typescript-eslint/eslint-plugin` recommended rules. Turn on `@typescript-eslint/no-floating-promises` — your routes use `.catch(next)` everywhere; this rule will catch the missing ones.
+**Approach:** mirror the frontend's eslint flat config; add `@typescript-eslint` recommended rules. Turn on `@typescript-eslint/no-floating-promises` — routes use `.catch(next)` everywhere; this rule will catch the missing ones.
 
 **Done when:** `npm run lint` in `backend/` runs and either passes or produces an actionable list.
 
@@ -259,13 +149,16 @@ Effort: XS ≈ 15 min · S ≈ 1–2 h · M ≈ half day · L ≈ 1–2 days. Ri
 
 ## P2-4 — CI on push
 
+**Why:** verified — no `.github/workflows/` at all.
+
 **File:** `.github/workflows/ci.yml` (new).
 
 **Approach:**
 - Trigger on PR to `main` + push to `main`.
-- Jobs (in parallel where possible): `backend-typecheck`, `frontend-typecheck`, `backend-lint`, `frontend-lint`, `prisma-validate`, (eventually) `backend-tests`, `frontend-tests`.
+- Jobs (in parallel where possible): `backend-typecheck`, `frontend-typecheck`, `backend-lint` (after P2-3), `frontend-lint`, `prisma-validate`, (eventually) `backend-tests`, `frontend-tests` (after P2-1).
 - Use `actions/setup-node@v4` with Node 22 (matches `@types/node@22.15.19`).
 - Cache `node_modules` keyed on `package-lock.json` hash and Prisma generation cache.
+- `prisma-validate` runs `npx prisma validate --schema=prisma/hermes/schema.prisma` (non-default path — see CLAUDE.md).
 
 **Done when:** any push or PR shows a green/red CI status icon on GitHub.
 
@@ -273,7 +166,7 @@ Effort: XS ≈ 15 min · S ≈ 1–2 h · M ≈ half day · L ≈ 1–2 days. Ri
 
 ## P2-5 — Audit log filtering
 
-**Why:** `auditQuerySchema` (`backend/src/validations/audit.validation.ts`) only accepts `action` and `search`. When investigating an incident, the most common questions are "what happened on date X" and "what did user Y do" — neither of which the UI supports.
+**Why:** verified — `auditQuerySchema` (`backend/src/validations/audit.validation.ts`) still only accepts `action` and `search`. When investigating an incident, the most common questions are "what happened on date X" and "what did user Y do" — neither of which the UI supports.
 
 **Files:**
 - `backend/src/validations/audit.validation.ts` — extend schema with `performerId`, `fromDate`, `toDate`, `groupId`.
@@ -286,7 +179,7 @@ Effort: XS ≈ 15 min · S ≈ 1–2 h · M ≈ half day · L ≈ 1–2 days. Ri
 
 ## P2-6 — Replace polling with SSE
 
-**Why:** `NotificationContext.tsx:76` polls `/api/notifications` every 60 s for every authenticated user. Wasteful, laggy, and gets worse as users grow.
+**Why:** verified — `NotificationContext.tsx:76` still polls via `setInterval(fetchNotifications, 60000)` for every authenticated user. Wasteful, laggy, and gets worse as users grow.
 
 **Approach:**
 - Server: `GET /api/notifications/stream` using Server-Sent Events. The handler subscribes to the in-process event bus for `notification.*` events scoped to `req.user.id` and writes them to the response.
@@ -302,34 +195,19 @@ Effort: XS ≈ 15 min · S ≈ 1–2 h · M ≈ half day · L ≈ 1–2 days. Ri
 
 # P3 — Architecture for scale (when adding AWS / Jira)
 
-## P3-1 — Generalize the provisioner pattern
-
-**Why:** today `redash_users` and `redash_groups` are Redash-specific tables. The seed hardcodes Redash group IDs (101–106). Adding AWS means duplicating tables and wrapper logic. The interface `PlatformAdapter` is already generic — only the storage layer leaks.
-
-**Approach:**
-1. New tables (one migration):
-   - `platform_external_users` `(platform String, external_id String, email, name, is_disabled, last_synced_at, metadata Jsonb)` with `@@unique([platform, email])` and `@@unique([platform, external_id])`.
-   - `platform_external_groups` `(platform String, external_id String, name, type, member_count, last_synced_at, metadata Jsonb)` with `@@unique([platform, external_id])`.
-2. Migrate existing data: `INSERT INTO platform_external_users SELECT 'redash', id::text, email, name, is_disabled, last_synced_at, jsonb_build_object('groupIds', group_ids) FROM redash_users;` then drop `redash_users` / `redash_groups`.
-3. Update `redash.provisioner.ts` and `sync.service.ts` to use the generic tables (filter `WHERE platform='redash'`).
-4. Define an abstract `BaseProvisioner` so adding `AwsProvisioner` is just: implement the four methods on the interface.
-
-**Done when:**
-- A stub `AwsProvisioner` can be registered without changing the schema.
-- `/health` shows all registered platforms.
-- All existing Redash flows still work.
-
----
+> **P3-1 (generalize the provisioner pattern) is done** — `platform_external_users` / `platform_external_groups` are live and the Redash-specific tables were dropped. See the Done table. A new adapter (AWS, Jira) now reuses those generic tables with its own `platform` value; **don't** add per-platform cache tables.
 
 ## P3-2 — Event bus → BullMQ (Redis-backed)
 
-**Why:** in-process `EventEmitter` (`backend/src/services/event-bus.ts`) loses events on crash. A Slack ping failure is silently swallowed — no retry. As you add platforms and notification channels (email, MS Teams), this gets worse. (Note: Redis is defined in `docker-compose.yml` but currently commented out for local development to save RAM; you will need to uncomment it to use BullMQ).
+**Why:** in-process `EventEmitter` (`backend/src/services/event-bus.ts`) loses events on crash. A Slack/email send failure is silently swallowed — no retry. As you add platforms and notification channels (now email + Slack; later MS Teams), this gets worse.
+
+> **State note:** Redis is **not used anywhere in the code** today, and the dev stack is Docker-free (Supabase for DB). To adopt BullMQ you'll need to stand up a Redis instance — uncomment/start the `redis` service in `docker-compose.yml`, or point at a hosted Redis — and add a `REDIS_URL` env var.
 
 **Approach:**
 1. `npm i bullmq`.
-2. Create a `backend/src/services/queue.ts` that exports a single `Queue('hermes-events')` instance pointing at `redis://redis:6379/1` (different DB than Redash so they don't collide).
-3. Replace `eventBus.emitAccessEvent(...)` with `queue.add(eventType, payload)`.
-4. Each consumer (notification, slack, audit) becomes a BullMQ `Worker` with retry/backoff config.
+2. Create a `backend/src/services/queue.ts` that exports a single `Queue('hermes-events')` instance pointing at `REDIS_URL`.
+3. Replace `eventBus.emit*(...)` with `queue.add(eventType, payload)`.
+4. Each consumer (notification, slack, email, audit) becomes a BullMQ `Worker` with retry/backoff config.
 5. Failed jobs land in a dead-letter queue. Add a small admin endpoint `GET /api/admin/queues` returning `await queue.getJobCounts()` for visibility.
 6. Update tests + bring up Redis in CI.
 
@@ -341,29 +219,31 @@ Effort: XS ≈ 15 min · S ≈ 1–2 h · M ≈ half day · L ≈ 1–2 days. Ri
 
 ## P3-3 — Idempotency keys on provisioning
 
-**Why:** if `redash.addUserToGroup` hangs after Redash applied the change but before returning, the workflow retries and the user gets double-added. Or it errors and the workflow rolls back even though Redash succeeded. Currently there's no way to tell.
+**Why:** if `redash.addUserToGroup` hangs after Redash applied the change but before returning, the workflow retries and the user gets double-added. Or it errors and the workflow rolls back even though Redash succeeded. Currently there's no way to tell (verified — no `provisioningKey` / idempotency anywhere).
 
 **Approach:**
 1. Add `provisioningKey String? @unique` to `AccessRequest` — a deterministic key like `req-${requestId}` (or `req-${requestId}-${attempt}` if you support retries).
-2. Provisioner caches the result of `provision()` keyed by `provisioningKey` in a new `provisioning_attempts` table. On retry with the same key, return cached result instead of re-calling Redash.
+2. Provisioner caches the result of `provision()` keyed by `provisioningKey` in a new `provisioning_attempts` table. On retry with the same key, return cached result instead of re-calling the platform.
 3. For deprovisioning: same pattern keyed by `userAccessId`.
-4. Add a job in BullMQ (depends on P3-2) that periodically reconciles: for every `UserAccess` marked active, verify membership exists in Redash; for every revoked, verify it's gone.
+4. Add a reconcile job (depends on P3-2) that periodically verifies: for every active `UserAccess`, membership exists on the platform; for every revoked, it's gone. (Note: the **admin** side already has `adminReconciliationService` for Keycloak↔mirror drift — this is the equivalent for platform access.)
 
 **Done when:** killing the backend mid-provision and restarting doesn't double-add or skip the user.
 
 ---
 
-## P3-4 — Split Groups.tsx
+## P3-4 — Split large pages (Groups.tsx and friends)
 
-**Why:** `frontend/src/pages/Groups.tsx` is ~840 lines. It does platform-grid + groups-table + bulk-request panel + 3 modals + reason-popover state management. Hard to test, hard to reason about, hard to onboard anyone to.
+**Why:** verified line counts — `Groups.tsx` is **879** lines, `AdminManagement.tsx` **624**, `PendingApprovals.tsx` **536**. `Groups.tsx` does platform-grid + groups-table + bulk-request panel + 3 modals + reason-popover state. Hard to test, hard to reason about, hard to onboard anyone to.
 
-**Suggested decomposition:**
+**Suggested decomposition (Groups.tsx first):**
 - `pages/Groups.tsx` — orchestrator only (~80 lines).
-- `components/groups/PlatformGrid.tsx` — the 8-platform card grid (active vs coming-soon).
+- `components/groups/PlatformGrid.tsx` — the platform card grid (active vs coming-soon).
 - `components/groups/GroupsTable.tsx` — the searchable table of groups for the active platform.
 - `components/groups/BulkRequestPanel.tsx` — the bottom panel for justification + duration + submit.
 - `components/groups/ReasonPopover.tsx` — the per-group reason popover.
 - Selection + reasons state into a custom hook `useGroupSelection`.
+
+Then give `AdminManagement.tsx` and `PendingApprovals.tsx` the same treatment.
 
 **Done when:** no single file in `frontend/src/pages/` exceeds 300 lines.
 
@@ -371,7 +251,7 @@ Effort: XS ≈ 15 min · S ≈ 1–2 h · M ≈ half day · L ≈ 1–2 days. Ri
 
 ## P3-5 — OpenAPI spec from Zod
 
-**Why:** the validation schemas already exist in `backend/src/validations/*`. With `@asteasolutions/zod-to-openapi` you can derive an OpenAPI 3 spec, host it at `/api/docs`, and codegen a typed frontend client. Eliminates the manual `interface GroupData {...}` re-declarations in every frontend page.
+**Why:** the validation schemas already exist in `backend/src/validations/*`. With `@asteasolutions/zod-to-openapi` you can derive an OpenAPI 3 spec, host it at `/api/docs`, and codegen a typed frontend client. Eliminates the manual `interface GroupData {...}` re-declarations in every frontend page (still the convention today).
 
 **Files (new):**
 - `backend/src/openapi.ts` — registry that wraps each Zod schema with `.openapi(...)` metadata.
@@ -386,7 +266,7 @@ Effort: XS ≈ 15 min · S ≈ 1–2 h · M ≈ half day · L ≈ 1–2 days. Ri
 
 ## P3-6 — OpenTelemetry traces
 
-**Why:** pino logs are great for events but you can't follow a request's path across the backend → Prisma → Redash without OTEL.
+**Why:** pino logs are great for events but you can't follow a request's path across backend → Prisma → Redash/SES without OTEL.
 
 **Approach:**
 1. `npm i @opentelemetry/api @opentelemetry/sdk-node @opentelemetry/auto-instrumentations-node`.
@@ -394,22 +274,16 @@ Effort: XS ≈ 15 min · S ≈ 1–2 h · M ≈ half day · L ≈ 1–2 days. Ri
 3. Auto-instrumentation gives you free spans for every HTTP call (in + out) and every Prisma query.
 4. Ship traces to whatever Bachatt uses. If undecided, enable the console exporter to see the structure first, then switch.
 
-**Done when:** a single "approve request" action produces one trace showing: incoming HTTP → Prisma queries → outgoing Redash API → outgoing Slack webhook, all under one trace ID.
+**Done when:** a single "approve request" action produces one trace showing: incoming HTTP → Prisma queries → outgoing Redash API → outgoing Slack/SES, all under one trace ID.
 
 ---
 
-# Smaller wins (do anytime — each ~5–15 min)
+# Smaller wins (open — each ~5–15 min)
 
-These came out of the audit but didn't merit their own P-number. Pick one when you have a stray 10 minutes.
+The rest of the original tail list is done (see the note under the Done table). These two remain:
 
-- **`backend/src/middleware/error.middleware.ts`, `backend/src/services/scheduler.service.ts`, `backend/src/utils/errors.ts`**: switch `process.env.NODE_ENV === 'production'` checks to `config.isProd` (or `config.isDev`). Single source of truth.
-- **`backend/src/services/redash.provisioner.ts:46-52`**: don't hardcode `groupIds: [1]` when caching newly invited users. Fetch the actual default group from Redash, or store `[]`.
-- **`backend/src/services/scheduler.service.ts:51-57`**: parallelise `expireAccess` calls with `Promise.allSettled`. Sequential loop blocks if a backlog ever builds up.
-- **`backend/src/index.ts:52-77` (`/health` endpoint)**: add a Redis ping. Redis is defined in `docker-compose.yml` (currently commented out) but never health-checked from the API side.
-- **`frontend/src/pages/GroupDetail.tsx:85`**: replace `window.prompt('Enter a reason')` with a proper modal for the revoke-reason input.
-- **`frontend/src/components/layout/MainLayout.tsx`**: wrap children in a React `ErrorBoundary` so a single component crash doesn't blank the whole app.
-- **Frontend inline styles**: lift the giant inline-style objects in `Groups.tsx` and `Dashboard.tsx` into the existing `frontend/src/styles/global.css`. You're already loading it; it's barely used.
-- **`backend/src/services/notification.service.ts:39`**: extract the Slack message template strings to constants at the top of the file so the formatting is easy to change in one place.
+- **`frontend/src/pages/GroupDetail.tsx:104`**: replace `window.prompt('...Enter a reason')` with a proper modal for the revoke-reason input (matches the modal pattern used elsewhere).
+- **Frontend inline styles**: lift the large inline-style objects in `Groups.tsx` and `Dashboard.tsx` into the existing `frontend/src/styles/global.css` (CSS variables already defined there). You're already loading it; it's barely used.
 
 ---
 
@@ -417,12 +291,11 @@ These came out of the audit but didn't merit their own P-number. Pick one when y
 
 | Week | Items | Why |
 |------|-------|-----|
-| 1 | P1-1 + P1-3 + P1-4 | All mechanical, low risk, big readability win. |
-| 2 | P1-2 + P2-5 | Operational visibility — you'll notice drift and bad actors faster. |
-| 3 | P1-5 | Frontend hook. Pays off every page from now on. |
-| 4 | P2-3 + P2-4 | Lint + CI. Sets up the rails everything after this rides on. |
-| 5–6 | P2-1 (tests) | Take as long as you need. Cover the access workflow first. |
-| 7+ | Start picking from P2-2, P2-6, P3-* based on what hurts most. | |
+| 1 | P2-3 + P2-4 | Lint + CI. Sets up the rails everything after rides on. Mechanical, low risk. |
+| 2 | P2-5 + the two smaller wins | Operational visibility (audit filters) + quick UX cleanups. |
+| 3+ | P2-1 (tests) | Take as long as you need. Cover the access workflow + authz helpers first. |
+| then | P2-2, P2-6 | Bulk endpoints, then SSE. |
+| later | P3-2 → P3-3 → P3-4/5/6 | BullMQ first (SSE and idempotency build on it); page splits and tooling anytime. |
 
 You can also just open a chat and say *"what should I do next?"* — Claude will read this doc + check git log to see what's been done and suggest one item.
 
@@ -430,7 +303,8 @@ You can also just open a chat and say *"what should I do next?"* — Claude will
 
 # Notes for future Claude reading this doc
 
-- The audit that produced this list is in the chat history of session `claude/sleepy-mclean-c48446` (commit `36dbcad3`'s session).
+- The audit that produced the original list is in the chat history of session `claude/sleepy-mclean-c48446` (commit `36dbcad3`'s session). This revision (2026-06-01) re-verified every item against the tree at `42b20006`.
 - The user prefers to work directly on `main` — no worktrees, no feature branches. Any work goes into a clean `main` commit, then `git push`.
 - The user is a solo dev. Don't suggest workflows that require multiple reviewers / PR templates / code-owners.
-- When implementing an item, update this doc: tick the item as done in the quick index by replacing the row with `~~P1-1~~ Done in commit `<sha>``, and update the "What's already done" table at the top.
+- When implementing an item, update this doc: move the row into the **Done** table with its commit SHA / evidence, and strike it through in the Quick index.
+- Don't trust line numbers blindly — `Groups.tsx` and other large files drift. Grep for the pattern (e.g. `window.prompt`, `setInterval`) rather than jumping to a line.

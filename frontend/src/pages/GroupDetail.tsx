@@ -33,12 +33,23 @@ interface GroupDetailData {
   description: string;
   icon: string | null;
   color: string | null;
+  platform: string;
   externalGroupId: string | null;
   accessStatus: 'ACTIVE' | 'PENDING' | 'NONE';
   admins: GroupAdmin[];
   members: GroupMember[];
   tables: string[];
 }
+
+// Friendly display names per platform id. Falls back to a capitalised id so a
+// newly-added platform (e.g. "aws") still renders sensibly before it's listed.
+const PLATFORM_LABELS: Record<string, string> = {
+  redash: 'Redash',
+  aws: 'AWS',
+  jira: 'Jira',
+};
+const platformDisplayName = (platform: string): string =>
+  PLATFORM_LABELS[platform] ?? platform.charAt(0).toUpperCase() + platform.slice(1);
 
 export const GroupDetail: React.FC = () => {
   const { slug } = useParams<{ slug: string }>();
@@ -69,7 +80,7 @@ export const GroupDetail: React.FC = () => {
   // If the group fetch errors (e.g. 404), bounce back to the listing.
   React.useEffect(() => {
     if (groupQuery.isError) {
-      navigate('/groups?platform=redash');
+      navigate('/groups');
     }
   }, [groupQuery.isError, navigate]);
 
@@ -102,6 +113,9 @@ export const GroupDetail: React.FC = () => {
   const isSuperAdmin = user?.roles.includes('hermes_super_admin') || false;
   const isGroupAdminOfThisGroup = group.admins.some((adm) => adm.userId === user?.id);
   const canManage = isSuperAdmin || isGroupAdminOfThisGroup;
+  // Members who are also group admins: badge them and suppress Revoke (an admin's
+  // access is auto-granted by their role — demote them first to remove it).
+  const adminUserIds = new Set(group.admins.map((a) => a.userId));
 
   const renderIcon = (iconName: string | null, color: string | null) => {
     const LucideIcon = (Icons as any)[iconName || 'HelpCircle'] || Icons.HelpCircle;
@@ -122,7 +136,7 @@ export const GroupDetail: React.FC = () => {
       {/* Page Navigation */}
       <button 
         className="btn btn-outline" 
-        onClick={() => navigate('/groups?platform=redash')} 
+        onClick={() => navigate(`/groups?platform=${group.platform}`)}
         style={{ marginBottom: '24px', padding: '6px 12px' }}
       >
         <Icons.ChevronLeft size={16} /> Back to Groups
@@ -146,7 +160,7 @@ export const GroupDetail: React.FC = () => {
           <div className="detail-list">
             {group.externalGroupId && (
               <div className="detail-item">
-                <span className="detail-label">Redash Group ID</span>
+                <span className="detail-label">External Group ID</span>
                 <span className="detail-value">{group.externalGroupId}</span>
               </div>
             )}
@@ -275,9 +289,30 @@ export const GroupDetail: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {group.members.map((member) => (
+                  {group.members.map((member) => {
+                    const memberIsAdmin = adminUserIds.has(member.userId);
+                    return (
                     <tr key={member.id}>
-                      <td style={{ fontWeight: 700 }}>{member.userName.replace('_', ' ')}</td>
+                      <td style={{ fontWeight: 700 }}>
+                        {member.userName.replace('_', ' ')}
+                        {memberIsAdmin && (
+                          <span
+                            style={{
+                              marginLeft: 8,
+                              fontSize: 10,
+                              fontWeight: 800,
+                              letterSpacing: '0.04em',
+                              padding: '2px 8px',
+                              borderRadius: 999,
+                              background: 'var(--primary-light)',
+                              color: 'var(--primary)',
+                              border: '1px solid var(--primary)',
+                            }}
+                          >
+                            ADMIN
+                          </span>
+                        )}
+                      </td>
                       <td>{member.userEmail}</td>
                       <td>{formatDate(member.grantedAt)}</td>
                       <td>
@@ -297,6 +332,10 @@ export const GroupDetail: React.FC = () => {
                             <span style={{ fontSize: '12px', color: 'var(--text-light)', fontStyle: 'italic' }}>
                               Self Access
                             </span>
+                          ) : memberIsAdmin ? (
+                            <span style={{ fontSize: '12px', color: 'var(--text-light)', fontStyle: 'italic' }}>
+                              Admin · demote to remove
+                            </span>
                           ) : (
                             <button
                               className="btn btn-danger"
@@ -310,7 +349,8 @@ export const GroupDetail: React.FC = () => {
                         </td>
                       )}
                     </tr>
-                  ))}
+                  );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -337,8 +377,8 @@ export const GroupDetail: React.FC = () => {
       <PlatformInviteModal
         isOpen={isInviteModalOpen}
         onClose={() => setIsInviteModalOpen(false)}
-        platformId="redash"
-        platformName="Redash"
+        platformId={group.platform}
+        platformName={platformDisplayName(group.platform)}
         onSuccess={() => {
           // After submission, the modal closes itself; just refetch group data
           // in case the user's status changed.

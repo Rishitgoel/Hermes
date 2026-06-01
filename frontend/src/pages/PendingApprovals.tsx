@@ -32,6 +32,14 @@ export const PendingApprovals: React.FC = () => {
   const { data: requests = [], isLoading } = useQuery<PendingRequest[]>({
     queryKey: queryKeys.pendingRequests(),
     queryFn: () => apiClient.get('/api/access-requests/pending').then((r) => r.data),
+    // Requests are created in another session (the requester's), so the only way
+    // this admin view learns about a new one is by polling. Without these, the
+    // page piggybacks on the Sidebar's slow 60s badge poll, so a freshly
+    // submitted request can stay invisible here for up to a minute. Poll faster
+    // while the queue is open, and always refetch on navigation (overriding the
+    // 30s global staleTime) so "I just submitted it" requests show immediately.
+    refetchInterval: 15000,
+    refetchOnMount: 'always',
   });
 
   // Set of userIds whose group requests are blocked (no approved user-creation row yet).

@@ -40,7 +40,7 @@ export class GroupController extends BaseController {
         
         const hasActive = activeAccesses.some(a => a.groupId === g.id);
         const hasPending = pendingRequests.some(r => r.groupId === g.id);
-        const isKeycloakAdmin = this.user?.roles ? checkIsGroupAdmin(this.user.roles, g.slug) : false;
+        const isKeycloakAdmin = this.user?.roles ? checkIsGroupAdmin(this.user.roles, g.slug, g.platform) : false;
         const isAdminOfGroup = g.admins.some(adm => adm.userId === userId) || isKeycloakAdmin;
 
         if (isSuperAdmin || isAdminOfGroup) {
@@ -58,6 +58,7 @@ export class GroupController extends BaseController {
           description: g.description,
           icon: g.icon,
           color: g.color,
+          platform: g.platform,
           externalGroupId: g.externalGroupId,
           tables: g.tables,
           memberCount: g._count.userAccesses,
@@ -111,7 +112,7 @@ export class GroupController extends BaseController {
       });
 
       const isSuperAdmin = this.user?.roles.includes('hermes_super_admin') || false;
-      const isKeycloakAdmin = this.user?.roles ? checkIsGroupAdmin(this.user.roles, group.slug) : false;
+      const isKeycloakAdmin = this.user?.roles ? checkIsGroupAdmin(this.user.roles, group.slug, group.platform) : false;
       const isAdminOfGroup = group.admins.some(adm => adm.userId === userId) || isKeycloakAdmin;
       let accessStatus = 'NONE';
       if (isSuperAdmin || isAdminOfGroup) {
@@ -122,11 +123,16 @@ export class GroupController extends BaseController {
         accessStatus = 'PENDING';
       }
 
-      // Only insiders (super-admin, group admin, or current member) get the full
-      // member list. Random authenticated users get the public group card without
-      // others' names/emails.
-      const isInsider = isSuperAdmin || isAdminOfGroup || !!activeAccess;
-
+      // The roster shows everyone with active access — including admins, who hold an
+      // auto-enrolled grant. The frontend cross-references `admins` to badge them and
+      // suppress the Revoke action (an admin's access can't be revoked directly; they
+      // must be demoted first). This differs from the Admin Management page, whose
+      // "Members" bucket deliberately excludes admins (they live in their own section).
+      //
+      // Visibility: the roster is returned to every authenticated user, so it always
+      // matches the public member count shown on the group list. Mutating actions
+      // (Revoke) stay gated on the frontend by `canManage` (super-admin / group admin),
+      // so non-admins can see who's in a group but can't change its membership.
       const responseData = {
         id: group.id,
         name: group.name,
@@ -134,6 +140,7 @@ export class GroupController extends BaseController {
         description: group.description,
         icon: group.icon,
         color: group.color,
+        platform: group.platform,
         externalGroupId: group.externalGroupId,
         tables: group.tables,
         accessStatus,
@@ -144,17 +151,15 @@ export class GroupController extends BaseController {
           assignedAt: adm.assignedAt,
         })),
         memberCount: group.userAccesses.length,
-        members: isInsider
-          ? group.userAccesses.map(m => ({
-              id: m.id,
-              userId: m.userId,
-              userName: m.userName,
-              userEmail: m.userEmail,
-              grantedAt: m.grantedAt,
-              expiresAt: m.expiresAt,
-              grantedBy: m.grantedBy,
-            }))
-          : [],
+        members: group.userAccesses.map(m => ({
+          id: m.id,
+          userId: m.userId,
+          userName: m.userName,
+          userEmail: m.userEmail,
+          grantedAt: m.grantedAt,
+          expiresAt: m.expiresAt,
+          grantedBy: m.grantedBy,
+        })),
       };
 
       this.sendResponse(responseData, 'Group details retrieved successfully');

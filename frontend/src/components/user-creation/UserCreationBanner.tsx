@@ -67,9 +67,9 @@ export const UserCreationBanner: React.FC = () => {
       icon = <AlertTriangle size={24} />;
       title = 'Account request rejected';
       description = uc.rejectionReason
-        ? `An admin rejected your account request. Reason: "${uc.rejectionReason}". Contact your admin if you'd like to appeal.`
-        : 'An admin rejected your account request. Contact your admin if you\'d like to appeal.';
-      cta = { kind: 'button', label: 'View details', action: () => navigate('/account-status') };
+        ? `An admin rejected your account request. Reason: "${uc.rejectionReason}". You can address the feedback and submit a new request.`
+        : 'An admin rejected your account request. You can submit a new request whenever you\'re ready.';
+      cta = { kind: 'button', label: 'Request again', action: () => setIsFormOpen(true) };
       accent = { bg: 'var(--status-rejected-bg)', text: 'var(--status-rejected-text)', border: 'var(--status-rejected-text)' };
       break;
     default:

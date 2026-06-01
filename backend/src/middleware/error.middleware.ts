@@ -3,6 +3,7 @@ import { BaseError, NotFoundError, errorMonitor } from '../utils/errors';
 import { ApiResponse } from '../controllers/base.controller';
 import { AuthenticatedUser } from './auth.middleware';
 import defaultLogger from '../utils/logger';
+import config from '../config/config';
 
 interface ExtendedRequest extends Request {
   requestId?: string;
@@ -57,7 +58,7 @@ export const errorHandler = (
     const response: ApiResponse = {
       success: false,
       error:
-        process.env.NODE_ENV === 'production' && err.statusCode >= 500
+        config.isProd && err.statusCode >= 500
           ? 'Internal server error occurred'
           : err.message,
       metadata: {
@@ -67,7 +68,7 @@ export const errorHandler = (
       },
     };
 
-    if (process.env.NODE_ENV !== 'production') {
+    if (!config.isProd) {
       response.metadata = {
         ...response.metadata,
         context: err.context,
@@ -104,7 +105,7 @@ export const errorHandler = (
   const response: ApiResponse = {
     success: false,
     error:
-      process.env.NODE_ENV === 'production'
+      config.isProd
         ? 'Internal server error occurred'
         : err?.message || 'Unknown error occurred',
     metadata: {
@@ -113,7 +114,7 @@ export const errorHandler = (
     },
   };
 
-  if (process.env.NODE_ENV !== 'production') {
+  if (!config.isProd) {
     response.metadata = {
       ...response.metadata,
       stack: err?.stack || 'No stack trace available',

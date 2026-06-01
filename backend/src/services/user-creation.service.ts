@@ -50,13 +50,32 @@ export class UserCreationService {
     if (existing) return normalizeInviteLink(existing);
 
     const lowerEmail = user.email.toLowerCase();
-    const redashUser = await prisma.redashUser.findUnique({
-      where: { email: lowerEmail },
+
+    // userEmail is unique on this table. If a row already exists for this email under
+    // a *different* Keycloak userId (same person re-created in Keycloak, or a shared
+    // address), adopt it instead of crashing on the unique constraint — the email is
+    // the stable identity here and /auth/me only uses this row for display.
+    const byEmail = await prisma.userCreationRequest.findUnique({
+      where: { userEmail: lowerEmail },
+    });
+    if (byEmail) {
+      logger.warn(
+        { userId: user.id, existingUserId: byEmail.userId, email: lowerEmail },
+        'user-creation request exists for this email under a different userId — returning existing record',
+      );
+      return normalizeInviteLink(byEmail);
+    }
+
+    // The user-creation gate is Redash-specific today, so we read the Redash
+    // slice of the generic platform cache directly.
+    const cachedRedashUser = await prisma.platformExternalUser.findUnique({
+      where: { platform_email: { platform: 'redash', email: lowerEmail } },
     });
 
-    if (redashUser && !redashUser.isDisabled && !redashUser.isInvitationPending) {
+    if (cachedRedashUser && !cachedRedashUser.isDisabled && !cachedRedashUser.isPending) {
+      const redashUserId = parseInt(cachedRedashUser.externalId, 10);
       logger.info(
-        { userId: user.id, email: lowerEmail, redashUserId: redashUser.id },
+        { userId: user.id, email: lowerEmail, redashUserId },
         '🌱 Auto-completing user-creation request (user already exists on Redash)',
       );
       return prisma.userCreationRequest.create({
@@ -65,7 +84,7 @@ export class UserCreationService {
           userName: user.username,
           userEmail: lowerEmail,
           status: UserCreationStatus.COMPLETED,
-          externalUserId: redashUser.id,
+          externalUserId: redashUserId,
           completedAt: new Date(),
         },
       }).then(normalizeInviteLink);
@@ -81,7 +100,14 @@ export class UserCreationService {
     }).then(normalizeInviteLink);
   }
 
-  /** Move DRAFT -> PENDING with a justification. */
+  /**
+   * Move DRAFT -> PENDING with a justification.
+   *
+   * Also handles re-requesting after a rejection: a REJECTED request can be
+   * submitted again, which gives the user a fresh review cycle. In that case we
+   * clear the previous review fields (reviewer, note, rejection reason) so admins
+   * see a clean pending request rather than last round's decision.
+   */
   async submitRequest(userId: string, justification: string) {
     if (!justification || justification.trim().length < 10) {
       throw new ValidationError('Justification must be at least 10 characters long');
@@ -91,7 +117,8 @@ export class UserCreationService {
     if (!row) {
       throw new NotFoundError('User-creation request not found. Refresh the page and try again.');
     }
-    if (row.status !== UserCreationStatus.DRAFT) {
+    const isResubmit = row.status === UserCreationStatus.REJECTED;
+    if (row.status !== UserCreationStatus.DRAFT && !isResubmit) {
       throw new ConflictError(`Cannot submit: request is already ${row.status}`);
     }
 
@@ -101,8 +128,32 @@ export class UserCreationService {
         justification: justification.trim(),
         status: UserCreationStatus.PENDING,
         submittedAt: new Date(),
+        // Re-requesting after a rejection: wipe the prior decision so the row
+        // reads as a clean pending request again.
+        ...(isResubmit
+          ? {
+              reviewerId: null,
+              reviewerName: null,
+              reviewNote: null,
+              reviewedAt: null,
+              rejectionReason: null,
+            }
+          : {}),
       },
     });
+
+    if (isResubmit) {
+      await prisma.auditEntry.create({
+        data: {
+          action: 'USER_CREATION_RESUBMITTED',
+          performerId: updated.userId,
+          performerName: updated.userName,
+          targetUserId: updated.userId,
+          targetUserName: updated.userName,
+          details: { justification: updated.justification },
+        },
+      });
+    }
 
     eventBus.emitAccessEvent({
       type: 'user-creation.submitted',

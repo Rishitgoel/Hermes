@@ -1,8 +1,11 @@
 import prisma from '../config/prisma';
 import slackService from './slack.service';
+import emailService from './email.service';
 import logger from '../utils/logger';
 import config from '../config/config';
 import keycloakSetupService from '../config/keycloak-setup';
+import * as templates from '../utils/email-templates';
+import type { EmailContent } from '../utils/email-templates';
 
 /**
  * Escape user-supplied text before interpolating into a Slack message.
@@ -16,6 +19,23 @@ function escapeSlackText(text: string | null | undefined): string {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+}
+
+/** "THREE_MONTHS" → "three months". Global flag so multi-underscore values
+ *  render consistently with the email templates (which use /_/g). */
+function formatDuration(duration: string): string {
+  return duration.replace(/_/g, ' ').toLowerCase();
+}
+
+interface AdminRecipient {
+  userId: string;
+  email?: string | null;
+}
+
+interface InAppContent {
+  title: string;
+  message: string;
+  link: string;
 }
 
 export class NotificationService {
@@ -41,7 +61,55 @@ export class NotificationService {
     }
   }
 
-  // User requests access -> notify Group Admins (in-app) + Slack ping
+  /**
+   * Send a personal email + Slack DM to one person, both keyed on their email.
+   * No-ops cleanly if the address is missing. Each channel fails silently inside
+   * its own service, so one bad send never blocks the other.
+   */
+  private async emailAndDm(
+    email: string | undefined | null,
+    content: EmailContent,
+    slackText: string,
+  ): Promise<void> {
+    if (!email) return;
+    // Run both channels concurrently and independently — each already fails
+    // silently inside its own service, and allSettled guarantees one channel's
+    // failure can never skip the other.
+    await Promise.allSettled([
+      emailService.sendEmail({
+        to: email,
+        subject: content.subject,
+        html: content.html,
+        text: content.text,
+      }),
+      slackService.sendDirectMessage(email, slackText),
+    ]);
+  }
+
+  /**
+   * Notify a set of admins on all three channels (in-app + email + Slack DM),
+   * de-duplicated by userId so a person holding multiple admin roles is notified
+   * once. Returns the count of distinct people notified. Single home for the
+   * "fan out to admins" pattern used by both the group-request and
+   * account-request notifications.
+   */
+  private async fanOutToAdmins(
+    recipients: AdminRecipient[],
+    inApp: InAppContent,
+    email: EmailContent,
+    dm: string,
+  ): Promise<number> {
+    const seen = new Set<string>();
+    for (const r of recipients) {
+      if (seen.has(r.userId)) continue;
+      seen.add(r.userId);
+      await this.createNotification(r.userId, inApp.title, inApp.message, inApp.link);
+      await this.emailAndDm(r.email, email, dm);
+    }
+    return seen.size;
+  }
+
+  // User requests access -> notify Group + Platform admins (in-app + email + Slack DM) + team channel ping
   async notifyRequestCreated(
     requestId: string,
     groupId: string,
@@ -50,36 +118,66 @@ export class NotificationService {
     justification: string,
     duration: string
   ): Promise<void> {
-    // 1. Send Slack Ping
-    const slackMsg = `📋 *Hermes Access Request*\n--------------------------\n*${escapeSlackText(requesterName)}* requested access to the *${escapeSlackText(groupName)}* group.\nReason: "${escapeSlackText(justification)}"\nDuration: ${duration.replace('_', ' ').toLowerCase()}\n\n👉 Review in Hermes: ${config.frontend.url}/pending-approvals`;
+    // 1. Team channel ping (optional shared feed)
+    const slackMsg = `📋 *Hermes Access Request*\n--------------------------\n*${escapeSlackText(requesterName)}* requested access to the *${escapeSlackText(groupName)}* group.\nReason: "${escapeSlackText(justification)}"\nDuration: ${formatDuration(duration)}\n\n👉 Review in Hermes: ${config.frontend.url}/pending-approvals`;
     await slackService.sendPing(slackMsg);
 
-    // 2. Query Group Admins from DB and send in-app notification
+    // 2. Notify everyone who can act on this request: the group's own admins AND
+    //    the platform admins of the group's platform (a platform admin can
+    //    approve any group on their platform — see authz.isGroupAdminOf).
+    //    If neither exists for this group, fall back to super admins so a pending
+    //    request is never left with nobody notified to action it.
     try {
-      const groupAdmins = await prisma.groupAdmin.findMany({
-        where: { groupId },
+      const group = await prisma.group.findUnique({
+        where: { id: groupId },
+        select: { platform: true },
       });
 
-      for (const admin of groupAdmins) {
-        await this.createNotification(
-          admin.userId,
-          'Pending Approval Request',
-          `${requesterName} requested access to ${groupName}.`,
-          `/pending-approvals`
-        );
+      const [groupAdmins, platformAdmins] = await Promise.all([
+        prisma.groupAdmin.findMany({ where: { groupId } }),
+        group?.platform
+          ? prisma.platformAdmin.findMany({ where: { platform: group.platform } })
+          : Promise.resolve([] as { userId: string; userEmail: string }[]),
+      ]);
+
+      let recipients: AdminRecipient[] = [
+        ...groupAdmins.map((a) => ({ userId: a.userId, email: a.userEmail })),
+        ...platformAdmins.map((a) => ({ userId: a.userId, email: a.userEmail })),
+      ];
+      if (recipients.length === 0) {
+        const supers = await keycloakSetupService.getSuperAdmins();
+        recipients = supers.map((s) => ({ userId: s.id, email: s.email }));
+      }
+
+      const email = templates.adminNewGroupRequest({ requesterName, groupName, justification, duration });
+      const dm = `📋 *${escapeSlackText(requesterName)}* requested access to *${escapeSlackText(groupName)}* (${formatDuration(duration)}).\nReason: "${escapeSlackText(justification)}"\n👉 ${config.frontend.url}/pending-approvals`;
+
+      const notified = await this.fanOutToAdmins(
+        recipients,
+        {
+          title: 'Pending Approval Request',
+          message: `${requesterName} requested access to ${groupName}.`,
+          link: '/pending-approvals',
+        },
+        email,
+        dm,
+      );
+      if (notified === 0) {
+        logger.warn({ groupId }, 'notifyRequestCreated: no admins resolved to notify');
       }
     } catch (error: any) {
-      logger.error('Failed to notify group admins in-app:', error.message);
+      logger.error('Failed to notify group/platform admins:', error.message);
     }
   }
 
-  // Request is approved/rejected -> notify requester
+  // Request is approved/rejected -> notify requester (in-app + email + Slack DM)
   async notifyRequestReviewed(
     requesterId: string,
     groupName: string,
     approved: boolean,
     reviewerName: string,
-    note?: string
+    note?: string,
+    requesterEmail?: string,
   ): Promise<void> {
     const statusText = approved ? 'APPROVED' : 'REJECTED';
     const title = `Access Request ${statusText}`;
@@ -89,9 +187,12 @@ export class NotificationService {
 
     await this.createNotification(requesterId, title, message, approved ? '/' : '/my-requests');
 
-    // Notify requester via Slack if possible (simulation simply pings admin webhook channel)
-    const slackMsg = `📢 *Hermes Access Update*\n--------------------------\nAccess request to *${escapeSlackText(groupName)}* was *${statusText}* by ${escapeSlackText(reviewerName)}.${note ? `\nNote: "${escapeSlackText(note)}"` : ''}`;
-    await slackService.sendPing(slackMsg);
+    // Personal email + Slack DM to the requester.
+    const email = approved
+      ? templates.userGroupApproved({ groupName, reviewerName, note })
+      : templates.userGroupRejected({ groupName, reviewerName, note });
+    const dm = `📢 Access request to *${escapeSlackText(groupName)}* was *${statusText}* by ${escapeSlackText(reviewerName)}.${note ? `\nNote: "${escapeSlackText(note)}"` : ''}`;
+    await this.emailAndDm(requesterEmail, email, dm);
   }
 
   // Access is auto-expired
@@ -138,11 +239,6 @@ export class NotificationService {
     );
   }
 
-  // Slack-flavoured mention of a user that linkifies their email in the channel.
-  private formatUserMention(email: string): string {
-    return `<mailto:${email}|${email}>`;
-  }
-
   // User submitted a user-creation request → notify all super-admins.
   async notifyUserCreationSubmitted(
     requestId: string,
@@ -155,34 +251,36 @@ export class NotificationService {
 
     try {
       // Super-admins are the only ones who can approve user-creation. Look them
-      // up directly via Keycloak (or the sim super-admin UUID in dev). Then also
-      // fan out to every distinct GroupAdmin so they see new-user signups
-      // without needing approval rights.
-      const [superAdminIds, groupAdmins] = await Promise.all([
-        keycloakSetupService.getSuperAdminUserIds(),
+      // up directly via Keycloak (or the sim super-admin in dev). Then also
+      // fan out to every distinct Platform/Group admin so the lower tiers see
+      // new-user signups without needing approval rights.
+      const [superAdmins, platformAdmins, groupAdmins] = await Promise.all([
+        keycloakSetupService.getSuperAdmins(),
+        prisma.platformAdmin.findMany({ distinct: ['userId'] }),
         prisma.groupAdmin.findMany({ distinct: ['userId'] }),
       ]);
 
-      const seen = new Set<string>();
-      const fanOut = async (userId: string) => {
-        if (seen.has(userId)) return;
-        seen.add(userId);
-        await this.createNotification(
-          userId,
-          'Pending user approval',
-          `${userName} requested a Hermes account.`,
-          `/pending-approvals`,
-        );
-      };
+      const emailContent = templates.adminNewAccountRequest({ userName, userEmail, justification });
+      const dm = `🆕 *${escapeSlackText(userName)}* (${escapeSlackText(userEmail)}) requested a Hermes account.\n${justification ? `Reason: "${escapeSlackText(justification)}"\n` : ''}👉 ${config.frontend.url}/pending-approvals`;
 
-      for (const userId of superAdminIds) await fanOut(userId);
-      for (const admin of groupAdmins) await fanOut(admin.userId);
+      const recipients: AdminRecipient[] = [
+        ...superAdmins.map((a) => ({ userId: a.id, email: a.email })),
+        ...platformAdmins.map((a) => ({ userId: a.userId, email: a.userEmail })),
+        ...groupAdmins.map((a) => ({ userId: a.userId, email: a.userEmail })),
+      ];
 
-      if (seen.size === 0) {
-        logger.warn(
-          { requestId },
-          'notifyUserCreationSubmitted: no super-admins or group-admins to notify',
-        );
+      const notified = await this.fanOutToAdmins(
+        recipients,
+        {
+          title: 'Pending user approval',
+          message: `${userName} requested a Hermes account.`,
+          link: '/pending-approvals',
+        },
+        emailContent,
+        dm,
+      );
+      if (notified === 0) {
+        logger.warn({ requestId }, 'notifyUserCreationSubmitted: no admins to notify');
       }
     } catch (err: any) {
       logger.error('Failed to fan out user-creation.submitted notifications:', err.message);
@@ -202,14 +300,15 @@ export class NotificationService {
       '/account-status',
     );
 
-    const slackMsg = `✅ *Hermes — Account Approved*\n--------------------------\n${this.formatUserMention(userEmail)} your Hermes account is ready! Check your inbox for the Redash setup email.\n\n👉 ${config.frontend.url}/account-status`;
-    await slackService.sendPing(slackMsg);
+    const dm = `✅ Your Hermes account is approved by ${escapeSlackText(reviewerName)}! Check your inbox for the Redash setup email.\n👉 ${config.frontend.url}/account-status`;
+    await this.emailAndDm(userEmail, templates.userAccountApproved({ reviewerName }), dm);
   }
 
   async notifyUserCreationRejected(
     requesterId: string,
     reviewerName: string,
     note?: string,
+    userEmail?: string,
   ): Promise<void> {
     await this.createNotification(
       requesterId,
@@ -217,6 +316,9 @@ export class NotificationService {
       `${reviewerName} declined your Hermes account request.${note ? ` Reason: "${note}"` : ''}`,
       '/account-status',
     );
+
+    const dm = `❌ Your Hermes account request was declined by ${escapeSlackText(reviewerName)}.${note ? `\nReason: "${escapeSlackText(note)}"` : ''}`;
+    await this.emailAndDm(userEmail, templates.userAccountRejected({ reviewerName, note }), dm);
   }
 
   async notifyUserCreationCompleted(
@@ -230,8 +332,8 @@ export class NotificationService {
       '/',
     );
 
-    const slackMsg = `🎉 *Hermes — Account Setup Complete*\n--------------------------\n${this.formatUserMention(userEmail)} has finished Redash setup and any pending group memberships have been provisioned.`;
-    await slackService.sendPing(slackMsg);
+    const dm = `🎉 You've finished Redash setup — your Hermes account is fully active and any approved group memberships have been provisioned.\n👉 ${config.frontend.url}/`;
+    await this.emailAndDm(userEmail, templates.userAccountSetupComplete(), dm);
   }
 }
 

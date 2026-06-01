@@ -210,8 +210,13 @@ export const AccountStatus: React.FC = () => {
               </blockquote>
             )}
             <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
-              Contact your admin if you'd like to appeal or resubmit.
+              You can address the feedback above and submit a new request, or contact your admin
+              if you'd like to appeal.
             </p>
+            <button type="button" className="btn btn-primary" onClick={() => setIsFormOpen(true)}>
+              <Icons.Send size={14} style={{ marginRight: '6px' }} />
+              Request again
+            </button>
           </>
         );
       case 'COMPLETED':

@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client';
+import config from '../../src/config/config';
 
 const prisma = new PrismaClient();
 
@@ -73,9 +74,21 @@ async function main() {
         externalGroupId: group.externalGroupId,
         tables: group.tables,
       },
-      create: group,
+      // platform is required (no schema default). All seeded groups are Redash.
+      create: { ...group, platform: 'redash' },
     });
     console.log(`Upserted group: ${upserted.name} (${upserted.slug})`);
+  }
+
+  // Sim-only fixtures below: fake admin/member rows that mirror the simulation
+  // identities (group-admin-uuid-2222, platform-admin-uuid-4444). They reference
+  // non-existent Keycloak users, so seeding them into a LIVE database just creates
+  // drift the reconciliation job removes on its next run. Only plant them in
+  // simulation mode; in live mode, assign admins through the Admin Management UI.
+  if (!config.isSimulation) {
+    console.log('Skipping sim admin/access fixtures (live mode) — assign admins via the Admin Management UI.');
+    console.log('Seeding completed successfully!');
+    return;
   }
 
   console.log('Seeding default group admin for Growth...');
@@ -137,6 +150,31 @@ async function main() {
     }
     console.log('Seeded active UserAccess for Growth admin: Yogesh Verma');
   }
+
+  // Seed a Redash platform admin (mirrors the `platform_admin` simulation
+  // identity in auth.middleware) so the three-tier model is testable locally.
+  console.log('Seeding default platform admin for Redash...');
+  await prisma.platformAdmin.upsert({
+    where: {
+      userId_platform: {
+        userId: 'platform-admin-uuid-4444',
+        platform: 'redash',
+      },
+    },
+    update: {
+      userName: 'Neha_Sharma',
+      userEmail: 'neha.sharma@bachatt.app',
+      assignedBy: 'system',
+    },
+    create: {
+      userId: 'platform-admin-uuid-4444',
+      platform: 'redash',
+      userName: 'Neha_Sharma',
+      userEmail: 'neha.sharma@bachatt.app',
+      assignedBy: 'system',
+    },
+  });
+  console.log('Seeded Redash platform admin: Neha Sharma');
 
   console.log('Seeding completed successfully!');
 }

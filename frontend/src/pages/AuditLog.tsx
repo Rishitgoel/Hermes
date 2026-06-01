@@ -101,7 +101,9 @@ export const AuditLog: React.FC = () => {
       return `Requested duration: ${details.duration?.replace('_', ' ').toLowerCase()}`;
     }
     if (entry.action === 'ACCESS_GRANTED') {
-      return `Access granted by admin. Redash User ID: ${details.redashUserId || 'mock'}`;
+      // `externalUserId` is the platform-agnostic key; older rows still carry the
+      // legacy `redashUserId`, so fall back to it for historic entries.
+      return `Access granted by admin. Platform User ID: ${details.externalUserId ?? details.redashUserId ?? 'mock'}`;
     }
     if (entry.action === 'ACCESS_REVOKED') {
       return `Revoked. Reason: "${details.reason || 'manual'}"`;
@@ -110,7 +112,7 @@ export const AuditLog: React.FC = () => {
       return `Expired (time-bound grant ended)`;
     }
     if (entry.action === 'MANUAL_SYNC_TRIGGERED') {
-      return `Redash synced: ${details.usersSynced} users, ${details.groupsSynced} groups`;
+      return `${details.platform ?? 'Platform'} synced: ${details.usersSynced} users, ${details.groupsSynced} groups`;
     }
     return JSON.stringify(details);
   };
@@ -148,7 +150,7 @@ export const AuditLog: React.FC = () => {
           style={{ gap: '8px' }}
         >
           <RefreshCw size={16} style={{ animation: isSyncing ? 'spin 1.5s linear infinite' : 'none' }} />
-          {isSyncing ? 'Syncing...' : 'Sync Redash Cache'}
+          {isSyncing ? 'Syncing...' : 'Sync Platform Cache'}
         </button>
       </div>
 

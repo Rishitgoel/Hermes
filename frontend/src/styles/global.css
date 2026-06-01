@@ -671,7 +671,10 @@ a:hover {
   border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   box-shadow: var(--shadow-sm);
-  overflow: hidden;
+  /* visible (not hidden) so a row's info tooltip/popover can escape the top
+     edge of the table instead of being clipped. The table's own corners are
+     rounded below to preserve the rounded-card look. */
+  overflow: visible;
   margin-top: 16px;
 }
 
@@ -679,6 +682,21 @@ a:hover {
   width: 100%;
   border-collapse: collapse;
   text-align: left;
+}
+
+/* Round the outer table corners directly, since the container no longer clips
+   them with overflow: hidden. */
+.hermes-table thead tr:first-child th:first-child {
+  border-top-left-radius: var(--radius-lg);
+}
+.hermes-table thead tr:first-child th:last-child {
+  border-top-right-radius: var(--radius-lg);
+}
+.hermes-table tbody tr:last-child td:first-child {
+  border-bottom-left-radius: var(--radius-lg);
+}
+.hermes-table tbody tr:last-child td:last-child {
+  border-bottom-right-radius: var(--radius-lg);
 }
 
 .hermes-table th {

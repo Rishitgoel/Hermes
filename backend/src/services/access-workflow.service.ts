@@ -161,6 +161,7 @@ export class AccessWorkflowService {
         type: 'request.rejected',
         payload: {
           requesterId: request.requesterId,
+          requesterEmail: request.requesterEmail,
           groupName: request.group.name,
           reviewerName: reviewer.username,
           note,
@@ -241,7 +242,7 @@ export class AccessWorkflowService {
       },
     });
 
-    return this._provision(request, { id: reviewer.id, name: reviewer.username });
+    return this._provision(request, { id: reviewer.id, name: reviewer.username }, note);
   }
 
   /**
@@ -250,14 +251,29 @@ export class AccessWorkflowService {
    * already been moved to PROVISIONING by the caller; on success transitions to
    * PROVISIONED, on failure to PROVISION_FAILED.
    */
+  /**
+   * Resolve the platform key for a group, or throw if it isn't configured.
+   * Platform routing is explicit — there is no implicit default, because
+   * guessing would silently provision against the wrong system.
+   */
+  private requirePlatform(group: { platform: string | null; name: string }): string {
+    if (!group.platform) {
+      throw new ValidationError(`Group "${group.name}" has no platform configured`);
+    }
+    return group.platform.toLowerCase();
+  }
+
   private async _provision(
     request: AccessRequestWithGroup,
     performer: { id: string; name: string },
+    note?: string,
   ) {
     logger.info(`Starting provisioning for request ${request.id}...`);
 
     try {
-      const platform = request.group.platform || 'redash';
+      // Platform routing happens here: the registry hands back the adapter
+      // registered under this group's platform key (Redash today, AWS next).
+      const platform = this.requirePlatform(request.group);
       const provisioner = provisioningRegistry.get(platform);
 
       const externalGroupId = request.group.externalGroupId;
@@ -373,8 +389,13 @@ export class AccessWorkflowService {
         type: 'request.approved',
         payload: {
           requesterId: request.requesterId,
+          requesterEmail: request.requesterEmail,
           groupName: request.group.name,
-          reviewerName: performer.name,
+          // The persisted reviewer wins so the post-setup path shows the real
+          // approving admin, not "System (post-setup)". note falls back to the
+          // note stored at review time (post-setup path has no inline note).
+          reviewerName: request.reviewerName ?? performer.name,
+          note: note ?? request.reviewNote ?? undefined,
         },
         timestamp: new Date(),
       });
@@ -452,6 +473,7 @@ export class AccessWorkflowService {
         type: 'request.rejected',
         payload: {
           requesterId: r.requesterId,
+          requesterEmail: r.requesterEmail,
           groupName: r.group.name,
           reviewerName: 'System',
           note,
@@ -511,6 +533,129 @@ export class AccessWorkflowService {
     return { provisioned, failed };
   }
 
+  /**
+   * Ensure a Keycloak group-admin actually holds real membership in the groups
+   * they administer. The Groups list shows admins as ACTIVE (a cosmetic
+   * short-circuit in group.controller), but that's not a real grant — this
+   * creates the UserAccess row + provisions them on the platform so they're an
+   * actual member of the group on Redash.
+   *
+   * Called lazily from GET /auth/me once the user's Redash account is COMPLETED,
+   * since that's the only point where we have both their Keycloak roles (to know
+   * which groups they admin) and a finalized platform account. Idempotent and
+   * self-healing: skips any group where an active grant already exists, the
+   * group is missing/inactive, or it has no externalGroupId. Per-slug try/catch
+   * so one failure doesn't block the rest.
+   */
+  async ensureGroupAdminEnrollment(
+    user: { id: string; username: string; email: string },
+    adminGroupSlugs: string[],
+  ): Promise<{ enrolled: number }> {
+    if (adminGroupSlugs.length === 0) return { enrolled: 0 };
+
+    let enrolled = 0;
+    for (const slug of adminGroupSlugs) {
+      try {
+        const created = await this.enrollGroupAdminInGroup(user, slug);
+        if (created) enrolled += 1;
+      } catch (err: any) {
+        logger.error(
+          { userId: user.id, slug, error: err.message },
+          'Failed to auto-enroll group-admin into their group',
+        );
+      }
+    }
+    return { enrolled };
+  }
+
+  /** Provision + record a single group-admin auto-enrollment. Returns true if a
+   *  new grant was created, false if it was a no-op (already a member, group not
+   *  provisionable, etc.). */
+  private async enrollGroupAdminInGroup(
+    user: { id: string; username: string; email: string },
+    slug: string,
+  ): Promise<boolean> {
+    const group = await prisma.group.findUnique({ where: { slug } });
+    if (!group || !group.isActive) return false;
+
+    // Already a real member → nothing to do (idempotent across repeated logins).
+    const existing = await prisma.userAccess.findFirst({
+      where: { userId: user.id, groupId: group.id, isActive: true },
+    });
+    if (existing) return false;
+
+    if (!group.externalGroupId) {
+      logger.warn(
+        { slug, groupId: group.id },
+        'Skipping group-admin auto-enroll — group has no externalGroupId configured',
+      );
+      return false;
+    }
+
+    const platform = this.requirePlatform(group);
+    const provisioner = provisioningRegistry.get(platform);
+
+    const result = await provisioner.provision({
+      email: user.email,
+      name: user.username,
+      externalGroupId: group.externalGroupId,
+    });
+
+    const performer = { id: 'system_admin_enroll', name: 'System (group-admin auto-enroll)' };
+
+    try {
+      const userAccess = await prisma.userAccess.create({
+        data: {
+          userId: user.id,
+          userName: user.username,
+          userEmail: user.email,
+          groupId: group.id,
+          externalUserId: result.externalUserId,
+          isActive: true,
+          grantedAt: new Date(),
+          expiresAt: null, // group-admin enrollment is permanent
+          grantedBy: performer.name,
+          accessRequestId: null, // no AccessRequest — assignment came from Keycloak
+        },
+      });
+
+      await prisma.auditEntry.create({
+        data: {
+          action: 'ACCESS_GRANTED',
+          performerId: performer.id,
+          performerName: performer.name,
+          targetUserId: user.id,
+          targetUserName: user.username,
+          groupId: group.id,
+          details: {
+            userAccessId: userAccess.id,
+            platform,
+            externalUserId: result.externalUserId,
+            externalGroupId: group.externalGroupId,
+            reason: 'Group-admin auto-enrollment',
+          },
+        },
+      });
+
+      logger.info(
+        { userId: user.id, slug, groupId: group.id },
+        '✅ Auto-enrolled group-admin into their group',
+      );
+      return true;
+    } catch (createErr: any) {
+      // Concurrent enroll: partial unique (user_id, group_id) WHERE is_active = true
+      // fired. Treat as already provisioned, mirroring _provision's P2002 handling.
+      if (createErr?.code === 'P2002') {
+        logger.info(
+          { userId: user.id, slug },
+          'Group-admin already enrolled concurrently — skipping',
+        );
+        return false;
+      }
+      throw createErr;
+    }
+  }
+
   // Revoke Access (Admin)
   async revokeAccess(
     userAccessId: string,
@@ -529,11 +674,11 @@ export class AccessWorkflowService {
     // 1. Remove from platform Group
     const externalUserId = access.externalUserId;
     const externalGroupId = access.group.externalGroupId;
-    const platform = access.group.platform || 'redash';
+    const platform = this.requirePlatform(access.group);
 
     if (externalUserId && externalGroupId) {
       try {
-        const provisioner = provisioningRegistry.get(platform.toLowerCase());
+        const provisioner = provisioningRegistry.get(platform);
         await provisioner.deprovision({ externalUserId, externalGroupId });
       } catch (err: any) {
         logger.error(`Failed to deprovision user from platform ${platform} during revocation of ${userAccessId}:`, err.message);
@@ -607,11 +752,11 @@ export class AccessWorkflowService {
     // 1. Remove from platform Group
     const externalUserId = access.externalUserId;
     const externalGroupId = access.group.externalGroupId;
-    const platform = access.group.platform || 'redash';
+    const platform = this.requirePlatform(access.group);
 
     if (externalUserId && externalGroupId) {
       try {
-        const provisioner = provisioningRegistry.get(platform.toLowerCase());
+        const provisioner = provisioningRegistry.get(platform);
         await provisioner.deprovision({ externalUserId, externalGroupId });
       } catch (err: any) {
         logger.error(`Scheduler failed to deprovision user from platform ${platform} during expiry of ${userAccessId}:`, err.message);

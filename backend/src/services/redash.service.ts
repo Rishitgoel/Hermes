@@ -23,6 +23,18 @@ export class RedashService {
   private apiKey: string;
   private isSimulation: boolean;
 
+  /**
+   * Per-Redash-user serialization for group-membership mutations. Redash's
+   * add/remove-member endpoints do a non-atomic read-modify-write on the user's
+   * `group_ids` array, so two concurrent mutations for the SAME user clobber each
+   * other (lost update). Approving N groups in bulk fires N concurrent calls and
+   * would silently drop a membership while still returning 200. We chain same-user
+   * mutations so each one observes the previous one's committed state. In-process
+   * only (Hermes runs single-instance); keyed by Redash user id so different users
+   * still mutate in parallel.
+   */
+  private userMutationChains = new Map<number, Promise<unknown>>();
+
   constructor() {
     this.baseUrl = config.redash.baseUrl;
     this.apiKey = config.redash.apiKey;
@@ -37,6 +49,24 @@ export class RedashService {
         'Content-Type': 'application/json',
       },
     });
+  }
+
+  /** Run `task` only after any in-flight membership mutation for the same Redash
+   *  user has settled, serializing all of one user's mutations. */
+  private withUserLock<T>(redashUserId: number, task: () => Promise<T>): Promise<T> {
+    const prev = this.userMutationChains.get(redashUserId) ?? Promise.resolve();
+    // Run the task whether or not the previous one in the chain succeeded.
+    const run = prev.then(task, task);
+    // Store a non-throwing tail so a failed task can't poison the next waiter,
+    // and clean the map entry once we're the last link to avoid unbounded growth.
+    const tail = run.catch(() => {});
+    this.userMutationChains.set(redashUserId, tail);
+    tail.then(() => {
+      if (this.userMutationChains.get(redashUserId) === tail) {
+        this.userMutationChains.delete(redashUserId);
+      }
+    });
+    return run;
   }
 
   // Sync Users: Fetches all active users from Redash
@@ -241,21 +271,25 @@ export class RedashService {
       return;
     }
 
-    try {
-      const client = this.getClient();
-      await client.post(`/api/groups/${redashGroupId}/members`, {
-        user_id: redashUserId,
-      });
-      logger.info(`📊 Redash: Successfully added User ${redashUserId} to Group ${redashGroupId}`);
-    } catch (error: any) {
-      // Check if user is already a member
-      if (error.response && error.response.status === 400 && error.response.data?.message?.includes('already a member')) {
-        logger.info(`📊 Redash: User ${redashUserId} is already a member of Group ${redashGroupId}`);
-        return;
+    // Serialize per user: concurrent adds for one user race on Redash's group_ids
+    // array and lose memberships (see withUserLock).
+    return this.withUserLock(redashUserId, async () => {
+      try {
+        const client = this.getClient();
+        await client.post(`/api/groups/${redashGroupId}/members`, {
+          user_id: redashUserId,
+        });
+        logger.info(`📊 Redash: Successfully added User ${redashUserId} to Group ${redashGroupId}`);
+      } catch (error: any) {
+        // Check if user is already a member
+        if (error.response && error.response.status === 400 && error.response.data?.message?.includes('already a member')) {
+          logger.info(`📊 Redash: User ${redashUserId} is already a member of Group ${redashGroupId}`);
+          return;
+        }
+        logger.error(`Failed to add user ${redashUserId} to group ${redashGroupId} in Redash:`, error.message);
+        throw new Error(`Redash API addUserToGroup error: ${error.message}`);
       }
-      logger.error(`Failed to add user ${redashUserId} to group ${redashGroupId} in Redash:`, error.message);
-      throw new Error(`Redash API addUserToGroup error: ${error.message}`);
-    }
+    });
   }
 
   // Remove User from Group
@@ -265,14 +299,18 @@ export class RedashService {
       return;
     }
 
-    try {
-      const client = this.getClient();
-      await client.delete(`/api/groups/${redashGroupId}/members/${redashUserId}`);
-      logger.info(`📊 Redash: Successfully removed User ${redashUserId} from Group ${redashGroupId}`);
-    } catch (error: any) {
-      logger.error(`Failed to remove user ${redashUserId} from group ${redashGroupId} in Redash:`, error.message);
-      throw new Error(`Redash API removeUserFromGroup error: ${error.message}`);
-    }
+    // Serialize per user alongside adds — a remove and an add for the same user
+    // racing on the group_ids array would otherwise clobber each other too.
+    return this.withUserLock(redashUserId, async () => {
+      try {
+        const client = this.getClient();
+        await client.delete(`/api/groups/${redashGroupId}/members/${redashUserId}`);
+        logger.info(`📊 Redash: Successfully removed User ${redashUserId} from Group ${redashGroupId}`);
+      } catch (error: any) {
+        logger.error(`Failed to remove user ${redashUserId} from group ${redashGroupId} in Redash:`, error.message);
+        throw new Error(`Redash API removeUserFromGroup error: ${error.message}`);
+      }
+    });
   }
 }
 

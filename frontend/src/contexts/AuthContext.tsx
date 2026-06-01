@@ -28,13 +28,26 @@ export interface UserCreationInfo {
   reviewedAt: string | null;
 }
 
+/** Resolved admin scopes for the current user (computed server-side in /auth/me). */
+export interface AdminScopes {
+  superAdmin: boolean;
+  /** Platform keys the user can administer (all registered, if super admin). */
+  platforms: string[];
+  /** Group slugs the user can administer directly (empty for super admin). */
+  groups: string[];
+}
+
 export interface UserSession {
   id: string;
   username: string;
   email: string;
   roles: string[];
   userCreation?: UserCreationInfo | null;
+  adminScopes?: AdminScopes | null;
 }
+
+/** Simulation-mode mock identities (maps to the Bearer tokens the backend accepts). */
+export type SimRole = 'super_admin' | 'platform_admin' | 'group_admin' | 'user';
 
 interface AuthContextType {
   user: UserSession | null;
@@ -43,7 +56,7 @@ interface AuthContextType {
   isSimulated: boolean;
   login: () => void;
   logout: () => void;
-  switchSimulatedRole: (role: 'super_admin' | 'group_admin' | 'user') => void;
+  switchSimulatedRole: (role: SimRole) => void;
   refreshUserCreation: () => Promise<void>;
 }
 
@@ -98,7 +111,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Simulation mode — pick a mock role, push it into localStorage as the bearer
       // token, then ask the backend who we are (this also lazily auto-creates the
       // user-creation DRAFT row server-side).
-      const mockRole = localStorage.getItem('hermes_mock_token') as 'super_admin' | 'group_admin' | 'user' || 'user';
+      const mockRole = localStorage.getItem('hermes_mock_token') as SimRole || 'user';
       localStorage.setItem('hermes_mock_token', mockRole);
 
       let fallbackUser: UserSession;
@@ -109,12 +122,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           email: 'mayank.aggarwal@bachatt.app',
           roles: ['hermes_super_admin', 'hermes_user'],
         };
+      } else if (mockRole === 'platform_admin') {
+        fallbackUser = {
+          id: 'platform-admin-uuid-4444',
+          username: 'Neha_Sharma',
+          email: 'neha.sharma@bachatt.app',
+          roles: ['hermes_platform_admin', 'hermes_platform_admin_redash', 'hermes_user'],
+        };
       } else if (mockRole === 'group_admin') {
         fallbackUser = {
           id: 'group-admin-uuid-2222',
           username: 'Yogesh_Verma',
           email: 'yogesh.verma@bachatt.app',
-          roles: ['hermes_group_admin', 'hermes_group_admin_growth', 'hermes_user'],
+          roles: ['hermes_group_admin', 'hermes_group_admin_redash_growth', 'hermes_user'],
         };
       } else {
         fallbackUser = {
@@ -194,7 +214,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const switchSimulatedRole = (role: 'super_admin' | 'group_admin' | 'user') => {
+  const switchSimulatedRole = (role: SimRole) => {
     if (!useSimulation) return;
     localStorage.setItem('hermes_mock_token', role);
     window.location.reload();

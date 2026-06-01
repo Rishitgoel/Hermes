@@ -1,24 +1,59 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../../contexts/AuthContext';
-import { useNotifications } from '../../contexts/NotificationContext';
-import { 
-  LayoutDashboard, 
-  Layers, 
-  FileClock, 
-  CheckSquare, 
-  History, 
+import apiClient from '../../services/apiClient';
+import { listPendingUserCreations } from '../../services/api/userCreation';
+import { queryKeys } from '../../lib/queryKeys';
+import {
+  LayoutDashboard,
+  Layers,
+  FileClock,
+  CheckSquare,
+  History,
+  ShieldCheck,
   LogOut,
   Sparkles
 } from 'lucide-react';
 
 export const Sidebar: React.FC = () => {
   const { user, logout, isSimulated, switchSimulatedRole } = useAuth();
-  const { unreadCount } = useNotifications();
 
   const isSuperAdmin = user?.roles.includes('hermes_super_admin') || false;
   const isGroupAdmin = user?.roles.includes('hermes_group_admin') || false;
-  const showApprovals = isSuperAdmin || isGroupAdmin;
+  const isPlatformAdmin = user?.roles.includes('hermes_platform_admin') || false;
+
+  // Gate nav on the server-computed adminScopes (mirror-authoritative) so
+  // DB-mirrored admins show up even before their Keycloak token carries the role.
+  const scopes = user?.adminScopes;
+
+  // Anyone with an admin scope can reach approvals (the server scopes the data:
+  // super → all, platform admin → their platform's groups, group admin → their groups).
+  const showApprovals =
+    (scopes?.superAdmin ?? isSuperAdmin) ||
+    (scopes?.platforms?.length ?? 0) > 0 ||
+    (scopes?.groups?.length ?? 0) > 0;
+
+  // Admin Management is for super admins and platform admins.
+  const showAdminManagement = (scopes?.superAdmin ?? isSuperAdmin) || (scopes?.platforms?.length ?? 0) > 0;
+
+  // Badge = the real number of items waiting in the Pending Approvals queue, not
+  // the unread-notification count. Reuses the same query keys as the Pending
+  // Approvals page, so reviewing a request (which invalidates these keys) updates
+  // the badge automatically. Refetched every 60s to stay live on other pages.
+  const { data: pendingRequests = [] } = useQuery<unknown[]>({
+    queryKey: queryKeys.pendingRequests(),
+    queryFn: () => apiClient.get('/api/access-requests/pending').then((r) => r.data),
+    enabled: showApprovals,
+    refetchInterval: 60000,
+  });
+  const { data: pendingUserCreations = [] } = useQuery({
+    queryKey: queryKeys.pendingUserCreations(),
+    queryFn: listPendingUserCreations,
+    enabled: isSuperAdmin,
+    refetchInterval: 60000,
+  });
+  const pendingApprovalsCount = pendingRequests.length + pendingUserCreations.length;
 
   const handleRoleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     switchSimulatedRole(e.target.value as any);
@@ -26,6 +61,7 @@ export const Sidebar: React.FC = () => {
 
   const getSimulatedRoleValue = () => {
     if (isSuperAdmin) return 'super_admin';
+    if (isPlatformAdmin) return 'platform_admin';
     if (isGroupAdmin) return 'group_admin';
     return 'user';
   };
@@ -72,13 +108,23 @@ export const Sidebar: React.FC = () => {
           >
             <CheckSquare size={20} />
             <span>Pending Approvals</span>
-            {unreadCount > 0 && <span className="nav-badge">{unreadCount}</span>}
+            {pendingApprovalsCount > 0 && <span className="nav-badge">{pendingApprovalsCount}</span>}
+          </NavLink>
+        )}
+
+        {showAdminManagement && (
+          <NavLink
+            to="/admin"
+            className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+          >
+            <ShieldCheck size={20} />
+            <span>Admin Management</span>
           </NavLink>
         )}
 
         {isSuperAdmin && (
-          <NavLink 
-            to="/audit-log" 
+          <NavLink
+            to="/audit-log"
             className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
           >
             <History size={20} />
@@ -101,6 +147,7 @@ export const Sidebar: React.FC = () => {
           >
             <option value="user">Regular User</option>
             <option value="group_admin">Group Admin</option>
+            <option value="platform_admin">Platform Admin</option>
             <option value="super_admin">Super Admin</option>
           </select>
         </div>

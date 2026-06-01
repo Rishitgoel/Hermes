@@ -3,10 +3,9 @@ import BaseController from './base.controller';
 import prisma from '../config/prisma';
 import accessWorkflowService from '../services/access-workflow.service';
 import { createRequestSchema, reviewRequestSchema } from '../validations/access-request.validation';
-import { RequestStatus } from '@prisma/client';
+import { RequestStatus, Prisma } from '@prisma/client';
 import { ValidationError, AuthorizationError, NotFoundError } from '../utils/errors';
-import { getAdminGroupSlugsFromRoles } from '../middleware/auth.middleware';
-import { isGroupAdminOf, isSuperAdmin } from '../utils/authz';
+import { isGroupAdminOf, computeAdminScopes } from '../utils/authz';
 
 export class AccessRequestController extends BaseController {
   // POST /api/access-requests
@@ -68,49 +67,24 @@ export class AccessRequestController extends BaseController {
       const userId = this.getUserId();
       if (!userId) return;
 
-      const superAdmin = isSuperAdmin(this.user!);
-      const isGroupAdmin = this.user!.roles.includes('hermes_group_admin');
-
-      if (!superAdmin && !isGroupAdmin) {
+      // Mirror-authoritative scoping: super → all; platform admin → their
+      // platform's groups; group admin → their groups (computeAdminScopes.groups
+      // already unions both). Anyone else has no admin scope → 403.
+      const scopes = await computeAdminScopes(this.user!);
+      if (!scopes.superAdmin && scopes.platforms.length === 0 && scopes.groups.length === 0) {
         throw new AuthorizationError('Only admins can view pending requests');
       }
 
-      let requests;
-      if (superAdmin) {
-        // Super admin sees all pending requests
-        requests = await prisma.accessRequest.findMany({
-          where: { status: RequestStatus.PENDING },
-          include: { group: true },
-          orderBy: { createdAt: 'desc' },
-        });
-      } else {
-        // Group admin sees requests only for groups they manage
-        // 1. Database groups
-        const adminGroups = await prisma.groupAdmin.findMany({
-          where: { userId },
-          select: { groupId: true },
-        });
-        const dbGroupIds = adminGroups.map(ag => ag.groupId);
-
-        // 2. Keycloak groups
-        const kcSlugs = getAdminGroupSlugsFromRoles(this.user!.roles || []);
-        const kcGroups = await prisma.group.findMany({
-          where: { slug: { in: kcSlugs } },
-          select: { id: true },
-        });
-        const kcGroupIds = kcGroups.map(g => g.id);
-
-        const groupIds = Array.from(new Set([...dbGroupIds, ...kcGroupIds]));
-
-        requests = await prisma.accessRequest.findMany({
-          where: {
-            status: RequestStatus.PENDING,
-            groupId: { in: groupIds },
-          },
-          include: { group: true },
-          orderBy: { createdAt: 'desc' },
-        });
+      const where: Prisma.AccessRequestWhereInput = { status: RequestStatus.PENDING };
+      if (!scopes.superAdmin) {
+        where.group = { slug: { in: scopes.groups } };
       }
+
+      const requests = await prisma.accessRequest.findMany({
+        where,
+        include: { group: true },
+        orderBy: { createdAt: 'desc' },
+      });
 
       this.sendResponse(requests, 'Pending requests retrieved successfully');
     } catch (error) {

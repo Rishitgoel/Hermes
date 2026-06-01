@@ -2,14 +2,25 @@ import { PlatformAdapter } from './provisioner.interface';
 import { redashProvisioner } from './redash.provisioner';
 import logger from '../utils/logger';
 
+/**
+ * Single dispatch point for platform routing.
+ *
+ * Maps a platform key (matching `Group.platform`, e.g. "redash") to the
+ * {@link PlatformAdapter} that fulfils provisioning for it. The access-workflow
+ * and sync services resolve adapters exclusively through this registry, so
+ * adding a platform is a one-line `register(...)` call in the constructor — no
+ * caller needs to change. Lookups are case-insensitive.
+ */
 class ProvisioningRegistry {
   private registry = new Map<string, PlatformAdapter>();
 
   constructor() {
-    // Register standard platform provisioners
+    // Register standard platform provisioners.
+    // TODO(aws): this.register('aws', awsProvisioner) once the adapter exists.
     this.register('redash', redashProvisioner);
   }
 
+  /** Add (or replace) the adapter for a platform. Key is lower-cased. */
   register(platform: string, adapter: PlatformAdapter) {
     const key = platform.toLowerCase();
     this.registry.set(key, adapter);

@@ -20,8 +20,8 @@ export function registerEventListeners(): void {
 
   eventBus.on('request.approved', async (event) => {
     try {
-      const { requesterId, groupName, reviewerName, note } = event.payload as any;
-      await notificationService.notifyRequestReviewed(requesterId, groupName, true, reviewerName, note);
+      const { requesterId, groupName, reviewerName, note, requesterEmail } = event.payload as any;
+      await notificationService.notifyRequestReviewed(requesterId, groupName, true, reviewerName, note, requesterEmail);
     } catch (err: any) {
       logger.error('Failed to notify request.approved event:', err.message);
     }
@@ -29,8 +29,8 @@ export function registerEventListeners(): void {
 
   eventBus.on('request.rejected', async (event) => {
     try {
-      const { requesterId, groupName, reviewerName, note } = event.payload as any;
-      await notificationService.notifyRequestReviewed(requesterId, groupName, false, reviewerName, note);
+      const { requesterId, groupName, reviewerName, note, requesterEmail } = event.payload as any;
+      await notificationService.notifyRequestReviewed(requesterId, groupName, false, reviewerName, note, requesterEmail);
     } catch (err: any) {
       logger.error('Failed to notify request.rejected event:', err.message);
     }
@@ -85,8 +85,8 @@ export function registerEventListeners(): void {
 
   eventBus.on('user-creation.rejected', async (event) => {
     try {
-      const { userId, reviewerName, note } = event.payload as any;
-      await notificationService.notifyUserCreationRejected(userId, reviewerName, note);
+      const { userId, reviewerName, note, userEmail } = event.payload as any;
+      await notificationService.notifyUserCreationRejected(userId, reviewerName, note, userEmail);
     } catch (err: any) {
       logger.error('Failed to notify user-creation.rejected event:', err.message);
     }

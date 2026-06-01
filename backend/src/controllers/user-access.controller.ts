@@ -3,7 +3,7 @@ import BaseController from './base.controller';
 import prisma from '../config/prisma';
 import accessWorkflowService from '../services/access-workflow.service';
 import provisioningRegistry from '../services/provisioning.registry';
-import { AuthorizationError, NotFoundError } from '../utils/errors';
+import { AuthorizationError, NotFoundError, ConflictError } from '../utils/errors';
 import { isGroupAdminOf } from '../utils/authz';
 import { PlatformEnum } from '../validations/platform.validation';
 
@@ -68,6 +68,18 @@ export class UserAccessController extends BaseController {
 
       if (!(await isGroupAdminOf(this.user!, access.groupId, access.group?.slug))) {
         throw new AuthorizationError('You do not have permission to revoke access for this group');
+      }
+
+      // A group admin's access is held automatically by their admin role — revoking
+      // it directly would just be re-granted by the auto-enrollment on their next
+      // session load. Require demoting them first (which leaves them a plain member).
+      const adminRow = await prisma.groupAdmin.findUnique({
+        where: { groupId_userId: { groupId: access.groupId, userId: access.userId } },
+      });
+      if (adminRow) {
+        throw new ConflictError(
+          'This user is a group admin — remove their admin role first. They will become a regular member, and can then be removed.',
+        );
       }
 
       const revoker = {

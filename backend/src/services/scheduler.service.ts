@@ -2,17 +2,20 @@ import cron, { ScheduledTask } from 'node-cron';
 import prisma from '../config/prisma';
 import accessWorkflowService from './access-workflow.service';
 import syncService from './sync.service';
+import adminReconciliationService from './admin-reconciliation.service';
 import config from '../config/config';
 import logger from '../utils/logger';
 
 export class SchedulerService {
   private expiryJob: ScheduledTask | null = null;
-  private redashSyncJob: ScheduledTask | null = null;
+  private platformSyncJob: ScheduledTask | null = null;
+  private adminReconcileJob: ScheduledTask | null = null;
 
-  // Starts all cron jobs (auto-revoke + periodic Redash sync)
+  // Starts all cron jobs (auto-revoke + periodic platform sync + admin reconcile)
   start(): void {
     this.startExpiryJob();
-    this.startRedashSyncJob();
+    this.startPlatformSyncJob();
+    this.startAdminReconcileJob();
   }
 
   // Stops all cron jobs
@@ -22,10 +25,15 @@ export class SchedulerService {
       this.expiryJob = null;
       logger.info('⏰ Scheduler Service: Expiry cron job stopped.');
     }
-    if (this.redashSyncJob) {
-      this.redashSyncJob.stop();
-      this.redashSyncJob = null;
-      logger.info('⏰ Scheduler Service: Redash sync cron job stopped.');
+    if (this.platformSyncJob) {
+      this.platformSyncJob.stop();
+      this.platformSyncJob = null;
+      logger.info('⏰ Scheduler Service: Platform sync cron job stopped.');
+    }
+    if (this.adminReconcileJob) {
+      this.adminReconcileJob.stop();
+      this.adminReconcileJob = null;
+      logger.info('⏰ Scheduler Service: Admin reconciliation cron job stopped.');
     }
   }
 
@@ -40,21 +48,37 @@ export class SchedulerService {
     });
   }
 
-  private startRedashSyncJob(): void {
+  private startPlatformSyncJob(): void {
     // Every 15 minutes in prod, every 5 minutes in dev.
     const pattern = config.isDev ? '*/5 * * * *' : '*/15 * * * *';
-    logger.info(`⏰ Scheduler Service: Starting periodic Redash sync (pattern: ${pattern}).`);
+    logger.info(`⏰ Scheduler Service: Starting periodic platform sync (pattern: ${pattern}).`);
 
-    this.redashSyncJob = cron.schedule(pattern, async () => {
+    this.platformSyncJob = cron.schedule(pattern, async () => {
       try {
-        const result = await syncService.syncWithRedash();
+        const result = await syncService.syncAllPlatforms();
         logger.info(
-          `⏰ Scheduler Service: Periodic Redash sync done — ${result.usersSynced} users, ${result.groupsSynced} groups.`,
+          `⏰ Scheduler Service: Periodic platform sync done — ${result.usersSynced} users, ${result.groupsSynced} groups.`,
         );
       } catch (err: any) {
-        // Never throw out of the cron handler — a transient Redash hiccup
+        // Never throw out of the cron handler — a transient platform hiccup
         // shouldn't tear down the scheduler.
-        logger.warn(`⏰ Scheduler Service: Periodic Redash sync failed: ${err.message}`);
+        logger.warn(`⏰ Scheduler Service: Periodic platform sync failed: ${err.message}`);
+      }
+    });
+  }
+
+  private startAdminReconcileJob(): void {
+    // Every 30 minutes in prod, every 10 minutes in dev. Repairs Keycloak↔mirror
+    // drift for platform/group admins. No-op when Keycloak isn't live.
+    const pattern = config.isDev ? '*/10 * * * *' : '*/30 * * * *';
+    logger.info(`⏰ Scheduler Service: Starting admin reconciliation (pattern: ${pattern}).`);
+
+    this.adminReconcileJob = cron.schedule(pattern, async () => {
+      try {
+        await adminReconciliationService.reconcileAll();
+      } catch (err: any) {
+        // Never throw out of the cron handler.
+        logger.warn(`⏰ Scheduler Service: Admin reconciliation failed: ${err.message}`);
       }
     });
   }
@@ -79,13 +103,19 @@ export class SchedulerService {
 
       logger.info(`⏰ Scheduler Service: Found ${expiredGrants.length} expired access grants. Starting revocation...`);
 
-      for (const grant of expiredGrants) {
-        try {
-          await accessWorkflowService.expireAccess(grant.id);
-        } catch (err: any) {
-          logger.error(`⏰ Scheduler Service: Error expiring grant ${grant.id}:`, err.message);
+      // Revoke concurrently — one slow platform call shouldn't hold up the rest.
+      // allSettled so a single failure is logged without aborting the batch.
+      const results = await Promise.allSettled(
+        expiredGrants.map(grant => accessWorkflowService.expireAccess(grant.id)),
+      );
+      results.forEach((result, i) => {
+        if (result.status === 'rejected') {
+          logger.error(
+            `⏰ Scheduler Service: Error expiring grant ${expiredGrants[i].id}:`,
+            result.reason?.message ?? result.reason,
+          );
         }
-      }
+      });
 
       logger.info('⏰ Scheduler Service: Completed processing expired access grants.');
     } catch (error: any) {

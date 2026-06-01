@@ -75,6 +75,7 @@ All services in `docker-compose.yml` (Postgres, Keycloak, Redis, Redash) are cur
 1. Uncomment the service in [docker-compose.yml](file:///d:/Bachatt/Hermes%202/docker-compose.yml).
 2. Start Docker Desktop and run `docker compose up -d`.
 3. Set the respective simulation flags to `false` in your `.env` files.
+4. Run the live Redash reset script from the `backend/` directory to wipe mock state and link groups: `npx ts-node scripts/reset-for-live-redash.ts`.
 
 ### Environment files
 
@@ -98,6 +99,7 @@ npm run prisma:seed                      # seeds the Supabase database
 npx prisma generate --schema=prisma/hermes/schema.prisma   # ⚠ always pass --schema flag
 npx prisma validate --schema=prisma/hermes/schema.prisma
 npx tsc --noEmit                         # typecheck only
+npx ts-node scripts/reset-for-live-redash.ts                  # wipes mock transient state + maps live Redash IDs
 
 # Frontend
 cd frontend

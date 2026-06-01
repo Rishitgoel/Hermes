@@ -3,11 +3,19 @@
  *
  * What it does:
  *  1. Wipes all transient state (access requests, grants, audits, notifications,
- *     user-creation requests, GroupAdmin seeds, and the RedashUser/RedashGroup
- *     cache).
- *  2. Keeps the Hermes Group rows (with their descriptions, icons, tables) but
- *     re-maps each Group.externalGroupId to the matching live Redash group ID
- *     by name lookup against the configured REDASH_BASE_URL / REDASH_API_KEY.
+ *     user-creation requests, PlatformAdmin / GroupAdmin seeds, and the Redash
+ *     PlatformExternalUser / PlatformExternalGroup cache rows).
+ *  2. Clears the Hermes-managed *scoped* admin roles from Keycloak
+ *     (hermes_platform_admin_* / hermes_group_admin_*) and logs the affected
+ *     users out. Without this, a previous admin gets reconciled straight back
+ *     from their lingering Keycloak role after the DB mirror is wiped (the
+ *     reconciliation job treats Keycloak as the source of truth), so they keep
+ *     showing as an "active" admin of a group while absent from its members
+ *     list. hermes_super_admin and the bare markers are left untouched; scoped
+ *     roles are re-created on demand when admins are re-assigned via the UI.
+ *  3. Keeps the Hermes Group rows (with their descriptions, icons, tables) but
+ *     re-maps each Redash Group.externalGroupId to the matching live Redash
+ *     group ID by name lookup against the configured REDASH_BASE_URL / REDASH_API_KEY.
  *
  * Usage (from backend/):
  *   npx ts-node scripts/reset-for-live-redash.ts
@@ -19,6 +27,7 @@
 import axios from 'axios';
 import prisma from '../src/config/prisma';
 import config from '../src/config/config';
+import keycloakAdminService from '../src/services/keycloak-admin.service';
 import { execSync } from 'child_process';
 
 interface RedashGroup {
@@ -116,8 +125,12 @@ async function main() {
     ['access_requests', () => prisma.accessRequest.deleteMany({})],
     ['user_creation_requests', () => prisma.userCreationRequest.deleteMany({})],
     ['group_admins', () => prisma.groupAdmin.deleteMany({})],
-    ['redash_users', () => prisma.redashUser.deleteMany({})],
-    ['redash_groups', () => prisma.redashGroup.deleteMany({})],
+    ['platform_admins', () => prisma.platformAdmin.deleteMany({})],
+    // Cache rows are platform-keyed (PlatformExternalUser/Group carry a
+    // `platform` column). Only clear Redash's so a future AWS/Jira cache isn't
+    // nuked by a Redash-only reset; the live Redash sync repopulates these.
+    ['platform_external_users', () => prisma.platformExternalUser.deleteMany({ where: { platform: 'redash' } })],
+    ['platform_external_groups', () => prisma.platformExternalGroup.deleteMany({ where: { platform: 'redash' } })],
   ];
   for (const [label, fn] of wipes) {
     const r = await fn();
@@ -125,9 +138,80 @@ async function main() {
   }
   console.log('');
 
+  // ── 2.5. Clear Hermes-managed scoped admin roles from Keycloak ───────
+  // Step 2 wiped the DB admin mirrors (group_admins / platform_admins), but
+  // those are only a mirror — Keycloak is the source of truth for who holds a
+  // role. Leave the scoped roles assigned there and the reconciliation job (or
+  // the next /auth/me) re-creates the very mirror rows we just deleted: a prior
+  // admin (e.g. Uday on "customer support") pops back as a group admin —
+  // auto-enrolled so they read as "active" for the group, yet missing from the
+  // plain members list (admins are filtered out of it).
+  //
+  // So drop every Hermes scoped admin role (hermes_platform_admin_* /
+  // hermes_group_admin_*) — definition and all its user mappings — and log the
+  // affected users out so the role leaves their JWT immediately. The bare
+  // markers (hermes_platform_admin / hermes_group_admin) and, crucially,
+  // hermes_super_admin are left untouched. Scoped roles are re-created on demand
+  // by the Admin Management UI (keycloakAdminService.ensureCompositeRole).
+  console.log('Step 2.5/3 — Clearing Hermes-managed admin roles from Keycloak…');
+  if (!keycloakAdminService.isLive) {
+    console.log('  · Keycloak is not live (simulation / no admin password) — nothing to clear.');
+    console.log('    The DB mirror wipe above is sufficient when Keycloak is in simulation.');
+  } else {
+    try {
+      const allRoles = await keycloakAdminService.listRealmRoles();
+      // Scoped admin roles carry a trailing "_<platform>[_<slug>]". The bare
+      // markers ("hermes_platform_admin" / "hermes_group_admin") have no trailing
+      // underscore, and "hermes_super_admin" matches neither prefix — so all three
+      // are excluded and survive the reset.
+      const scopedAdminRoles = allRoles.filter(
+        (r) =>
+          r.name.startsWith('hermes_platform_admin_') ||
+          r.name.startsWith('hermes_group_admin_'),
+      );
+
+      if (scopedAdminRoles.length === 0) {
+        console.log('  · No scoped Hermes admin roles found in Keycloak.');
+      } else {
+        const affectedUserIds = new Set<string>();
+        for (const role of scopedAdminRoles) {
+          try {
+            // Collect holders *before* deleting so we can log them out afterward.
+            for (const userId of await keycloakAdminService.getUsersInRole(role.name)) {
+              affectedUserIds.add(userId);
+            }
+            await keycloakAdminService.deleteRealmRole(role.name);
+            console.log(`  ✓ removed role ${role.name}`);
+          } catch (err: any) {
+            console.log(`  ✗ failed to remove role ${role.name}: ${err.message} (continuing)`);
+          }
+        }
+        // Terminate sessions so the just-removed roles leave users' JWTs now
+        // rather than lingering until token expiry. Best-effort — never throws.
+        for (const userId of affectedUserIds) {
+          await keycloakAdminService.logoutUser(userId);
+        }
+        console.log(
+          `  ✓ Cleared ${scopedAdminRoles.length} scoped admin role(s); logged out ${affectedUserIds.size} affected user(s).`,
+        );
+        console.log('    (hermes_super_admin and the bare markers were left untouched.)');
+      }
+    } catch (err: any) {
+      console.log(`  ✗ Keycloak admin-role cleanup failed: ${err.message}`);
+      console.log('    Continuing — remove the stale scoped roles via the Keycloak admin UI if needed.');
+    }
+  }
+  console.log('');
+
   // ── 3. Re-map Hermes Group.externalGroupId by name ──────────────────
   console.log('Step 3/3 — Remapping Hermes Group.externalGroupId to live Redash IDs…');
-  const hermesGroups = await prisma.group.findMany({ orderBy: { name: 'asc' } });
+  // Only Redash groups. `Group.platform` is now required and multi-platform, so
+  // a name collision with a future AWS/Jira group must not get a Redash ID
+  // written into its externalGroupId (which would route provisioning wrong).
+  const hermesGroups = await prisma.group.findMany({
+    where: { platform: 'redash' },
+    orderBy: { name: 'asc' },
+  });
   const byName = new Map(liveGroups.map((g) => [g.name.trim().toLowerCase(), g]));
   let mapped = 0;
   let unmapped: string[] = [];

@@ -30,13 +30,14 @@ export class KeycloakSetupService {
   }
 
   /**
-   * Returns the Keycloak user IDs of every user holding the realm role
-   * `hermes_super_admin`. In simulation mode (or when Keycloak isn't reachable)
-   * returns the sim super-admin UUID so notifications still fan out locally.
+   * Returns every user holding the realm role `hermes_super_admin`, with their
+   * Keycloak ID and (when available) email. In simulation mode — or when
+   * Keycloak isn't reachable — returns the sim super-admin so notifications
+   * still fan out locally. The sim email comes from SIM_ADMIN_EMAIL (optional).
    */
-  async getSuperAdminUserIds(): Promise<string[]> {
+  async getSuperAdmins(): Promise<Array<{ id: string; email?: string }>> {
     if (config.isSimulation || !config.keycloak.adminPassword) {
-      return [SIM_SUPER_ADMIN_USER_ID];
+      return [{ id: SIM_SUPER_ADMIN_USER_ID, email: config.email.simAdminEmail }];
     }
 
     const accessToken = await this.getAdminAccessToken();
@@ -49,7 +50,9 @@ export class KeycloakSetupService {
         params: { max: 200 },
       });
       const users: any[] = Array.isArray(res.data) ? res.data : [];
-      return users.map(u => u.id).filter((id): id is string => typeof id === 'string');
+      return users
+        .filter((u) => typeof u.id === 'string')
+        .map((u) => ({ id: u.id as string, email: typeof u.email === 'string' ? u.email : undefined }));
     } catch (err: any) {
       logger.warn(`Failed to fetch super-admin users from Keycloak: ${err.message}`);
       return [];
@@ -135,22 +138,46 @@ export class KeycloakSetupService {
         clientDbId = recheckRes.data.find((c: any) => c.clientId === targetClientId)?.id || '';
       }
 
-      // 3. Ensure Roles Exist
-      const roles = ['hermes_super_admin', 'hermes_group_admin', 'hermes_user'];
+      // 3. Ensure Roles Exist (idempotent: create if missing, else keep the
+      //    description in sync). These are the blanket markers; the scoped roles
+      //    (hermes_platform_admin_<platform>, hermes_group_admin_<platform>_<slug>)
+      //    are created on demand by keycloak-admin.service as composites of them.
+      //    The marker descriptions spell out that they aren't assigned directly,
+      //    so they don't look like assignable roles in the Keycloak console.
+      const roleDefs: Record<string, string> = {
+        hermes_super_admin:
+          'Hermes super admin — full access across all platforms. Assign this manually in Keycloak; it is the only Hermes role set by hand.',
+        hermes_platform_admin:
+          'Marker only — do NOT assign directly. Carried automatically via hermes_platform_admin_<platform> composite roles, which Hermes creates when you assign a platform admin.',
+        hermes_group_admin:
+          'Marker only — do NOT assign directly. Carried automatically via hermes_group_admin_<platform>_<slug> composite roles, which Hermes creates when you assign a group admin.',
+        hermes_user: 'Hermes base user role (default for every authenticated user).',
+      };
       const rolesUrl = `${adminUrl}/admin/realms/${realm}/roles`;
 
-      for (const roleName of roles) {
+      for (const [roleName, description] of Object.entries(roleDefs)) {
         try {
-          await axios.get(`${rolesUrl}/${roleName}`, {
+          const existing = await axios.get(`${rolesUrl}/${encodeURIComponent(roleName)}`, {
             headers: { Authorization: `Bearer ${accessToken}` },
           });
-          logger.info(`🔑 Keycloak setup: Role '${roleName}' already exists.`);
+          // Self-heal the description for realms created before it was clarified.
+          // Spread the existing rep so composite/other fields are preserved.
+          if (existing.data?.description !== description) {
+            await axios.put(
+              `${rolesUrl}/${encodeURIComponent(roleName)}`,
+              { ...existing.data, description },
+              { headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' } }
+            );
+            logger.info(`🔑 Keycloak setup: Updated description for role '${roleName}'.`);
+          } else {
+            logger.info(`🔑 Keycloak setup: Role '${roleName}' already up to date.`);
+          }
         } catch (err: any) {
           if (err.response && err.response.status === 404) {
             logger.info(`🔑 Keycloak setup: Creating realm role '${roleName}'...`);
             await axios.post(
               rolesUrl,
-              { name: roleName, description: `Hermes ${roleName.replace('hermes_', '')} role` },
+              { name: roleName, description },
               { headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' } }
             );
             logger.info(`🔑 Keycloak setup: Role '${roleName}' created.`);

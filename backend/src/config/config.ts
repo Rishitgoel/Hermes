@@ -46,8 +46,33 @@ export const config = {
     },
   },
 
+  // NOTE: slack + email values are read lazily via getters (not captured once at
+  // import). loadSecrets() injects these from AWS Secrets Manager *after* this
+  // module is imported, so a static capture would be stale ('') in production.
   slack: {
-    webhookUrl: process.env.SLACK_WEBHOOK_URL,
+    // Incoming webhook → posts to a single shared channel (team feed). Optional.
+    get webhookUrl() { return process.env.SLACK_WEBHOOK_URL; },
+    // Bot token (xoxb-…) → required for per-user DMs (users.lookupByEmail + chat.postMessage).
+    get botToken() { return process.env.SLACK_BOT_TOKEN; },
+    // DMs simulate (log instead of send) when no bot token is set, or when forced off.
+    get dmSimulation() {
+      return process.env.SLACK_SIMULATION === 'true' || !this.botToken;
+    },
+  },
+
+  email: {
+    // SES verified sender, e.g. "Hermes <no-reply@bachatt.app>". Required to send.
+    get from() { return process.env.EMAIL_FROM || ''; },
+    get replyTo() { return process.env.EMAIL_REPLY_TO; },
+    // SES region — falls back to the general AWS region if unset.
+    get region() { return process.env.SES_REGION || process.env.AWS_REGION; },
+    // Optional dev-only address used as the "super admin" recipient in simulation.
+    get simAdminEmail() { return process.env.SIM_ADMIN_EMAIL; },
+    // Simulate (log instead of send) when explicitly requested, or when no sender
+    // is configured. Set EMAIL_SIMULATION=false + EMAIL_FROM=… in prod to go live.
+    get isSimulation() {
+      return process.env.EMAIL_SIMULATION === 'true' || !this.from;
+    },
   },
 
   aws: {

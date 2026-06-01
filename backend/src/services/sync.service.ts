@@ -1,167 +1,65 @@
-import prisma from '../config/prisma';
-import redashService from './redash.service';
-import userCreationService from './user-creation.service';
+import provisioningRegistry from './provisioning.registry';
+import redashProvisioner from './redash.provisioner';
 import logger from '../utils/logger';
 
+/**
+ * Platform-agnostic sync orchestrator.
+ *
+ * Owns no platform-specific logic — it walks every adapter registered in the
+ * {@link provisioningRegistry} and asks each one to refresh its own cache via
+ * the optional `syncGroups()` / `syncUsers()` hooks on the adapter interface.
+ * Each platform is independent: a failure syncing one platform is logged and
+ * does not abort the others.
+ *
+ * Invoked from the hourly/periodic scheduler and from `POST /api/admin/sync`.
+ */
 export class SyncService {
   private lastSyncedAt: Date | null = null;
 
+  /** Timestamp of the last successful sync of any platform (for /health). */
   getLastSyncedAt(): Date | null {
     return this.lastSyncedAt;
   }
 
-  async syncWithRedash(): Promise<{ usersSynced: number; groupsSynced: number }> {
-    logger.info('🔄 SyncService: Starting Redash synchronization...');
-    const now = new Date();
+  /** Refresh the cache for every registered platform. */
+  async syncAllPlatforms(): Promise<{ usersSynced: number; groupsSynced: number }> {
+    logger.info('🔄 SyncService: Starting sync across all platforms...');
+    let usersSynced = 0;
+    let groupsSynced = 0;
 
-    try {
-      // 1. Sync Groups
-      const redashGroups = await redashService.syncGroups();
-      logger.info(`🔄 SyncService: Fetched ${redashGroups.length} groups from Redash.`);
-
-      for (const group of redashGroups) {
-        await prisma.redashGroup.upsert({
-          where: { id: group.id },
-          update: {
-            name: group.name,
-            type: group.type,
-            lastSyncedAt: now,
-          },
-          create: {
-            id: group.id,
-            name: group.name,
-            type: group.type,
-            lastSyncedAt: now,
-          },
-        });
+    for (const platform of provisioningRegistry.listPlatforms()) {
+      try {
+        const result = await this.syncSinglePlatform(platform);
+        usersSynced += result.usersSynced;
+        groupsSynced += result.groupsSynced;
+      } catch (err: any) {
+        // Isolate per-platform failures so one bad platform can't block the rest.
+        logger.error({ platform, error: err.message }, '🔄 SyncService: Platform sync failed');
       }
-
-      // Clean up groups that no longer exist in Redash
-      const activeGroupIds = redashGroups.map(g => g.id);
-      await prisma.redashGroup.deleteMany({
-        where: {
-          id: { notIn: activeGroupIds },
-        },
-      });
-
-      // 2. Sync Users
-      const redashUsers = await redashService.syncUsers();
-      logger.info(`🔄 SyncService: Fetched ${redashUsers.length} users from Redash.`);
-
-      // Upsert-based sync — no destructive deletes
-      for (const user of redashUsers) {
-        await prisma.redashUser.upsert({
-          where: { id: user.id },
-          update: {
-            name: user.name,
-            email: user.email.toLowerCase(),
-            isDisabled: user.is_disabled,
-            isInvitationPending: user.is_invitation_pending,
-            groupIds: user.groups,
-            lastSyncedAt: now,
-          },
-          create: {
-            id: user.id,
-            name: user.name,
-            email: user.email.toLowerCase(),
-            isDisabled: user.is_disabled,
-            isInvitationPending: user.is_invitation_pending,
-            groupIds: user.groups,
-            lastSyncedAt: now,
-          },
-        });
-      }
-
-      // Remove users that no longer exist in Redash
-      const activeUserIds = redashUsers.map(u => u.id);
-      await prisma.redashUser.deleteMany({
-        where: { id: { notIn: activeUserIds } },
-      });
-
-      // Batch update member counts in a single transaction (fixes N+1 #27)
-      const allCachedUsers = await prisma.redashUser.findMany();
-      const updates = redashGroups.map(group => {
-        const count = allCachedUsers.filter(u => u.groupIds.includes(group.id)).length;
-        return prisma.redashGroup.update({
-          where: { id: group.id },
-          data: { memberCount: count },
-        });
-      });
-      await prisma.$transaction(updates);
-
-      // Notify user-creation workflow about every active Redash user. The handler
-      // is a cheap no-op for users with no pending request; it only acts when a
-      // UserCreationRequest exists in APPROVED/AWAITING_SETUP. Per-user try/catch
-      // so one failure can't break the rest of the batch.
-      for (const u of redashUsers) {
-        if (u.is_disabled) continue;
-        try {
-          await userCreationService.handleRedashUserDetected({
-            id: u.id,
-            email: u.email,
-            name: u.name,
-            isInvitationPending: u.is_invitation_pending,
-          });
-        } catch (err: any) {
-          logger.error(
-            { redashUserId: u.id, email: u.email, error: err.message },
-            'handleRedashUserDetected failed for one user; continuing batch',
-          );
-        }
-      }
-
-      this.lastSyncedAt = new Date();
-      logger.info('🔄 SyncService: Redash synchronization completed successfully.');
-      return {
-        usersSynced: redashUsers.length,
-        groupsSynced: redashGroups.length,
-      };
-    } catch (error: any) {
-      logger.error('🔄 SyncService: Sync failed:', error.message);
-      throw error;
     }
+
+    this.lastSyncedAt = new Date();
+    logger.info(`🔄 SyncService: Sync complete — ${usersSynced} users, ${groupsSynced} groups.`);
+    return { usersSynced, groupsSynced };
   }
 
+  /** Refresh the cache for a single platform. Groups first, then users (member counts depend on both). */
+  async syncSinglePlatform(platform: string): Promise<{ usersSynced: number; groupsSynced: number }> {
+    const adapter = provisioningRegistry.get(platform);
+    const groups = adapter.syncGroups ? await adapter.syncGroups() : { count: 0 };
+    const users = adapter.syncUsers ? await adapter.syncUsers() : { count: 0 };
+    this.lastSyncedAt = new Date();
+    return { usersSynced: users.count, groupsSynced: groups.count };
+  }
+
+  /**
+   * Fast-path single-user refresh for the user-creation "sync now" button.
+   * Redash-specific (the user-creation gate only applies to Redash today).
+   */
   async syncSingleUser(email: string): Promise<boolean> {
-    logger.info({ email }, '🔄 SyncService: Starting fast-path single user Redash synchronization...');
+    logger.info({ email }, '🔄 SyncService: Fast-path single-user sync...');
     try {
-      const user = await redashService.fetchUserByEmail(email);
-      if (!user) {
-        logger.warn({ email }, '🔄 SyncService: User not found in Redash during single sync.');
-        return false;
-      }
-
-      const now = new Date();
-      await prisma.redashUser.upsert({
-        where: { id: user.id },
-        update: {
-          name: user.name,
-          email: user.email.toLowerCase(),
-          isDisabled: user.is_disabled,
-          isInvitationPending: user.is_invitation_pending,
-          groupIds: user.groups,
-          lastSyncedAt: now,
-        },
-        create: {
-          id: user.id,
-          name: user.name,
-          email: user.email.toLowerCase(),
-          isDisabled: user.is_disabled,
-          isInvitationPending: user.is_invitation_pending,
-          groupIds: user.groups,
-          lastSyncedAt: now,
-        },
-      });
-
-      if (!user.is_disabled) {
-        await userCreationService.handleRedashUserDetected({
-          id: user.id,
-          email: user.email,
-          name: user.name,
-          isInvitationPending: user.is_invitation_pending,
-        });
-      }
-      return true;
+      return await redashProvisioner.syncSingleUser(email);
     } catch (error: any) {
       logger.error({ email, error: error.message }, '🔄 SyncService: Single user sync failed');
       return false;
