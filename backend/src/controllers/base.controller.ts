@@ -27,11 +27,6 @@ export interface PaginationParams {
   pageSize: number;
 }
 
-export interface ValidationResult {
-  isValid: boolean;
-  missingFields?: string[];
-}
-
 export default abstract class BaseController {
   protected readonly logger: Logger;
   protected readonly user?: AuthenticatedUser;
@@ -92,10 +87,6 @@ export default abstract class BaseController {
     this.res.status(statusCode).json(response);
   }
 
-  protected sendCreated<T>(data?: T, message?: string): void {
-    this.sendResponse(data, message, 201);
-  }
-
   protected sendErrorResponse(
     error: string,
     statusCode: number = 500,
@@ -120,52 +111,6 @@ export default abstract class BaseController {
     } else {
       this.sendErrorResponse(message, statusCode);
     }
-  }
-
-  protected validateRequiredParams(params: string[]): ValidationResult {
-    if (!params.length) {
-      return { isValid: true };
-    }
-
-    const missingParams = params.filter(param => {
-      const value = this.req.params[param];
-      return !value || (typeof value === 'string' && value.trim() === '');
-    });
-
-    if (missingParams.length > 0) {
-      this.sendErrorResponse(
-        `Missing required parameters: ${missingParams.join(', ')}`,
-        400,
-      );
-      return { isValid: false, missingFields: missingParams };
-    }
-
-    return { isValid: true };
-  }
-
-  protected validateRequiredBodyFields(fields: string[]): ValidationResult {
-    if (!fields.length) {
-      return { isValid: true };
-    }
-
-    const missingFields = fields.filter(field => {
-      const value = this.req.body[field];
-      return (
-        value === undefined ||
-        value === null ||
-        (typeof value === 'string' && value.trim() === '')
-      );
-    });
-
-    if (missingFields.length > 0) {
-      this.sendErrorResponse(
-        `Missing required fields: ${missingFields.join(', ')}`,
-        400,
-      );
-      return { isValid: false, missingFields };
-    }
-
-    return { isValid: true };
   }
 
   protected validatePagination(): PaginationParams | null {
