@@ -17,7 +17,7 @@ interface GroupData {
   color: string | null;
   platform: string;
   memberCount: number;
-  accessStatus: 'ACTIVE' | 'PENDING' | 'NONE';
+  accessStatus: 'ACTIVE' | 'PENDING' | 'AWAITING_SETUP' | 'NONE';
 }
 
 interface PlatformMetadata {
@@ -742,6 +742,14 @@ export const Groups: React.FC = () => {
                       {group.accessStatus === 'PENDING' && (
                         <span className="badge badge-pending" style={{ gap: '4px' }}>
                           <Icons.Clock size={12} /> Pending
+                        </span>
+                      )}
+                      {group.accessStatus === 'AWAITING_SETUP' && (
+                        <span
+                          className="badge"
+                          style={{ gap: '4px', backgroundColor: 'var(--primary-light)', color: 'var(--primary)' }}
+                        >
+                          <Icons.Clock size={12} /> Awaiting Setup
                         </span>
                       )}
                       {group.accessStatus === 'NONE' && (

@@ -4,7 +4,6 @@ import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../contexts/AuthContext';
 import apiClient from '../services/apiClient';
 import LoadingSpinner from '../components/common/LoadingSpinner';
-import UserCreationBanner from '../components/user-creation/UserCreationBanner';
 import { queryKeys } from '../lib/queryKeys';
 import * as Icons from 'lucide-react';
 
@@ -16,7 +15,7 @@ interface GroupData {
   icon: string | null;
   color: string | null;
   memberCount: number;
-  accessStatus: 'ACTIVE' | 'PENDING' | 'NONE';
+  accessStatus: 'ACTIVE' | 'PENDING' | 'AWAITING_SETUP' | 'NONE';
 }
 
 interface ActiveAccessData {
@@ -75,7 +74,9 @@ export const Dashboard: React.FC = () => {
 
   // Calculate statistics
   const activeAccessCount = accesses.length;
-  const pendingRequestCount = groups.filter((g) => g.accessStatus === 'PENDING').length;
+  const pendingRequestCount = groups.filter(
+    (g) => g.accessStatus === 'PENDING' || g.accessStatus === 'AWAITING_SETUP',
+  ).length;
 
   const formatDate = (isoString: string) => {
     return new Date(isoString).toLocaleDateString(undefined, {
@@ -96,9 +97,6 @@ export const Dashboard: React.FC = () => {
 
   return (
     <div>
-      {/* Account-creation banner (renders only when status !== COMPLETED) */}
-      <UserCreationBanner />
-
       {/* Welcome Banner */}
       <div style={{
         background: 'linear-gradient(135deg, var(--primary), var(--secondary))',

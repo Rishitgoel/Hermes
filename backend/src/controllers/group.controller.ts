@@ -4,6 +4,7 @@ import prisma from '../config/prisma';
 import { RequestStatus } from '@prisma/client';
 import { checkIsGroupAdmin } from '../middleware/auth.middleware';
 import { groupSlugSchema } from '../validations/group.validation';
+import { getManageablePlatforms } from '../utils/authz';
 
 export class GroupController extends BaseController {
   // GET /api/groups
@@ -12,7 +13,7 @@ export class GroupController extends BaseController {
       const userId = this.getUserId();
       if (!userId) return;
 
-      const [groups, activeAccesses, pendingRequests] = await Promise.all([
+      const [groups, activeAccesses, openRequests] = await Promise.all([
         prisma.group.findMany({
           where: { isActive: true },
           include: {
@@ -28,25 +29,45 @@ export class GroupController extends BaseController {
         prisma.userAccess.findMany({
           where: { userId, isActive: true },
         }),
+        // PENDING = awaiting admin review; WAITING_FOR_SETUP = approved but parked
+        // until the requester finishes their platform-account setup. Both mean the
+        // user has an open request for the group — neither should read as NO ACCESS.
         prisma.accessRequest.findMany({
-          where: { requesterId: userId, status: RequestStatus.PENDING },
+          where: {
+            requesterId: userId,
+            status: { in: [RequestStatus.PENDING, RequestStatus.WAITING_FOR_SETUP] },
+          },
         })
       ]);
 
       const isSuperAdmin = this.user?.roles.includes('hermes_super_admin') || false;
+      // Platforms this user administers (lower-cased). Super admins implicitly
+      // manage every registered platform; platform admins their own; everyone else
+      // gets []. A platform admin reads as ACTIVE on every group of their platform —
+      // the same cosmetic short-circuit super admins already get. (Real Redash
+      // membership for platform admins is provisioned lazily in /auth/me.)
+      const managedPlatforms = this.user ? await getManageablePlatforms(this.user) : [];
 
       const enrichedGroups = groups.map(g => {
         let accessStatus = 'NONE';
         
         const hasActive = activeAccesses.some(a => a.groupId === g.id);
-        const hasPending = pendingRequests.some(r => r.groupId === g.id);
+        const hasWaitingForSetup = openRequests.some(
+          r => r.groupId === g.id && r.status === RequestStatus.WAITING_FOR_SETUP,
+        );
+        const hasPending = openRequests.some(
+          r => r.groupId === g.id && r.status === RequestStatus.PENDING,
+        );
         const isKeycloakAdmin = this.user?.roles ? checkIsGroupAdmin(this.user.roles, g.slug, g.platform) : false;
-        const isAdminOfGroup = g.admins.some(adm => adm.userId === userId) || isKeycloakAdmin;
+        const isPlatformAdminOfGroup = managedPlatforms.includes(g.platform.toLowerCase());
+        const isAdminOfGroup = isPlatformAdminOfGroup || g.admins.some(adm => adm.userId === userId) || isKeycloakAdmin;
 
         if (isSuperAdmin || isAdminOfGroup) {
           accessStatus = 'ACTIVE';
         } else if (hasActive) {
           accessStatus = 'ACTIVE';
+        } else if (hasWaitingForSetup) {
+          accessStatus = 'AWAITING_SETUP';
         } else if (hasPending) {
           accessStatus = 'PENDING';
         }
@@ -107,19 +128,29 @@ export class GroupController extends BaseController {
       const activeAccess = await prisma.userAccess.findFirst({
         where: { userId, groupId: group.id, isActive: true },
       });
-      const pendingRequest = await prisma.accessRequest.findFirst({
-        where: { requesterId: userId, groupId: group.id, status: RequestStatus.PENDING },
+      // PENDING = awaiting admin review; WAITING_FOR_SETUP = approved but parked until
+      // the requester finishes platform-account setup. Both are "open" for this group.
+      const openRequest = await prisma.accessRequest.findFirst({
+        where: {
+          requesterId: userId,
+          groupId: group.id,
+          status: { in: [RequestStatus.PENDING, RequestStatus.WAITING_FOR_SETUP] },
+        },
       });
 
       const isSuperAdmin = this.user?.roles.includes('hermes_super_admin') || false;
+      const managedPlatforms = this.user ? await getManageablePlatforms(this.user) : [];
       const isKeycloakAdmin = this.user?.roles ? checkIsGroupAdmin(this.user.roles, group.slug, group.platform) : false;
-      const isAdminOfGroup = group.admins.some(adm => adm.userId === userId) || isKeycloakAdmin;
+      const isPlatformAdminOfGroup = managedPlatforms.includes(group.platform.toLowerCase());
+      const isAdminOfGroup = isPlatformAdminOfGroup || group.admins.some(adm => adm.userId === userId) || isKeycloakAdmin;
       let accessStatus = 'NONE';
       if (isSuperAdmin || isAdminOfGroup) {
         accessStatus = 'ACTIVE';
       } else if (activeAccess) {
         accessStatus = 'ACTIVE';
-      } else if (pendingRequest) {
+      } else if (openRequest?.status === RequestStatus.WAITING_FOR_SETUP) {
+        accessStatus = 'AWAITING_SETUP';
+      } else if (openRequest) {
         accessStatus = 'PENDING';
       }
 

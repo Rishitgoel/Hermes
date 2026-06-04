@@ -534,29 +534,35 @@ export class AccessWorkflowService {
   }
 
   /**
-   * Ensure a Keycloak group-admin actually holds real membership in the groups
-   * they administer. The Groups list shows admins as ACTIVE (a cosmetic
-   * short-circuit in group.controller), but that's not a real grant — this
-   * creates the UserAccess row + provisions them on the platform so they're an
-   * actual member of the group on Redash.
+   * Ensure an admin actually holds real membership in the groups they administer.
+   * The Groups list shows admins as ACTIVE (a cosmetic short-circuit in
+   * group.controller), but that's not a real grant — this creates the UserAccess
+   * row + provisions them on the platform so they're an actual member on Redash.
+   *
+   * Serves both scoped admin tiers; the caller resolves which slugs apply:
+   *   - group admins    → the single group they administer
+   *   - platform admins → every group on the platform(s) they administer
+   * Super admins are intentionally excluded by callers — they get the cosmetic
+   * ACTIVE badge everywhere but aren't mass-provisioned into every group.
    *
    * Called lazily from GET /auth/me once the user's Redash account is COMPLETED,
-   * since that's the only point where we have both their Keycloak roles (to know
-   * which groups they admin) and a finalized platform account. Idempotent and
-   * self-healing: skips any group where an active grant already exists, the
-   * group is missing/inactive, or it has no externalGroupId. Per-slug try/catch
-   * so one failure doesn't block the rest.
+   * since that's the only point where we have both their resolved admin scopes
+   * and a finalized platform account. Idempotent and self-healing: skips any
+   * group where an active grant already exists, the group is missing/inactive, or
+   * it has no externalGroupId. Per-slug try/catch so one failure doesn't block the
+   * rest. `reason` is recorded on each enrollment's audit entry.
    */
   async ensureGroupAdminEnrollment(
     user: { id: string; username: string; email: string },
     adminGroupSlugs: string[],
+    reason: string = 'Group-admin auto-enrollment',
   ): Promise<{ enrolled: number }> {
     if (adminGroupSlugs.length === 0) return { enrolled: 0 };
 
     let enrolled = 0;
     for (const slug of adminGroupSlugs) {
       try {
-        const created = await this.enrollGroupAdminInGroup(user, slug);
+        const created = await this.enrollGroupAdminInGroup(user, slug, reason);
         if (created) enrolled += 1;
       } catch (err: any) {
         logger.error(
@@ -574,6 +580,7 @@ export class AccessWorkflowService {
   private async enrollGroupAdminInGroup(
     user: { id: string; username: string; email: string },
     slug: string,
+    reason: string = 'Group-admin auto-enrollment',
   ): Promise<boolean> {
     const group = await prisma.group.findUnique({ where: { slug } });
     if (!group || !group.isActive) return false;
@@ -601,7 +608,7 @@ export class AccessWorkflowService {
       externalGroupId: group.externalGroupId,
     });
 
-    const performer = { id: 'system_admin_enroll', name: 'System (group-admin auto-enroll)' };
+    const performer = { id: 'system_admin_enroll', name: 'System (admin auto-enroll)' };
 
     try {
       const userAccess = await prisma.userAccess.create({
@@ -632,7 +639,7 @@ export class AccessWorkflowService {
             platform,
             externalUserId: result.externalUserId,
             externalGroupId: group.externalGroupId,
-            reason: 'Group-admin auto-enrollment',
+            reason,
           },
         },
       });

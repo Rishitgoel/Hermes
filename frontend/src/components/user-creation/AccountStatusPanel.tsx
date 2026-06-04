@@ -1,26 +1,27 @@
 import React, { useState } from 'react';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuth } from '../../contexts/AuthContext';
 import {
   resendRedashInvite,
   syncUserCreationStatusNow,
-} from '../services/api/userCreation';
-import UserCreationFormModal from '../components/user-creation/UserCreationFormModal';
+} from '../../services/api/userCreation';
+import UserCreationFormModal from './UserCreationFormModal';
 import * as Icons from 'lucide-react';
 
 /**
- * Per-user landing page for the account-creation lifecycle. Linked from the
- * notification bell (`linkUrl="/account-status"`), the Dashboard banner, and
- * the user's name in the TopBar.
+ * Account-creation lifecycle panel. Rendered at the top of the My Requests page
+ * (it used to be the standalone `/account-status` page). Keeps the user's
+ * account status — and all of its actions (submit, retry, sync now, continue to
+ * Redash setup) — alongside their group access requests.
  *
  * Behaviour per status:
  *  - DRAFT          → "Submit account request" CTA opens the form modal.
  *  - PENDING        → "Waiting on admin" passive state.
  *  - APPROVED       → invite call failed last time; show a "Retry setup" button.
  *  - AWAITING_SETUP → direct "Continue to Redash setup" link (uses inviteLink) + Sync now.
- *  - COMPLETED      → success state.
- *  - REJECTED       → show admin's note.
+ *  - COMPLETED      → compact "account active" confirmation (rendered early below).
+ *  - REJECTED       → show admin's note + "Request again".
  */
-export const AccountStatus: React.FC = () => {
+export const AccountStatusPanel: React.FC = () => {
   const { user, refreshUserCreation } = useAuth();
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [busy, setBusy] = useState<null | 'retry' | 'sync'>(null);
@@ -50,7 +51,7 @@ export const AccountStatus: React.FC = () => {
     try {
       await syncUserCreationStatusNow();
       await refreshUserCreation();
-      setMessage({ kind: 'success', text: 'Synced with Redash. If your account is set up, this page will reflect it now.' });
+      setMessage({ kind: 'success', text: 'Synced with Redash. If your account is set up, this panel will reflect it now.' });
     } catch (err: any) {
       setMessage({ kind: 'error', text: err.message || 'Sync failed.' });
     } finally {
@@ -58,10 +59,33 @@ export const AccountStatus: React.FC = () => {
     }
   };
 
-  if (!uc) {
+  // /auth/me hasn't resolved yet — let the requests table render on its own.
+  if (!uc) return null;
+
+  // COMPLETED → compact, single-line confirmation so a fully-onboarded user
+  // isn't shown the full lifecycle card every time they open My Requests.
+  if (uc.status === 'COMPLETED') {
     return (
-      <div style={{ padding: '40px 0', color: 'var(--text-muted)' }}>
-        Loading your account status…
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          backgroundColor: 'var(--status-approved-bg)',
+          color: 'var(--status-approved-text)',
+          border: '1px solid var(--status-approved-text)',
+          padding: '12px 16px',
+          borderRadius: 'var(--radius-md)',
+          fontSize: '13px',
+          fontWeight: 600,
+          marginBottom: '24px',
+        }}
+      >
+        <Icons.CheckCircle2 size={16} />
+        <span>
+          Your Redash account is active
+          {uc.completedAt ? ` · set up ${new Date(uc.completedAt).toLocaleDateString()}` : ''}.
+        </span>
       </div>
     );
   }
@@ -219,24 +243,15 @@ export const AccountStatus: React.FC = () => {
             </button>
           </>
         );
-      case 'COMPLETED':
-        return (
-          <>
-            <p>You're all set. Your Redash account is active and any approved groups have been provisioned.</p>
-            <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
-              Completed {uc.completedAt ? new Date(uc.completedAt).toLocaleString() : '—'}
-            </div>
-          </>
-        );
       default:
         return <p>Unknown status.</p>;
     }
   };
 
   return (
-    <div style={{ maxWidth: '720px' }}>
+    <div style={{ marginBottom: '24px' }}>
       <div className="section-header">
-        <h1 style={{ fontSize: '26px', fontFamily: 'Outfit, sans-serif' }}>Account status</h1>
+        <h3 className="section-title">Account status</h3>
         <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
           {uc.status.replace('_', ' ')}
         </span>
@@ -304,4 +319,4 @@ export const AccountStatus: React.FC = () => {
   );
 };
 
-export default AccountStatus;
+export default AccountStatusPanel;

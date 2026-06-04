@@ -35,7 +35,7 @@ interface GroupDetailData {
   color: string | null;
   platform: string;
   externalGroupId: string | null;
-  accessStatus: 'ACTIVE' | 'PENDING' | 'NONE';
+  accessStatus: 'ACTIVE' | 'PENDING' | 'AWAITING_SETUP' | 'NONE';
   admins: GroupAdmin[];
   members: GroupMember[];
   tables: string[];
@@ -178,6 +178,14 @@ export const GroupDetail: React.FC = () => {
                     Pending Approval
                   </span>
                 )}
+                {group.accessStatus === 'AWAITING_SETUP' && (
+                  <span
+                    className="badge"
+                    style={{ gap: '6px', backgroundColor: 'var(--primary-light)', color: 'var(--primary)' }}
+                  >
+                    <Icons.Clock size={12} /> Awaiting Setup
+                  </span>
+                )}
                 {group.accessStatus === 'NONE' && (
                   <span className="badge badge-revoked">
                     No Access
@@ -236,6 +244,16 @@ export const GroupDetail: React.FC = () => {
             >
               Request Access
             </button>
+          )}
+
+          {/* Approved, but the requester hasn't finished platform-account setup yet.
+              Nothing to do here — it activates automatically post-setup, so don't
+              offer a (duplicate) Request Access button. */}
+          {group.accessStatus === 'AWAITING_SETUP' && (
+            <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '12px', lineHeight: 1.5 }}>
+              Your access to this group is <strong>approved</strong>. It will activate
+              automatically once you finish setting up your {platformDisplayName(group.platform)} account.
+            </p>
           )}
 
           {/* Group Leads / Admins List */}

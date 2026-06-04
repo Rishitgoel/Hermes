@@ -5,6 +5,7 @@ import LoadingSpinner from '../components/common/LoadingSpinner';
 import StatusBadge from '../components/common/StatusBadge';
 import { FileText } from 'lucide-react';
 import { queryKeys } from '../lib/queryKeys';
+import AccountStatusPanel from '../components/user-creation/AccountStatusPanel';
 
 interface RequestData {
   id: string;
@@ -29,10 +30,6 @@ export const MyRequests: React.FC = () => {
     queryFn: () => apiClient.get('/api/access-requests/my').then((r) => r.data),
   });
 
-  if (isLoading) {
-    return <LoadingSpinner />;
-  }
-
   const formatDate = (isoString: string) => {
     return new Date(isoString).toLocaleDateString(undefined, {
       year: 'numeric',
@@ -45,6 +42,8 @@ export const MyRequests: React.FC = () => {
 
   return (
     <div>
+      <AccountStatusPanel />
+
       <div className="section-header">
         <h1 style={{ fontSize: '28px', fontFamily: 'Outfit, sans-serif' }}>My Access Requests</h1>
         <span style={{ fontSize: '13px', color: 'var(--text-muted)', fontWeight: 700 }}>
@@ -52,7 +51,9 @@ export const MyRequests: React.FC = () => {
         </span>
       </div>
 
-      {requests.length === 0 ? (
+      {isLoading ? (
+        <LoadingSpinner />
+      ) : requests.length === 0 ? (
         <div className="empty-state">
           <FileText size={44} className="empty-state-icon" />
           <h3 className="empty-state-title">No Requests Found</h3>

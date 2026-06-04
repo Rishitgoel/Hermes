@@ -84,7 +84,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
   // Helper: re-fetch /auth/me to refresh user-creation status. Used both on
-  // initial load and after Resend Invite / Sync Now on the AccountStatus page.
+  // initial load and after Resend Invite / Sync Now on the account-status panel.
   const fetchMe = useCallback(async (fallback?: UserSession) => {
     try {
       const res: any = await apiClient.get('/auth/me');

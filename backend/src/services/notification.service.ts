@@ -235,7 +235,7 @@ export class NotificationService {
       requesterId,
       'Access queued',
       `${reviewerName} approved your request to ${groupName}. It will activate once you finish setting up your Redash account.`,
-      '/account-status',
+      '/my-requests',
     );
   }
 
@@ -297,10 +297,10 @@ export class NotificationService {
       requesterId,
       'Your account is approved',
       `${reviewerName} approved your Hermes account. Check your email — Redash has sent you a link to set your password.`,
-      '/account-status',
+      '/my-requests',
     );
 
-    const dm = `✅ Your Hermes account is approved by ${escapeSlackText(reviewerName)}! Check your inbox for the Redash setup email.\n👉 ${config.frontend.url}/account-status`;
+    const dm = `✅ Your Hermes account is approved by ${escapeSlackText(reviewerName)}! Check your inbox for the Redash setup email.\n👉 ${config.frontend.url}/my-requests`;
     await this.emailAndDm(userEmail, templates.userAccountApproved({ reviewerName }), dm);
   }
 
@@ -314,7 +314,7 @@ export class NotificationService {
       requesterId,
       'Account request rejected',
       `${reviewerName} declined your Hermes account request.${note ? ` Reason: "${note}"` : ''}`,
-      '/account-status',
+      '/my-requests',
     );
 
     const dm = `❌ Your Hermes account request was declined by ${escapeSlackText(reviewerName)}.${note ? `\nReason: "${escapeSlackText(note)}"` : ''}`;

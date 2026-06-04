@@ -19,9 +19,9 @@ interface PlatformInviteModalProps {
  * admin-approval gate, instead it routes the user to the right next step
  * depending on their UserCreationRequest status:
  *  - DRAFT          → open the submission form
- *  - PENDING        → "waiting on admin" passive message + link to /account-status
- *  - AWAITING_SETUP → "check your email" + link to /account-status
- *  - REJECTED       → message + link to /account-status
+ *  - PENDING        → "waiting on admin" passive message + link to /my-requests
+ *  - AWAITING_SETUP → "check your email" + link to /my-requests
+ *  - REJECTED       → message + link to /my-requests
  *
  * The actual Redash invite is now triggered server-side when an admin approves
  * the user-creation request, not from this modal.
@@ -43,7 +43,7 @@ export const PlatformInviteModal: React.FC<PlatformInviteModalProps> = ({
 
   const goToStatus = () => {
     onClose();
-    navigate('/account-status');
+    navigate('/my-requests');
   };
 
   let icon: React.ReactNode = <UserPlus size={20} style={{ color: 'var(--primary)' }} />;

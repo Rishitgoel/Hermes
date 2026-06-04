@@ -116,7 +116,7 @@ export function adminNewGroupRequest(opts: {
 // ── User-facing ───────────────────────────────────────────────
 
 export function userAccountApproved(opts: { reviewerName: string }): EmailContent {
-  const href = url('/account-status');
+  const href = url('/my-requests');
   return {
     subject: '[Hermes] Your account has been approved',
     html: layout({
@@ -144,7 +144,7 @@ export function userAccountSetupComplete(): EmailContent {
 }
 
 export function userAccountRejected(opts: { reviewerName: string; note?: string }): EmailContent {
-  const href = url('/account-status');
+  const href = url('/my-requests');
   const noteHtml = opts.note ? `<p style="margin:12px 0 0;"><strong>Reason:</strong> ${esc(opts.note)}</p>` : '';
   return {
     subject: '[Hermes] Your account request was declined',

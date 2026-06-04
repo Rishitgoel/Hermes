@@ -32,7 +32,6 @@ export const TopBar: React.FC = () => {
     if (path === '/my-requests') return 'My Requests';
     if (path === '/pending-approvals') return 'Pending Approvals';
     if (path === '/audit-log') return 'Audit Log';
-    if (path === '/account-status') return 'Account Status';
     return 'Hermes';
   };
 
@@ -47,9 +46,18 @@ export const TopBar: React.FC = () => {
       .substring(0, 2);
   };
 
-  const getPrimaryRoleLabel = (roles: string[]) => {
-    if (roles.includes('hermes_super_admin')) return 'Super Admin';
-    if (roles.includes('hermes_group_admin')) return 'Group Admin';
+  // Show the user's highest admin tier (super → platform → group). Prefer the
+  // server-computed adminScopes (mirror-authoritative, so a freshly-assigned admin
+  // is labelled correctly before their JWT refreshes); fall back to raw role
+  // strings. Platform admins were previously mislabelled "Group Admin" because the
+  // platform tier was never checked, and a platform-admin who also holds a
+  // group-admin role hit the group branch first.
+  const getPrimaryRoleLabel = (): string => {
+    const scopes = user?.adminScopes;
+    const roles = user?.roles ?? [];
+    if ((scopes?.superAdmin ?? false) || roles.includes('hermes_super_admin')) return 'Super Admin';
+    if ((scopes?.platforms?.length ?? 0) > 0 || roles.includes('hermes_platform_admin')) return 'Platform Admin';
+    if ((scopes?.groups?.length ?? 0) > 0 || roles.includes('hermes_group_admin')) return 'Group Admin';
     return 'Employee';
   };
 
@@ -122,36 +130,19 @@ export const TopBar: React.FC = () => {
           )}
         </div>
 
-        {/* User Profile Info — click the name to jump to your account status page */}
+        {/* User Profile Info — display only (this slot is reserved for a future use). */}
         {user && (
-          <button
-            type="button"
-            className="user-profile"
-            onClick={() => navigate('/account-status')}
-            title="Open account status"
-            aria-label="Open account status"
-            style={{
-              background: 'transparent',
-              border: 'none',
-              padding: 0,
-              font: 'inherit',
-              color: 'inherit',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 'inherit',
-            }}
-          >
+          <div className="user-profile">
             <div className="user-avatar">
               {getInitials(user.username)}
             </div>
             <div className="user-details">
               <span className="user-name">{user.username.replace('_', ' ')}</span>
-              {getPrimaryRoleLabel(user.roles) !== 'Employee' && (
-                <span className="user-role-badge">{getPrimaryRoleLabel(user.roles)}</span>
+              {getPrimaryRoleLabel() !== 'Employee' && (
+                <span className="user-role-badge">{getPrimaryRoleLabel()}</span>
               )}
             </div>
-          </button>
+          </div>
         )}
       </div>
     </header>
