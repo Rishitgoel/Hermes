@@ -65,13 +65,13 @@ D:\Bachatt\Hermes 2\
 
 ## Dev environment
 
-To save RAM on local development (especially on 8GB machines), the project runs **completely Docker-free by default**.
-* **Database**: A local **Postgres** instance (`localhost:15433`, database `hermes`) — connection string in `backend/.env` as `DATABASE_URL_HERMES`.
+To save RAM on local development (especially on 8GB machines), the project keeps its local footprint minimal: the only required Docker container is **Postgres**, while **auth and integrations run in Simulation Mode** so Keycloak and Redash don't need to run.
+* **Database**: A local **Postgres** running in Docker (`localhost:15433`, database `hermes`) — connection string in `backend/.env` as `DATABASE_URL_HERMES`.
 * **Authentication**: Skips Keycloak and runs in **Simulation Mode** (enabled in `.env` files).
 * **Integrations**: Skips Redash and runs in **Simulation Mode** (enabled in `.env` files).
 
 ### Docker Services (`docker-compose.yml`)
-All services in `docker-compose.yml` (Postgres, Keycloak, Redis, Redash) are currently commented out to prevent background RAM usage. If you eventually need to run a live service locally:
+The dev **Postgres runs in its own Docker container** on `localhost:15433` (the `postgres` service in `docker-compose.yml` is left commented — Postgres is started separately). The **Keycloak, Redis, and Redash-stack** services in `docker-compose.yml` are uncommented but only matter if you switch off Simulation Mode; otherwise the backend never talks to them. To bring one of those up live locally:
 1. Uncomment the service in [docker-compose.yml](file:///d:/Bachatt/Hermes%202/docker-compose.yml).
 2. Start Docker Desktop and run `docker compose up -d`.
 3. Set the respective simulation flags to `false` in your `.env` files.
