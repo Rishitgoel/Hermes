@@ -23,7 +23,7 @@ These preferences came up explicitly. Don't violate them without asking.
 ## Commit style
 
 - Single subject line summarizing the change, then a body explaining what & why.
-- Co-author trailer: `Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>`.
+- Co-author trailer: `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
 - Recent example to match: commit `36dbcad3` (the P0 fixes).
 
 ---
@@ -82,7 +82,7 @@ All services in `docker-compose.yml` (Postgres, Keycloak, Redis, Redash) are cur
 - `backend/.env` and `frontend/.env` exist locally (gitignored).
 - `.env.example` files exist as templates ([backend/.env.example](file:///d:/Bachatt/Hermes%202/backend/.env.example), [frontend/.env.example](file:///d:/Bachatt/Hermes%202/frontend/.env.example)).
 - Key flags:
-  - `KEYCLOAK_SIMULATION=true|false` (backend). When `true`, the backend accepts `Bearer super_admin`, `Bearer group_admin`, or `Bearer user` as the entire token. Enabled (`true`) by default for local dev.
+  - `KEYCLOAK_SIMULATION=true|false` (backend). When `true`, the backend accepts `Bearer super_admin`, `Bearer platform_admin`, `Bearer group_admin`, or `Bearer user` as the entire token. Enabled (`true`) by default for local dev.
   - `VITE_KEYCLOAK_SIMULATION=true|false` (frontend). When `true`, AuthContext skips Keycloak entirely and reads a mock role from `localStorage['hermes_mock_token']`. Enabled (`true`) by default for local dev.
   - `REDASH_SIMULATION=true|false` (backend). When `true`, `redash.service.ts` returns mock users/groups instead of hitting Redash. Enabled (`true`) by default for local dev.
 - **The user runs in simulation mode for local dev** (`KEYCLOAK_SIMULATION=true`, `REDASH_SIMULATION=true`, `VITE_KEYCLOAK_SIMULATION=true`).
@@ -122,7 +122,7 @@ npx tsc --noEmit                         # typecheck only
 - **Controllers** all extend `BaseController` (`src/controllers/base.controller.ts`). Use `this.sendResponse(data, msg)`, `this.handleError(err, msg)`, `this.validateWithZod(schema, data)`, `this.getUserId()`.
 - **Services** in `src/services/`. Workflow logic lives in `access-workflow.service.ts`. Provisioning is abstracted behind `provisioner.interface.ts` + `provisioning.registry.ts`.
 - **Event bus** (`src/services/event-bus.ts`) is an in-process EventEmitter. Subscribers in `event-listeners.ts`. Notifications + Slack come off this. (Will move to BullMQ — P3-2.)
-- **Scheduler** (`src/services/scheduler.service.ts`) runs three cron jobs: **auto-expiry** of time-bound grants (hourly in prod, every 5 min in dev; revocations run concurrently via `Promise.allSettled`), a **periodic platform sync** (every 15 min in prod, every 5 min in dev) that calls `syncService.syncAllPlatforms()`, and an **admin reconciliation** (every 30 min in prod, every 10 min in dev) that calls `adminReconciliationService.reconcileAll()` to repair Keycloak↔mirror drift (no-op when Keycloak isn't live).
+- **Scheduler** (`src/services/scheduler.service.ts`) runs three cron jobs: **auto-expiry** of time-bound grants (hourly in prod, every 5 min in dev; revocations run concurrently via `Promise.allSettled`; a grant whose platform deprovision keeps failing is retried up to `MAX_EXPIRY_ATTEMPTS=3` times, then force-expired with an `ACCESS_EXPIRY_FAILED` audit + admin alert so it can't loop forever), a **periodic platform sync** (every 15 min in prod, every 5 min in dev) that calls `syncService.syncAllPlatforms()`, and an **admin reconciliation** (every 30 min in prod, every 10 min in dev) that calls `adminReconciliationService.reconcileAll()` to repair Keycloak↔mirror drift (no-op when Keycloak isn't live).
 
 ### Response shape (enforced)
 
@@ -196,6 +196,8 @@ interface PlatformAdapter {
   inviteUser(email, name): Promise<ProvisionResult>;
   syncUsers?(): Promise<{ count: number }>;   // optional: refresh cached users
   syncGroups?(): Promise<{ count: number }>;   // optional: refresh cached groups
+  createExternalGroup?(name): Promise<{ externalGroupId, name? }>;  // optional: back a group level
+  deleteExternalGroup?(externalGroupId): Promise<void>;            // optional: rollback/cleanup
   healthCheck(): Promise<{ healthy, message? }>;
 }
 ```
@@ -210,7 +212,7 @@ The admin model keys off the **same** `platform` string (see Auth → Admin tier
 
 A `Group` can carry **levels** (`GroupLevel`, table `group_levels`) — e.g. Credit Card → Intern / Junior Dev / Senior Dev — each with a different permission tier. **Each level is backed by its own external group** (its own `externalGroupId`); in Redash, read-only vs write is configured on that level's group's data sources, so Hermes just routes the requester to the right group. The model is platform-agnostic — it works for any adapter.
 
-- **Non-breaking:** a group with **zero active levels** behaves exactly as before (request the group directly, provision to `Group.externalGroupId`). A group **with** levels requires a `levelId` on the request. The resolution rule used everywhere (provision, revoke, expire, admin-enroll) is `externalGroupId = level?.externalGroupId ?? group.externalGroupId`.
+- **Non-breaking:** a group with **zero active levels** behaves exactly as before (request the group directly, provision to `Group.externalGroupId`). A group **with** levels requires a `levelId` on the request, and that level must have its own `externalGroupId`. Resolution: a level-less grant falls back to `group.externalGroupId` (provision/revoke/expire), but a **leveled** request uses the level's own external group and Hermes **refuses to fall back to the base group** when the level has none — guarded in both `createRequest` (early 400) and `_provision` (hard stop) so it can't silently over-provision into the broader base group.
 - `AccessRequest.levelId` / `UserAccess.levelId` are nullable (null = legacy/level-less grant). One active grant per `(user, group)` still holds — the partial unique index is **not** keyed on `levelId`, so a user holds one level per group at a time.
 - **Requiredness** ("group has active levels ⇒ levelId required") is enforced in `accessWorkflowService.createRequest`, not the Zod schema (it's DB-state dependent).
 - **Level CRUD** is super-admin / platform-admin only (mapping `externalGroupId` is platform config) — `admin-management.controller.ts` handlers under `/api/admin/groups/:groupId/levels`, surfaced in the expandable group row on `AdminManagement.tsx`. Group admins still review requests for **any** level with no new role. Deleting a level with active members **soft-deactivates** it (members keep access until expiry/revoke).
@@ -232,7 +234,7 @@ A `Group` can carry **levels** (`GroupLevel`, table `group_levels`) — e.g. Cre
 - **Errors**: throw `BaseError` subclasses. Don't `res.status(...).json(...)` directly in controllers — go through `BaseController` helpers.
 - **Logging**: `import logger from '../utils/logger'` (pino). Don't `console.log` in backend.
 - **Config access**: import `config from '../config/config'`. **Don't read `process.env.NODE_ENV` directly** — use `config.isDev`, `config.isProd`. (All known violations are fixed; `config.ts` itself is the only place that reads `process.env.NODE_ENV`.)
-- **Audit logs**: every state-changing action should write a row to `audit_entries` via `prisma.auditEntry.create({...})`. Patterns: `REQUEST_CREATED`, `REQUEST_REJECTED`, `ACCESS_GRANTED`, `ACCESS_REVOKED`, `ACCESS_EXPIRED`, `PROVISION_FAILED`, `MANUAL_SYNC_TRIGGERED`, `PLATFORM_ADMIN_ASSIGNED`, `PLATFORM_ADMIN_REVOKED`, `GROUP_ADMIN_ASSIGNED`, `GROUP_ADMIN_REVOKED`, `ADMIN_RECONCILE_TRIGGERED`, `GROUP_LEVEL_CREATED`, `GROUP_LEVEL_UPDATED`, `GROUP_LEVEL_DELETED`, `GROUP_LEVEL_DEACTIVATED`, `USER_CREATION_*`. (`action` is a free string — no enum.)
+- **Audit logs**: every state-changing action should write a row to `audit_entries` via `prisma.auditEntry.create({...})`. Patterns: `REQUEST_CREATED`, `REQUEST_REJECTED`, `ACCESS_GRANTED`, `ACCESS_REVOKED`, `ACCESS_EXPIRED`, `ACCESS_EXPIRY_FAILED`, `PROVISION_FAILED`, `MANUAL_SYNC_TRIGGERED`, `PLATFORM_ADMIN_ASSIGNED`, `PLATFORM_ADMIN_REVOKED`, `GROUP_ADMIN_ASSIGNED`, `GROUP_ADMIN_REVOKED`, `ADMIN_RECONCILE_TRIGGERED`, `GROUP_LEVEL_CREATED`, `GROUP_LEVEL_UPDATED`, `GROUP_LEVEL_DELETED`, `GROUP_LEVEL_DEACTIVATED`, `USER_CREATION_*`. (`action` is a free string — no enum.)
 - **Events**: after a state change, also emit on `eventBus` (`backend/src/services/event-bus.ts`) so notifications/Slack fire async.
 - **Frontend types**: each page redeclares its data shape as an `interface`. Until P3-5 (OpenAPI codegen), this is the convention — match the backend response shape exactly.
 - **CSS**: there's a `frontend/src/styles/global.css` with CSS variables (`--primary`, `--text-muted`, `--radius-md`, `--shadow-md`, etc.). Use them. Inline styles are heavily used today but should be migrating out (smaller-wins list in ROADMAP.md).
