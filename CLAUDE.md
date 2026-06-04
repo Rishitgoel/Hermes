@@ -66,7 +66,7 @@ D:\Bachatt\Hermes 2\
 ## Dev environment
 
 To save RAM on local development (especially on 8GB machines), the project runs **completely Docker-free by default**.
-* **Database**: Runs in the cloud on **Supabase** (credentials are configured in `backend/.env`).
+* **Database**: A local **Postgres** instance (`localhost:15433`, database `hermes`) — connection string in `backend/.env` as `DATABASE_URL_HERMES`.
 * **Authentication**: Skips Keycloak and runs in **Simulation Mode** (enabled in `.env` files).
 * **Integrations**: Skips Redash and runs in **Simulation Mode** (enabled in `.env` files).
 
@@ -94,8 +94,8 @@ All services in `docker-compose.yml` (Postgres, Keycloak, Redis, Redash) are cur
 cd backend
 npm run dev                              # nodemon, port 8001
 npm run build                            # tsc → dist/
-npm run prisma:migrate                   # applies pending migrations to Supabase
-npm run prisma:seed                      # seeds the Supabase database
+npm run prisma:migrate                   # applies pending migrations to the local Postgres (DATABASE_URL_HERMES)
+npm run prisma:seed                      # seeds the local Postgres database
 npx prisma generate --schema=prisma/hermes/schema.prisma   # ⚠ always pass --schema flag
 npx prisma validate --schema=prisma/hermes/schema.prisma
 npx tsc --noEmit                         # typecheck only
