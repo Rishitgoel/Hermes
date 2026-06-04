@@ -160,6 +160,29 @@ class KeycloakAdminService {
     });
   }
 
+  /** All realm roles (name + composite flag). Empty when not live. */
+  async listRealmRoles(): Promise<RoleRepresentation[]> {
+    if (!this.isLive) return [];
+    const headers = await this.authHeaders();
+    const res = await axios.get(`${this.base}/roles`, { headers, params: { max: 2000 } });
+    return Array.isArray(res.data) ? (res.data as RoleRepresentation[]) : [];
+  }
+
+  /** Delete a realm role by name. No-op in sim or if it doesn't exist. */
+  async deleteRealmRole(roleName: string): Promise<void> {
+    if (!this.isLive) {
+      logger.info(`Keycloak admin (sim): would delete role "${roleName}"`);
+      return;
+    }
+    try {
+      const headers = await this.authHeaders();
+      await axios.delete(`${this.base}/roles/${encodeURIComponent(roleName)}`, { headers });
+    } catch (err: any) {
+      if (err.response?.status === 404) return;
+      throw err;
+    }
+  }
+
   /**
    * Terminate all of a user's Keycloak sessions, forcing re-authentication on their
    * next refresh/login. Used after revoking an admin role as defense-in-depth: it

@@ -209,15 +209,16 @@ export class NotificationService {
     await slackService.sendPing(slackMsg);
   }
 
-  // Auto-expiry permanently failed after retries — alert admins (super + platform)
-  // that the grant was forced inactive and the user may still need manual cleanup
-  // on the platform.
+  // Auto-expiry permanently failed after retries — alert super admins + the platform
+  // admins for *that* platform that the grant was forced inactive and the user may
+  // still need manual cleanup on the platform.
   async notifyExpiryFailed(
     userAccessId: string,
     userName: string,
     groupName: string,
     attempts: number,
     error: string,
+    platform: string,
   ): Promise<void> {
     const slackMsg = `⚠️ *Hermes — Auto-expiry failed*\n--------------------------\nCould not remove *${escapeSlackText(userName)}* from *${escapeSlackText(groupName)}* after ${attempts} attempts.\nThe grant was force-marked inactive in Hermes, but the user may still exist on the platform — manual cleanup may be required.\nError: "${escapeSlackText(error)}"`;
     await slackService.sendPing(slackMsg);
@@ -225,7 +226,7 @@ export class NotificationService {
     try {
       const [superAdmins, platformAdmins] = await Promise.all([
         keycloakSetupService.getSuperAdmins(),
-        prisma.platformAdmin.findMany({ distinct: ['userId'] }),
+        prisma.platformAdmin.findMany({ where: { platform: platform.toLowerCase() }, distinct: ['userId'] }),
       ]);
 
       const recipients = [

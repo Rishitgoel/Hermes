@@ -57,8 +57,8 @@ export function registerEventListeners(): void {
   // Auto-expiry permanently failed after retries — alert admins for manual cleanup.
   eventBus.on('access.expiry-failed', async (event) => {
     try {
-      const { userAccessId, userName, groupName, attempts, error } = event.payload as any;
-      await notificationService.notifyExpiryFailed(userAccessId, userName, groupName, attempts, error);
+      const { userAccessId, userName, groupName, attempts, error, platform } = event.payload as any;
+      await notificationService.notifyExpiryFailed(userAccessId, userName, groupName, attempts, error, platform);
     } catch (err: any) {
       logger.error('Failed to notify access.expiry-failed event:', err.message);
     }

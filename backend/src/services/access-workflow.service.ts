@@ -703,7 +703,7 @@ export class AccessWorkflowService {
         // Hermes, audit it, and alert admins — the user may still exist on the
         // platform, so it's flagged for manual cleanup rather than silently dropped.
         // Deliberately do NOT re-throw, so the scheduler stops re-fetching this grant.
-        await this.forceExpireAfterFailure(access, attempts, err.message);
+        await this.forceExpireAfterFailure(access, attempts, err.message, platform);
         return;
       }
     }
@@ -764,6 +764,7 @@ export class AccessWorkflowService {
     access: Prisma.UserAccessGetPayload<{ include: { group: true; level: true } }>,
     attempts: number,
     errorMessage: string,
+    platform: string,
   ): Promise<void> {
     logger.error(
       `Auto-expiry permanently failed for ${access.id} after ${attempts} attempts — forcing inactive and alerting admins.`,
@@ -817,6 +818,7 @@ export class AccessWorkflowService {
         userId: access.userId,
         userName: access.userName,
         groupName: access.group.name,
+        platform,
         attempts,
         error: errorMessage,
       },
