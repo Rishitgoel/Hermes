@@ -209,6 +209,49 @@ export class NotificationService {
     await slackService.sendPing(slackMsg);
   }
 
+  // Auto-expiry permanently failed after retries — alert admins (super + platform)
+  // that the grant was forced inactive and the user may still need manual cleanup
+  // on the platform.
+  async notifyExpiryFailed(
+    userAccessId: string,
+    userName: string,
+    groupName: string,
+    attempts: number,
+    error: string,
+  ): Promise<void> {
+    const slackMsg = `⚠️ *Hermes — Auto-expiry failed*\n--------------------------\nCould not remove *${escapeSlackText(userName)}* from *${escapeSlackText(groupName)}* after ${attempts} attempts.\nThe grant was force-marked inactive in Hermes, but the user may still exist on the platform — manual cleanup may be required.\nError: "${escapeSlackText(error)}"`;
+    await slackService.sendPing(slackMsg);
+
+    try {
+      const [superAdmins, platformAdmins] = await Promise.all([
+        keycloakSetupService.getSuperAdmins(),
+        prisma.platformAdmin.findMany({ distinct: ['userId'] }),
+      ]);
+
+      const recipients = [
+        ...superAdmins.map((a) => a.id),
+        ...platformAdmins.map((a) => a.userId),
+      ];
+
+      const seen = new Set<string>();
+      for (const userId of recipients) {
+        if (seen.has(userId)) continue;
+        seen.add(userId);
+        await this.createNotification(
+          userId,
+          'Auto-expiry failed',
+          `Could not remove ${userName} from ${groupName} after ${attempts} attempts. The grant was forced inactive — manual platform cleanup may be required.`,
+          '/audit-log',
+        );
+      }
+      if (seen.size === 0) {
+        logger.warn({ userAccessId }, 'notifyExpiryFailed: no admins to notify');
+      }
+    } catch (err: any) {
+      logger.error('Failed to fan out access.expiry-failed notifications:', err.message);
+    }
+  }
+
   // Access is manually revoked by admin
   async notifyAccessRevoked(
     userId: string,

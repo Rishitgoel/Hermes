@@ -168,6 +168,12 @@ model UserAccess {
   expiresAt        DateTime?        @map("expires_at")
   revokedAt        DateTime?        @map("revoked_at")
 
+  // Auto-expiry retry tracking: after MAX_EXPIRY_ATTEMPTS consecutive failed
+  // deprovisions the scheduler stops retrying and force-marks the grant inactive
+  // (the user may still exist on the platform — flagged for manual cleanup).
+  expiryAttempts   Int              @default(0) @map("expiry_attempts")
+  lastExpiryError  String?          @map("last_expiry_error")
+
   grantedBy        String           @map("granted_by")
   accessRequestId  String?          @map("access_request_id")
 

@@ -2,12 +2,18 @@ import prisma from '../config/prisma';
 import provisioningRegistry from './provisioning.registry';
 import eventBus from './event-bus';
 import logger from '../utils/logger';
-import { AccessDuration, AccessRequest, RequestStatus, UserCreationStatus } from '@prisma/client';
+import { AccessDuration, AccessRequest, RequestStatus, UserCreationStatus, Prisma } from '@prisma/client';
 import { ValidationError, NotFoundError, ConflictError, UserNotApprovedError } from '../utils/errors';
 
 type GroupRow = { id: string; name: string; slug: string; platform: string; externalGroupId: string | null };
 type LevelRow = { id: string; name: string; slug: string; externalGroupId: string | null };
 type AccessRequestWithGroup = AccessRequest & { group: GroupRow; level?: LevelRow | null };
+
+// After this many consecutive failed auto-expiry attempts, the scheduler stops
+// retrying every cron run: it force-marks the grant inactive in Hermes, audits it,
+// and alerts admins (the user may still exist on the platform — flagged for manual
+// cleanup) rather than throwing forever and re-processing the same grant each run.
+const MAX_EXPIRY_ATTEMPTS = 3;
 
 export class AccessWorkflowService {
   private calculateExpiry(duration: AccessDuration): Date | null {
@@ -678,8 +684,27 @@ export class AccessWorkflowService {
         const provisioner = provisioningRegistry.get(platform);
         await provisioner.deprovision({ externalUserId, externalGroupId });
       } catch (err: any) {
-        logger.error(`Scheduler failed to deprovision user from platform ${platform} during expiry of ${userAccessId}:`, err.message);
-        throw err;
+        const attempts = access.expiryAttempts + 1;
+        logger.error(
+          `Scheduler failed to deprovision user from platform ${platform} during expiry of ${userAccessId} (attempt ${attempts}/${MAX_EXPIRY_ATTEMPTS}):`,
+          err.message,
+        );
+
+        if (attempts < MAX_EXPIRY_ATTEMPTS) {
+          // Record the failure; the grant stays active so the next cron run retries.
+          await prisma.userAccess.update({
+            where: { id: userAccessId },
+            data: { expiryAttempts: attempts, lastExpiryError: err.message },
+          });
+          throw err; // surfaced per-grant by the scheduler's allSettled logging
+        }
+
+        // Final failure: break the infinite retry loop. Force the grant inactive in
+        // Hermes, audit it, and alert admins — the user may still exist on the
+        // platform, so it's flagged for manual cleanup rather than silently dropped.
+        // Deliberately do NOT re-throw, so the scheduler stops re-fetching this grant.
+        await this.forceExpireAfterFailure(access, attempts, err.message);
+        return;
       }
     }
 
@@ -724,6 +749,76 @@ export class AccessWorkflowService {
       payload: {
         userId: access.userId,
         groupName: access.group.name,
+      },
+      timestamp: new Date(),
+    });
+  }
+
+  /**
+   * Final auto-expiry failure handler. Called once a deprovision has failed
+   * MAX_EXPIRY_ATTEMPTS times: stop retrying, force the grant inactive, audit a
+   * ACCESS_EXPIRY_FAILED entry, and alert admins that the user may still exist on
+   * the platform and needs manual cleanup.
+   */
+  private async forceExpireAfterFailure(
+    access: Prisma.UserAccessGetPayload<{ include: { group: true; level: true } }>,
+    attempts: number,
+    errorMessage: string,
+  ): Promise<void> {
+    logger.error(
+      `Auto-expiry permanently failed for ${access.id} after ${attempts} attempts — forcing inactive and alerting admins.`,
+    );
+
+    await prisma.userAccess.update({
+      where: { id: access.id },
+      data: {
+        isActive: false,
+        revokedAt: new Date(),
+        expiryAttempts: attempts,
+        lastExpiryError: errorMessage,
+      },
+    });
+
+    if (access.accessRequestId) {
+      await prisma.accessRequest.update({
+        where: { id: access.accessRequestId },
+        data: {
+          status: RequestStatus.EXPIRED,
+          revokeReason: `Auto-expiry failed after ${attempts} attempts — forced inactive; manual platform cleanup may be required`,
+          revokedAt: new Date(),
+        },
+      });
+    }
+
+    await prisma.auditEntry.create({
+      data: {
+        action: 'ACCESS_EXPIRY_FAILED',
+        performerId: 'system_scheduler',
+        performerName: 'System Scheduler',
+        targetUserId: access.userId,
+        targetUserName: access.userName,
+        groupId: access.groupId,
+        accessRequestId: access.accessRequestId,
+        details: {
+          userAccessId: access.id,
+          attempts,
+          error: errorMessage,
+          levelId: access.levelId ?? null,
+          levelName: access.level?.name ?? null,
+          note: 'Deprovision failed repeatedly; grant forced inactive. User may still exist on the platform.',
+        },
+      },
+    });
+
+    eventBus.emitAccessEvent({
+      type: 'access.expiry-failed',
+      payload: {
+        userAccessId: access.id,
+        userId: access.userId,
+        userName: access.userName,
+        groupName: access.group.name,
+        attempts,
+        error: errorMessage,
       },
       timestamp: new Date(),
     });

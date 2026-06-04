@@ -54,6 +54,16 @@ export function registerEventListeners(): void {
     }
   });
 
+  // Auto-expiry permanently failed after retries — alert admins for manual cleanup.
+  eventBus.on('access.expiry-failed', async (event) => {
+    try {
+      const { userAccessId, userName, groupName, attempts, error } = event.payload as any;
+      await notificationService.notifyExpiryFailed(userAccessId, userName, groupName, attempts, error);
+    } catch (err: any) {
+      logger.error('Failed to notify access.expiry-failed event:', err.message);
+    }
+  });
+
   // Group access request approved but waiting for the user to finish Redash setup.
   eventBus.on('access.queued-for-setup', async (event) => {
     try {
