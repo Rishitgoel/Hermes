@@ -3,7 +3,7 @@ import BaseController from './base.controller';
 import prisma from '../config/prisma';
 import accessWorkflowService from '../services/access-workflow.service';
 import provisioningRegistry from '../services/provisioning.registry';
-import { AuthorizationError, NotFoundError, ConflictError } from '../utils/errors';
+import { AuthorizationError, NotFoundError } from '../utils/errors';
 import { isGroupAdminOf } from '../utils/authz';
 import { PlatformEnum } from '../validations/platform.validation';
 
@@ -70,18 +70,6 @@ export class UserAccessController extends BaseController {
         throw new AuthorizationError('You do not have permission to revoke access for this group');
       }
 
-      // A group admin's access is held automatically by their admin role — revoking
-      // it directly would just be re-granted by the auto-enrollment on their next
-      // session load. Require demoting them first (which leaves them a plain member).
-      const adminRow = await prisma.groupAdmin.findUnique({
-        where: { groupId_userId: { groupId: access.groupId, userId: access.userId } },
-      });
-      if (adminRow) {
-        throw new ConflictError(
-          'This user is a group admin — remove their admin role first. They will become a regular member, and can then be removed.',
-        );
-      }
-
       const revoker = {
         id: userId,
         username: this.user!.username,
@@ -117,26 +105,4 @@ export class UserAccessController extends BaseController {
     }
   }
 
-  // POST /api/user-access/platform-user/:platform
-  async invitePlatformUser(req: Request, res: Response, next: NextFunction): Promise<void> {
-    try {
-      const platformResult = this.validateWithZod(PlatformEnum, this.req.params.platform, 'Invalid platform');
-      if (!platformResult.success) return;
-      const platform = platformResult.data;
-
-      const email = this.user!.email;
-      const name = this.user!.username.replace(/_/g, ' ');
-
-      if (!email) {
-        this.sendErrorResponse('Email not found in user session', 400);
-        return;
-      }
-
-      const adapter = provisioningRegistry.get(platform);
-      const result = await adapter.inviteUser(email, name);
-      this.sendResponse({ success: true, ...result }, `${platform} user created/invited successfully`);
-    } catch (error) {
-      this.handleError(error, 'Failed to invite platform user');
-    }
-  }
 }

@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import BaseController from './base.controller';
 import prisma from '../config/prisma';
 import { AuthorizationError } from '../utils/errors';
+import { isSuperAdmin } from '../utils/authz';
 import { auditQuerySchema } from '../validations/audit.validation';
 
 export class AuditController extends BaseController {
@@ -12,8 +13,7 @@ export class AuditController extends BaseController {
       if (!userId) return;
 
       // Authorization Check: Super Admin only
-      const isSuperAdmin = this.user!.roles.includes('hermes_super_admin');
-      if (!isSuperAdmin) {
+      if (!isSuperAdmin(this.user!)) {
         throw new AuthorizationError('Only super admins can view platform audit logs');
       }
 

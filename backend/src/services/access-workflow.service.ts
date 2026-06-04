@@ -56,6 +56,11 @@ export class AccessWorkflowService {
       if (!levelId) throw new ValidationError('This group requires selecting a level.');
       level = activeLevels.find((l) => l.id === levelId) ?? null;
       if (!level) throw new ValidationError('Invalid or inactive level for this group.');
+      // A level must be backed by its own external group. Block the request early
+      // rather than silently falling back to the base group at provision time.
+      if (!level.externalGroupId) {
+        throw new ValidationError('This level is not fully configured yet (no backing platform group). Please contact an admin.');
+      }
     } else if (levelId) {
       throw new ValidationError('This group has no levels; do not specify a level.');
     }
@@ -294,12 +299,18 @@ export class AccessWorkflowService {
       const platform = this.requirePlatform(request.group);
       const provisioner = provisioningRegistry.get(platform);
 
-      // A level (if any) owns its own external group; fall back to the group's own
-      // externalGroupId for level-less (legacy) groups.
-      const externalGroupId = request.level?.externalGroupId ?? request.group.externalGroupId;
+      // A level (if any) owns its own external group. We deliberately do NOT fall
+      // back to the group's base externalGroupId for a leveled request — that would
+      // silently provision the user into the base group (potentially broader
+      // permissions) instead of the level's restricted group. Fail loudly instead.
+      const externalGroupId = request.level
+        ? request.level.externalGroupId
+        : request.group.externalGroupId;
       if (!externalGroupId) {
         throw new Error(
-          `Group ${request.group.name}${request.level ? ` / level ${request.level.name}` : ''} has no associated External Group ID configured`,
+          request.level
+            ? `Level "${request.level.name}" has no External Group ID configured — refusing to fall back to the base group. Configure the level's backing platform group first.`
+            : `Group ${request.group.name} has no associated External Group ID configured`,
         );
       }
 
@@ -559,147 +570,6 @@ export class AccessWorkflowService {
       'Processed WAITING_FOR_SETUP requests after user completed setup',
     );
     return { provisioned, failed };
-  }
-
-  /**
-   * Ensure a direct group admin actually holds real membership in the groups they
-   * administer. The Groups list shows admins as ACTIVE (a cosmetic short-circuit in
-   * group.controller), but that's not a real grant — this creates the UserAccess
-   * row + provisions them on the platform so they're an actual member on Redash.
-   *
-   * Platform admins and super admins are intentionally excluded by callers: they
-   * can manage groups without being mass-provisioned into every external group.
-   *
-   * Called lazily from GET /auth/me once the user's Redash account is COMPLETED,
-   * since that's the only point where we have both their resolved admin scopes
-   * and a finalized platform account. Idempotent and self-healing: skips any
-   * group where an active grant already exists, the group is missing/inactive, or
-   * it has no externalGroupId. Per-slug try/catch so one failure doesn't block the
-   * rest. `reason` is recorded on each enrollment's audit entry.
-   */
-  async ensureGroupAdminEnrollment(
-    user: { id: string; username: string; email: string },
-    adminGroupSlugs: string[],
-    reason: string = 'Group-admin auto-enrollment',
-  ): Promise<{ enrolled: number }> {
-    if (adminGroupSlugs.length === 0) return { enrolled: 0 };
-
-    let enrolled = 0;
-    for (const slug of adminGroupSlugs) {
-      try {
-        const created = await this.enrollGroupAdminInGroup(user, slug, reason);
-        if (created) enrolled += 1;
-      } catch (err: any) {
-        logger.error(
-          { userId: user.id, slug, error: err.message },
-          'Failed to auto-enroll group-admin into their group',
-        );
-      }
-    }
-    return { enrolled };
-  }
-
-  /** Provision + record a single group-admin auto-enrollment. Returns true if a
-   *  new grant was created, false if it was a no-op (already a member, group not
-   *  provisionable, etc.). */
-  private async enrollGroupAdminInGroup(
-    user: { id: string; username: string; email: string },
-    slug: string,
-    reason: string = 'Group-admin auto-enrollment',
-  ): Promise<boolean> {
-    const group = await prisma.group.findUnique({ where: { slug } });
-    if (!group || !group.isActive) return false;
-
-    // Already a real member → nothing to do (idempotent across repeated logins).
-    const existing = await prisma.userAccess.findFirst({
-      where: { userId: user.id, groupId: group.id, isActive: true },
-    });
-    if (existing) return false;
-
-    // If the group has levels, enroll the admin into the highest-rank (most
-    // privileged) active level — they should hold the strongest access in the
-    // group they administer. Level-less groups fall back to the group itself.
-    const levels = await prisma.groupLevel.findMany({
-      where: { groupId: group.id, isActive: true },
-      orderBy: { rank: 'desc' },
-    });
-    const level = levels[0] ?? null;
-    const externalGroupId = level?.externalGroupId ?? group.externalGroupId;
-
-    if (!externalGroupId) {
-      logger.warn(
-        { slug, groupId: group.id, levelId: level?.id ?? null },
-        'Skipping group-admin auto-enroll — no externalGroupId configured for the group/level',
-      );
-      return false;
-    }
-
-    const platform = this.requirePlatform(group);
-    const provisioner = provisioningRegistry.get(platform);
-
-    const result = await provisioner.provision({
-      email: user.email,
-      name: user.username,
-      externalGroupId,
-      metadata: { groupSlug: group.slug, levelSlug: level?.slug ?? null },
-    });
-
-    const performer = { id: 'system_admin_enroll', name: 'System (admin auto-enroll)' };
-
-    try {
-      const userAccess = await prisma.userAccess.create({
-        data: {
-          userId: user.id,
-          userName: user.username,
-          userEmail: user.email,
-          groupId: group.id,
-          levelId: level?.id ?? null,
-          externalUserId: result.externalUserId,
-          isActive: true,
-          grantedAt: new Date(),
-          expiresAt: null, // group-admin enrollment is permanent
-          grantedBy: performer.name,
-          accessRequestId: null, // no AccessRequest — assignment came from Keycloak
-        },
-      });
-
-      await prisma.auditEntry.create({
-        data: {
-          action: 'ACCESS_GRANTED',
-          performerId: performer.id,
-          performerName: performer.name,
-          targetUserId: user.id,
-          targetUserName: user.username,
-          groupId: group.id,
-          details: {
-            userAccessId: userAccess.id,
-            platform,
-            externalUserId: result.externalUserId,
-            externalGroupId,
-            levelId: level?.id ?? null,
-            levelName: level?.name ?? null,
-            reason,
-          },
-        },
-      });
-
-      logger.info(
-        { userId: user.id, slug, groupId: group.id },
-        '✅ Auto-enrolled group-admin into their group',
-      );
-      return true;
-    } catch (createErr: any) {
-      // Concurrent enroll: partial unique (user_id, group_id) WHERE is_active = true
-      // fired. Treat as already provisioned, mirroring _provision's P2002 handling.
-      if (createErr?.code === 'P2002') {
-        logger.info(
-          { userId: user.id, slug },
-          'Group-admin already enrolled concurrently — skipping',
-        );
-        return false;
-      }
-      throw createErr;
-    }
   }
 
   // Revoke Access (Admin)

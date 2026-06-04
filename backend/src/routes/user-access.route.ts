@@ -24,9 +24,4 @@ router.get('/platform-status/:platform', authenticateToken, (req: Request, res: 
   controller.getPlatformStatus(req, res, next).catch(next);
 });
 
-router.post('/platform-user/:platform', authenticateToken, (req: Request, res: Response, next: NextFunction) => {
-  const controller = new UserAccessController(req, res, next);
-  controller.invitePlatformUser(req, res, next).catch(next);
-});
-
 export default router;

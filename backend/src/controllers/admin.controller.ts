@@ -4,6 +4,7 @@ import syncService from '../services/sync.service';
 import adminReconciliationService from '../services/admin-reconciliation.service';
 import prisma from '../config/prisma';
 import { AuthorizationError } from '../utils/errors';
+import { isSuperAdmin } from '../utils/authz';
 import logger from '../utils/logger';
 
 export class AdminController extends BaseController {
@@ -14,8 +15,7 @@ export class AdminController extends BaseController {
       const userId = this.getUserId();
       if (!userId) return;
 
-      const isSuperAdmin = this.user!.roles.includes('hermes_super_admin');
-      if (!isSuperAdmin) {
+      if (!isSuperAdmin(this.user!)) {
         throw new AuthorizationError('Only super admins can trigger manual synchronization');
       }
 
@@ -52,7 +52,7 @@ export class AdminController extends BaseController {
       const userId = this.getUserId();
       if (!userId) return;
 
-      if (!this.user!.roles.includes('hermes_super_admin')) {
+      if (!isSuperAdmin(this.user!)) {
         throw new AuthorizationError('Only super admins can trigger admin reconciliation');
       }
 

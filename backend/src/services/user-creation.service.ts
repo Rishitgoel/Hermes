@@ -59,11 +59,20 @@ export class UserCreationService {
       where: { userEmail: lowerEmail },
     });
     if (byEmail) {
+      // Same email under a different Keycloak userId (user re-created in Keycloak,
+      // or a shared address). Re-point the row at the current userId/userName so the
+      // user's own status lookups keep working — getMyRequest and submitRequest are
+      // both keyed on userId, so leaving the stale userId here would make /me return
+      // null and submitRequest throw NotFoundError.
       logger.warn(
-        { userId: user.id, existingUserId: byEmail.userId, email: lowerEmail },
-        'user-creation request exists for this email under a different userId — returning existing record',
+        { userId: user.id, previousUserId: byEmail.userId, email: lowerEmail },
+        'user-creation request exists for this email under a different userId — re-pointing it at the current user',
       );
-      return normalizeInviteLink(byEmail);
+      const adopted = await prisma.userCreationRequest.update({
+        where: { id: byEmail.id },
+        data: { userId: user.id, userName: user.username },
+      });
+      return normalizeInviteLink(adopted);
     }
 
     // The user-creation gate is Redash-specific today, so we read the Redash

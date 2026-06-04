@@ -14,7 +14,6 @@ import {
 import { AuthorizationError, NotFoundError, ValidationError, ConflictError } from '../utils/errors';
 import { assignPlatformAdminSchema, assignGroupAdminSchema } from '../validations/admin.validation';
 import { createGroupLevelSchema, updateGroupLevelSchema } from '../validations/group-level.validation';
-import { UserCreationStatus } from '@prisma/client';
 import logger from '../utils/logger';
 
 const PLATFORM_ADMIN_MARKER = 'hermes_platform_admin';
@@ -375,21 +374,9 @@ export class AdminManagementController extends BaseController {
         },
       });
 
-      // Synergy: if their platform account is finalized, make them a real member
-      // now (same enrollment used on /auth/me). Fire-and-forget — don't block the
-      // assignment response on provisioning. NOTE: this is an intentional standing
-      // grant — group admins get PERMANENT membership without an AccessRequest
-      // (recorded only as the ACCESS_GRANTED audit row below), bypassing the normal
-      // request → approval → duration flow.
-      const userCreation = await prisma.userCreationRequest.findUnique({ where: { userId } });
-      if (userCreation?.status === UserCreationStatus.COMPLETED) {
-        accessWorkflowService
-          .ensureGroupAdminEnrollment({ id: userId, username: profile.userName, email: profile.userEmail }, [group.slug])
-          .catch((err: any) =>
-            logger.error({ err: err.message, userId, groupId }, 'Auto-enroll after group-admin assignment failed'),
-          );
-      }
-
+      // Group admins get approval rights only — they are NOT auto-enrolled as
+      // members of the group they administer. If they need data access they request
+      // it through the normal request → approval → duration flow like anyone else.
       this.sendResponse(row, 'Group admin assigned successfully', 201);
     } catch (error) {
       this.handleError(error, 'Failed to assign group admin');
@@ -510,19 +497,10 @@ export class AdminManagementController extends BaseController {
         throw new NotFoundError('Member not found in this group');
       }
 
-      // Single-status model: a current admin isn't a removable "member" — their
-      // access is held automatically by the admin role. Removing it directly would
-      // also be undone by the group-admin auto-enrollment on the next session load.
-      // Require demoting them first (which leaves them a plain member).
-      const adminRow = await prisma.groupAdmin.findUnique({
-        where: { groupId_userId: { groupId, userId: access.userId } },
-      });
-      if (adminRow) {
-        throw new ConflictError(
-          'This user is a group admin — remove their admin role first. They will become a regular member, and can then be removed.',
-        );
-      }
-
+      // Group admins are no longer auto-enrolled, so any grant a current admin holds
+      // came from a normal request — it's a real, removable membership. (Removing it
+      // leaves their approval rights intact; those come from the admin role, not the
+      // grant.)
       await accessWorkflowService.revokeAccess(
         userAccessId,
         { id: userId, username: this.user!.username },

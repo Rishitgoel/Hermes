@@ -4,7 +4,7 @@ import prisma from '../config/prisma';
 import { RequestStatus } from '@prisma/client';
 import { checkIsGroupAdmin } from '../middleware/auth.middleware';
 import { groupSlugSchema } from '../validations/group.validation';
-import { getManageablePlatforms } from '../utils/authz';
+import { getManageablePlatforms, isSuperAdmin as isSuperAdminUser } from '../utils/authz';
 
 export class GroupController extends BaseController {
   // GET /api/groups
@@ -44,7 +44,7 @@ export class GroupController extends BaseController {
         })
       ]);
 
-      const isSuperAdmin = this.user?.roles.includes('hermes_super_admin') || false;
+      const isSuperAdmin = this.user ? isSuperAdminUser(this.user) : false;
       // Platforms this user administers (lower-cased). Super admins implicitly
       // manage every registered platform; platform admins their own; everyone else
       // gets []. A platform admin reads as ACTIVE on every group of their platform —
@@ -164,7 +164,7 @@ export class GroupController extends BaseController {
         },
       });
 
-      const isSuperAdmin = this.user?.roles.includes('hermes_super_admin') || false;
+      const isSuperAdmin = this.user ? isSuperAdminUser(this.user) : false;
       const managedPlatforms = this.user ? await getManageablePlatforms(this.user) : [];
       const isKeycloakAdmin = this.user?.roles ? checkIsGroupAdmin(this.user.roles, group.slug, group.platform) : false;
       const isPlatformAdminOfGroup = managedPlatforms.includes(group.platform.toLowerCase());
