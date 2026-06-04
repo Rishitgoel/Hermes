@@ -109,19 +109,27 @@ export class KeycloakSetupService {
       } else {
         // Create Client
         logger.info(`🔑 Keycloak setup: Client '${targetClientId}' not found. Creating...`);
+        // Prod hardening: no Resource-Owner-Password grant (the SPA uses auth-code +
+        // PKCE only) and no localhost redirect URIs. publicClient stays true — correct
+        // for a browser SPA. webOrigins '+' = CORS limited to the redirect URIs'
+        // origins, not a '*' wildcard.
+        const isProdClient = config.isProd;
+        const redirectUris = isProdClient
+          ? ['https://hermes.bachatt.app/*']
+          : [
+              'https://hermes.bachatt.app/*',
+              'http://localhost:5173/*',
+              'http://localhost:5174/*',
+            ];
         const createRes = await axios.post(
           clientsUrl,
           {
             clientId: targetClientId,
             enabled: true,
             publicClient: true,
-            directAccessGrantsEnabled: true,
+            directAccessGrantsEnabled: !isProdClient,
             standardFlowEnabled: true,
-            redirectUris: [
-              'https://hermes.bachatt.app/*',
-              'http://localhost:5173/*',
-              'http://localhost:5174/*',
-            ],
+            redirectUris,
             webOrigins: ['+'],
           },
           {

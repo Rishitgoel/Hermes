@@ -23,20 +23,28 @@ export const config = {
     return process.env.KEYCLOAK_SIMULATION === 'true' && !this.isProd;
   },
 
+  // Read lazily via getters (NOT captured once at import). loadSecrets() injects
+  // these from AWS Secrets Manager *after* this module loads, so a static capture
+  // would be stale — e.g. the JWKS/issuer/audience the JWT verifier relies on, or
+  // adminPassword (a stale `undefined` would make keycloakAdminService.isLive false
+  // forever in prod). Same rationale as slack/email below.
   keycloak: {
-    jwksUri: process.env.KEYCLOAK_JWKS_URI || 'https://keycloak.bachatt.app/realms/master/protocol/openid-connect/certs',
-    issuer: process.env.KEYCLOAK_ISSUER || 'https://keycloak.bachatt.app/realms/master',
-    audience: process.env.KEYCLOAK_AUDIENCE,
-    adminUrl: process.env.KEYCLOAK_ADMIN_URL || 'https://keycloak.bachatt.app',
-    adminClientId: process.env.KEYCLOAK_ADMIN_CLIENT_ID || 'admin-cli',
-    adminUsername: process.env.KEYCLOAK_ADMIN_USERNAME || 'admin',
-    adminPassword: process.env.KEYCLOAK_ADMIN_PASSWORD,
-    realm: process.env.VITE_KEYCLOAK_REALM || 'master',
+    get jwksUri() { return process.env.KEYCLOAK_JWKS_URI || 'https://keycloak.bachatt.app/realms/master/protocol/openid-connect/certs'; },
+    get issuer() { return process.env.KEYCLOAK_ISSUER || 'https://keycloak.bachatt.app/realms/master'; },
+    get audience() { return process.env.KEYCLOAK_AUDIENCE; },
+    get adminUrl() { return process.env.KEYCLOAK_ADMIN_URL || 'https://keycloak.bachatt.app'; },
+    get adminClientId() { return process.env.KEYCLOAK_ADMIN_CLIENT_ID || 'admin-cli'; },
+    get adminUsername() { return process.env.KEYCLOAK_ADMIN_USERNAME || 'admin'; },
+    get adminPassword() { return process.env.KEYCLOAK_ADMIN_PASSWORD; },
+    get realm() { return process.env.VITE_KEYCLOAK_REALM || 'master'; },
   },
 
   redash: {
-    baseUrl: process.env.REDASH_BASE_URL || 'https://redash.bachatt.app',
-    apiKey: process.env.REDASH_API_KEY || 'dummy-key-for-development',
+    // Lazy getters (see keycloak note): baseUrl/apiKey may arrive from AWS Secrets
+    // Manager after import. A static apiKey capture would stay the dev dummy →
+    // isSimulation would wrongly return true in production.
+    get baseUrl() { return process.env.REDASH_BASE_URL || 'https://redash.bachatt.app'; },
+    get apiKey() { return process.env.REDASH_API_KEY || 'dummy-key-for-development'; },
     get isSimulation() {
       // ON only when explicitly requested, or when the key is still the dev
       // dummy. The previous `|| config.isDev` clause forced simulation on
@@ -104,6 +112,15 @@ export const config = {
 
   security: {
     enableHelmet: process.env.SECURITY_HELMET !== 'false',
+    // Proxy hops to trust (ALB / API Gateway) so req.ip is the real client and a
+    // spoofed X-Forwarded-For can't be used to bypass rate limiting. A numeric
+    // string → hop count; anything else is passed through (e.g. 'loopback').
+    // 0 = trust no proxy (correct for local dev).
+    get trustProxy(): number | string {
+      const v = process.env.TRUST_PROXY;
+      if (!v) return 0;
+      return /^\d+$/.test(v) ? parseInt(v, 10) : v;
+    },
   },
 } as const;
 

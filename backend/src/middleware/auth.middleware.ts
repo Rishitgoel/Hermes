@@ -19,6 +19,14 @@ declare module 'express-serve-static-core' {
   }
 }
 
+// In production the audience claim MUST be validated — otherwise a token minted for
+// any other client in the same Keycloak realm would be accepted here. Fail fast at
+// boot rather than silently accepting cross-client tokens. (This module is imported
+// after loadSecrets, so config.keycloak.audience reflects any injected secrets.)
+if (config.isProd && !config.keycloak.audience) {
+  throw new Error('KEYCLOAK_AUDIENCE is required in production (JWT audience validation).');
+}
+
 const checkJwtLive = expressjwt({
   secret: jwksRsa.expressJwtSecret({
     cache: true,

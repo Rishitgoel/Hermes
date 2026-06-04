@@ -24,15 +24,10 @@ class SecurityService {
       message: rateLimitConfig.message || 'Too many requests, please try again later.',
       standardHeaders: true,
       legacyHeaders: false,
-      keyGenerator: (req): string => {
-        const forwarded = req.headers['x-forwarded-for'];
-        const ip = forwarded
-          ? Array.isArray(forwarded)
-            ? forwarded[0]
-            : forwarded.split(',')[0]
-          : req.ip;
-        return ip || 'unknown';
-      },
+      // No custom keyGenerator: express-rate-limit defaults to req.ip, which honours
+      // the app's `trust proxy` setting (see index.ts). Parsing X-Forwarded-For
+      // ourselves let any client spoof the header and rotate their rate-limit key to
+      // bypass the limit entirely.
       handler: (req, res) => {
         logger.warn(
           {

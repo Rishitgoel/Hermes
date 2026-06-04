@@ -9,24 +9,14 @@ let client: SecretsManagerClient | null = null;
 const isDev = config.isDev || config.isSimulation;
 
 if (!isDev) {
-  const { region, accessKeyId, secretAccessKey } = config.aws;
-  const missingVars = [
-    !accessKeyId && 'AWS_ACCESS_KEY_ID',
-    !secretAccessKey && 'AWS_SECRET_ACCESS_KEY',
-    !region && 'AWS_REGION',
-  ].filter(Boolean);
-
-  if (missingVars.length === 0) {
-    client = new SecretsManagerClient({
-      region: region!,
-      credentials: {
-        accessKeyId: accessKeyId!,
-        secretAccessKey: secretAccessKey!,
-      },
-    });
-  } else {
-    logger.warn(`Missing AWS variables for Secrets Manager: ${missingVars.join(', ')}. Falling back to local env.`);
-  }
+  // Use the AWS SDK's default credential provider chain — do NOT pass explicit
+  // long-lived keys. On AWS we authenticate with the ECS/EKS task role or EC2
+  // instance role (the chain resolves them automatically), and it still picks up
+  // AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY from env for local testing. Region
+  // falls back to the SDK's own resolution (AWS_REGION) when not set in config.
+  client = new SecretsManagerClient(
+    config.aws.region ? { region: config.aws.region } : {},
+  );
 }
 
 export async function getSecret(name: string): Promise<string> {
@@ -62,14 +52,19 @@ export async function loadSecrets(): Promise<void> {
   try {
     logger.info('Attempting to fetch secrets from AWS Secrets Manager...');
     const value = await getSecret(config.aws.secretName);
-    if (value) {
-      const secretValue = JSON.parse(value);
-      Object.entries(secretValue).forEach(([key, val]) => {
-        process.env[key] = val as string;
-      });
-      logger.info(`Successfully loaded and processed secrets from ${config.aws.secretName}`);
+    if (!value) {
+      throw new Error(`Secret "${config.aws.secretName}" was empty or not found`);
     }
-  } catch (error) {
-    logger.warn('Failed loading secrets from AWS Secrets Manager. Relying on local env variables.');
+    const secretValue = JSON.parse(value);
+    Object.entries(secretValue).forEach(([key, val]) => {
+      process.env[key] = val as string;
+    });
+    logger.info(`Successfully loaded and processed secrets from ${config.aws.secretName}`);
+  } catch (error: any) {
+    // Fail CLOSED outside dev/sim: a secrets failure would otherwise fall back to
+    // local/default env (e.g. the Redash dummy key → silent simulation in prod, or
+    // an unauthenticated DB). Crash startup instead of running degraded/insecure.
+    logger.fatal(`Failed loading secrets from AWS Secrets Manager: ${error.message}`);
+    throw error;
   }
 }

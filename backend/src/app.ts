@@ -1,14 +1,15 @@
 import './config/config'; // Loads dotenv + normalizes env once
 
 import config from './config/config';
-import app from './index';
 import logger from './utils/logger';
 import { loadSecrets } from './config/secrets';
-import keycloakSetupService from './config/keycloak-setup';
-import schedulerService from './services/scheduler.service';
-import syncService from './services/sync.service';
 
-import { registerEventListeners } from './services/event-listeners';
+// NOTE: the Express app, middleware, and services are imported *dynamically* inside
+// bootstrap() — AFTER loadSecrets() — because several modules read config at import
+// time (the express-jwt verifier in auth.middleware captures JWKS/issuer/audience at
+// construction; redash + keycloak config too). Importing them statically up here
+// would run that capture before AWS Secrets Manager injects the real values, leaving
+// them stale for the lifetime of the process.
 
 const PORT = config.port;
 
@@ -47,22 +48,32 @@ async function bootstrap() {
   try {
     logger.info('🚀 Hermes Backend starting up...');
 
-    // 0. Register event listeners
-    registerEventListeners();
-
-    // 1. Load AWS secrets (in production)
+    // 1. Load AWS secrets FIRST (prod). Must precede every dynamic import below so
+    //    config reads (Keycloak JWKS/issuer/audience, Redash key, adminPassword) see
+    //    the real values rather than import-time defaults.
     await loadSecrets();
 
     // 1.5 Report notification channel readiness (now that secrets are in env)
     reportNotificationReadiness();
 
-    // 2. Perform Keycloak check / client setup
+    // 2. Import the app + services now that env is fully populated (dynamic import so
+    //    their module-load-time config captures happen after loadSecrets).
+    const { default: app } = await import('./index');
+    const { default: keycloakSetupService } = await import('./config/keycloak-setup');
+    const { default: schedulerService } = await import('./services/scheduler.service');
+    const { default: syncService } = await import('./services/sync.service');
+    const { registerEventListeners } = await import('./services/event-listeners');
+
+    // 3. Register event listeners (before anything can emit)
+    registerEventListeners();
+
+    // 4. Perform Keycloak check / client setup
     await keycloakSetupService.ensureClientAndRolesExist();
 
-    // 3. Start auto-revocation scheduler
+    // 5. Start auto-revocation scheduler
     schedulerService.start();
 
-    // 4. Run an initial platform cache sync in the background
+    // 6. Run an initial platform cache sync in the background
     syncService.syncAllPlatforms()
       .then((res) => {
         logger.info(`🔄 Initial platform sync complete. Cached ${res.usersSynced} users and ${res.groupsSynced} groups.`);
@@ -71,7 +82,7 @@ async function bootstrap() {
         logger.warn('⚠️ Initial platform sync failed. Cache might be stale. Proceeding...', err.message);
       });
 
-        // 5. Start Express server
+    // 7. Start Express server
     const server = app.listen(PORT, () => {
       logger.info(`🚀 Hermes Backend listening on http://localhost:${PORT}`);
     });

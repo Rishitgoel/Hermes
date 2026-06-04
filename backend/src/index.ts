@@ -1,7 +1,8 @@
-import express from 'express';
+import express, { Request, Response } from 'express';
 import cors from 'cors';
 import { helmetMiddleware, securityHeaders, generalRateLimiter } from './middleware/security.middleware';
 import { requestIdMiddleware, performanceMiddleware, errorHandler, notFoundHandler } from './middleware/error.middleware';
+import { authenticateToken, requireRole } from './middleware/auth.middleware';
 
 import authRouter from './routes/auth.route';
 import groupRouter from './routes/group.route';
@@ -18,6 +19,18 @@ import provisioningRegistry from './services/provisioning.registry';
 import syncService from './services/sync.service';
 
 const app = express();
+
+// Trust the configured number of proxy hops (ALB / API Gateway) so req.ip is the real
+// client and X-Forwarded-For can't be spoofed to bypass rate limiting.
+app.set('trust proxy', config.security.trustProxy);
+
+// Liveness probe — public, trivial, and mounted before all other middleware
+// (including rate limiting) so load-balancer / container health checks are never
+// throttled or blocked. No DB or outbound calls → can't amplify load or fingerprint
+// dependencies. Deep diagnostics live behind auth at GET /health/deep.
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+});
 
 // Security and utility middleware
 app.use(helmetMiddleware);
@@ -50,8 +63,10 @@ app.use(requestIdMiddleware);
 app.use(performanceMiddleware);
 app.use(generalRateLimiter);
 
-// Health check endpoint (unauthenticated)
-app.get('/health', async (req, res) => {
+// Deep diagnostics — DB + live platform health. Behind super-admin auth so anonymous
+// callers can't trigger outbound platform calls (amplification) or read dependency
+// topology. The public liveness probe above stays minimal.
+app.get('/health/deep', authenticateToken, requireRole(['hermes_super_admin']), async (req: Request, res: Response) => {
   const checks: Record<string, any> = { timestamp: new Date().toISOString() };
 
   // Database check. Don't surface raw error text in prod — Prisma error messages
