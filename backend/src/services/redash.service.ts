@@ -151,6 +151,10 @@ export class RedashService {
         { id: 104, name: 'Credit Card', type: 'regular' },
         { id: 105, name: 'Customer Support', type: 'regular' },
         { id: 106, name: 'Marketing', type: 'regular' },
+        // Per-level groups backing Credit Card's permission levels (see seed.ts).
+        { id: 1041, name: 'Credit Card — Intern', type: 'regular' },
+        { id: 1042, name: 'Credit Card — Junior Dev', type: 'regular' },
+        { id: 1043, name: 'Credit Card — Senior Dev', type: 'regular' },
       ];
     }
 
@@ -311,6 +315,48 @@ export class RedashService {
         throw new Error(`Redash API removeUserFromGroup error: ${error.message}`);
       }
     });
+  }
+
+  // Create a new Redash group; returns its server-assigned id. Permissions
+  // (data-source access) are configured separately in Redash — Hermes only
+  // owns the group's existence and membership.
+  async createGroup(name: string): Promise<{ id: number; name: string }> {
+    if (this.isSimulation) {
+      const fakeId = Math.floor(Math.random() * 9000) + 1000;
+      logger.info(`📊 Redash createGroup (Simulation): Created Group "${name}" with ID ${fakeId}`);
+      return { id: fakeId, name };
+    }
+
+    try {
+      const client = this.getClient();
+      const res = await client.post('/api/groups', { name });
+      logger.info(`📊 Redash: Created Group "${name}" with ID ${res.data.id}`);
+      return { id: res.data.id, name: res.data.name ?? name };
+    } catch (error: any) {
+      logger.error(`Failed to create group "${name}" in Redash:`, error.message);
+      throw new Error(`Redash API createGroup error: ${error.message}`);
+    }
+  }
+
+  // Delete a Redash group by id. Tolerates a 404 (already gone) so cleanup is idempotent.
+  async deleteGroup(redashGroupId: number): Promise<void> {
+    if (this.isSimulation) {
+      logger.info(`📊 Redash deleteGroup (Simulation): Deleted Group ID ${redashGroupId}`);
+      return;
+    }
+
+    try {
+      const client = this.getClient();
+      await client.delete(`/api/groups/${redashGroupId}`);
+      logger.info(`📊 Redash: Deleted Group ID ${redashGroupId}`);
+    } catch (error: any) {
+      if (error.response && error.response.status === 404) {
+        logger.info(`📊 Redash: Group ID ${redashGroupId} already absent; nothing to delete`);
+        return;
+      }
+      logger.error(`Failed to delete group ${redashGroupId} in Redash:`, error.message);
+      throw new Error(`Redash API deleteGroup error: ${error.message}`);
+    }
   }
 }
 

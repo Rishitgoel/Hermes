@@ -75,7 +75,7 @@ All services in `docker-compose.yml` (Postgres, Keycloak, Redis, Redash) are cur
 1. Uncomment the service in [docker-compose.yml](file:///d:/Bachatt/Hermes%202/docker-compose.yml).
 2. Start Docker Desktop and run `docker compose up -d`.
 3. Set the respective simulation flags to `false` in your `.env` files.
-4. Run the live Redash reset script from the `backend/` directory to wipe mock state and link groups: `npx ts-node scripts/reset-for-live-redash.ts`.
+4. Run the live Redash reset script from the `backend/` directory to wipe mock state and link groups & levels: `npx ts-node scripts/reset-for-live-redash.ts`.
 
 ### Environment files
 
@@ -99,7 +99,7 @@ npm run prisma:seed                      # seeds the Supabase database
 npx prisma generate --schema=prisma/hermes/schema.prisma   # ⚠ always pass --schema flag
 npx prisma validate --schema=prisma/hermes/schema.prisma
 npx tsc --noEmit                         # typecheck only
-npx ts-node scripts/reset-for-live-redash.ts                  # wipes mock transient state + maps live Redash IDs
+npx ts-node scripts/reset-for-live-redash.ts                  # wipes mock transient state + maps live Redash IDs (groups & levels)
 
 # Frontend
 cd frontend
@@ -206,6 +206,16 @@ Cached platform state lives in **generic, platform-keyed tables** `platform_exte
 
 The admin model keys off the **same** `platform` string (see Auth → Admin tiers). Onboarding a platform is therefore: register the adapter → create `Group` rows with that `platform` → assign a platform admin via the Admin Management UI. No schema migration, no Keycloak role config (scoped roles are created on demand), and the admin-management layer needs no changes — `getManageablePlatforms` reads the registry, so the new platform appears automatically.
 
+#### Group levels (subgroups)
+
+A `Group` can carry **levels** (`GroupLevel`, table `group_levels`) — e.g. Credit Card → Intern / Junior Dev / Senior Dev — each with a different permission tier. **Each level is backed by its own external group** (its own `externalGroupId`); in Redash, read-only vs write is configured on that level's group's data sources, so Hermes just routes the requester to the right group. The model is platform-agnostic — it works for any adapter.
+
+- **Non-breaking:** a group with **zero active levels** behaves exactly as before (request the group directly, provision to `Group.externalGroupId`). A group **with** levels requires a `levelId` on the request. The resolution rule used everywhere (provision, revoke, expire, admin-enroll) is `externalGroupId = level?.externalGroupId ?? group.externalGroupId`.
+- `AccessRequest.levelId` / `UserAccess.levelId` are nullable (null = legacy/level-less grant). One active grant per `(user, group)` still holds — the partial unique index is **not** keyed on `levelId`, so a user holds one level per group at a time.
+- **Requiredness** ("group has active levels ⇒ levelId required") is enforced in `accessWorkflowService.createRequest`, not the Zod schema (it's DB-state dependent).
+- **Level CRUD** is super-admin / platform-admin only (mapping `externalGroupId` is platform config) — `admin-management.controller.ts` handlers under `/api/admin/groups/:groupId/levels`, surfaced in the expandable group row on `AdminManagement.tsx`. Group admins still review requests for **any** level with no new role. Deleting a level with active members **soft-deactivates** it (members keep access until expiry/revoke).
+- ⚠ Adding levels to a group does **not** auto-migrate existing members — legacy `levelId=null` grants keep working on the group's base `externalGroupId`; only new requesters pick a level.
+
 ### Frontend
 
 - React 19, Vite 6, React Router 7.
@@ -222,7 +232,7 @@ The admin model keys off the **same** `platform` string (see Auth → Admin tier
 - **Errors**: throw `BaseError` subclasses. Don't `res.status(...).json(...)` directly in controllers — go through `BaseController` helpers.
 - **Logging**: `import logger from '../utils/logger'` (pino). Don't `console.log` in backend.
 - **Config access**: import `config from '../config/config'`. **Don't read `process.env.NODE_ENV` directly** — use `config.isDev`, `config.isProd`. (All known violations are fixed; `config.ts` itself is the only place that reads `process.env.NODE_ENV`.)
-- **Audit logs**: every state-changing action should write a row to `audit_entries` via `prisma.auditEntry.create({...})`. Patterns: `REQUEST_CREATED`, `REQUEST_REJECTED`, `ACCESS_GRANTED`, `ACCESS_REVOKED`, `ACCESS_EXPIRED`, `PROVISION_FAILED`, `MANUAL_SYNC_TRIGGERED`, `PLATFORM_ADMIN_ASSIGNED`, `PLATFORM_ADMIN_REVOKED`, `GROUP_ADMIN_ASSIGNED`, `GROUP_ADMIN_REVOKED`, `ADMIN_RECONCILE_TRIGGERED`, `USER_CREATION_*`. (`action` is a free string — no enum.)
+- **Audit logs**: every state-changing action should write a row to `audit_entries` via `prisma.auditEntry.create({...})`. Patterns: `REQUEST_CREATED`, `REQUEST_REJECTED`, `ACCESS_GRANTED`, `ACCESS_REVOKED`, `ACCESS_EXPIRED`, `PROVISION_FAILED`, `MANUAL_SYNC_TRIGGERED`, `PLATFORM_ADMIN_ASSIGNED`, `PLATFORM_ADMIN_REVOKED`, `GROUP_ADMIN_ASSIGNED`, `GROUP_ADMIN_REVOKED`, `ADMIN_RECONCILE_TRIGGERED`, `GROUP_LEVEL_CREATED`, `GROUP_LEVEL_UPDATED`, `GROUP_LEVEL_DELETED`, `GROUP_LEVEL_DEACTIVATED`, `USER_CREATION_*`. (`action` is a free string — no enum.)
 - **Events**: after a state change, also emit on `eventBus` (`backend/src/services/event-bus.ts`) so notifications/Slack fire async.
 - **Frontend types**: each page redeclares its data shape as an `interface`. Until P3-5 (OpenAPI codegen), this is the convention — match the backend response shape exactly.
 - **CSS**: there's a `frontend/src/styles/global.css` with CSS variables (`--primary`, `--text-muted`, `--radius-md`, `--shadow-md`, etc.). Use them. Inline styles are heavily used today but should be migrating out (smaller-wins list in ROADMAP.md).
@@ -273,6 +283,7 @@ Tell the user what passed/failed before reporting "done."
 - ✅ Frontend on TanStack Query (P1-5, done) — no raw fetch in `useEffect`
 - ✅ `.env.example` files exist for backend + frontend (P1-4, done)
 - ✅ Three-tier admin model (super → platform → group) + Admin Management UI; Keycloak-authoritative roles with `platform_admins` / `group_admins` DB mirror
+- ✅ Group levels / subgroups (`group_levels`) — each level backed by its own external group; non-breaking (level-less groups unchanged); CRUD is super/platform-admin only (see Provisioning → Group levels)
 - ✅ Frontend ESLint wired (`cd frontend; npm run lint`)
 - ❌ No tests
 - ❌ No CI

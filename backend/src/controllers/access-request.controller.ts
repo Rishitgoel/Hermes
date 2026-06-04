@@ -23,7 +23,7 @@ export class AccessRequestController extends BaseController {
         email: this.user!.email,
       };
 
-      const { groupId, justification, duration } = validated.data;
+      const { groupId, levelId, justification, duration } = validated.data;
 
       // Prevent self-requesting if the caller already administers this group.
       if (await isGroupAdminOf(this.user!, groupId)) {
@@ -34,7 +34,8 @@ export class AccessRequestController extends BaseController {
         requester,
         groupId,
         justification,
-        duration
+        duration,
+        levelId
       );
 
       this.sendResponse(request, 'Access request submitted successfully', 201);
@@ -51,7 +52,7 @@ export class AccessRequestController extends BaseController {
 
       const requests = await prisma.accessRequest.findMany({
         where: { requesterId: userId },
-        include: { group: true },
+        include: { group: true, level: true },
         orderBy: { createdAt: 'desc' },
       });
 
@@ -82,7 +83,7 @@ export class AccessRequestController extends BaseController {
 
       const requests = await prisma.accessRequest.findMany({
         where,
-        include: { group: true },
+        include: { group: true, level: true },
         orderBy: { createdAt: 'desc' },
       });
 
@@ -101,7 +102,7 @@ export class AccessRequestController extends BaseController {
 
       const request = await prisma.accessRequest.findUnique({
         where: { id },
-        include: { group: true },
+        include: { group: true, level: true },
       });
 
       if (!request) {

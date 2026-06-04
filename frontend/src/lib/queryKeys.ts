@@ -20,4 +20,5 @@ export const queryKeys = {
   adminPlatformAdmins: (platform: string) => ['admin', 'platform-admins', platform] as const,
   adminGroupAdmins: (platform: string) => ['admin', 'group-admins', platform] as const,
   adminGroupMembers: (groupId: string) => ['admin', 'group-members', groupId] as const,
+  adminGroupLevels: (groupId: string) => ['admin', 'group-levels', groupId] as const,
 };

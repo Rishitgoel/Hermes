@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import BaseController from './base.controller';
 import userCreationService from '../services/user-creation.service';
 import accessWorkflowService from '../services/access-workflow.service';
-import { computeAdminScopes, AdminScopes } from '../utils/authz';
+import { computeAdminScopes, getDirectGroupAdminSlugs, AdminScopes } from '../utils/authz';
 import { UserCreationStatus } from '@prisma/client';
 import logger from '../utils/logger';
 
@@ -63,24 +63,24 @@ export class AuthController extends BaseController {
       // Auto-enroll admins as REAL members of the groups they administer. This is
       // the one place with both their resolved admin scopes and a finalized Redash
       // account, so we do it lazily here. Fire-and-forget: it provisions on Redash
-      // and shouldn't delay the session response (the Groups list already shows
-      // admins as ACTIVE; this just makes the membership real on the next poll).
+      // and shouldn't delay the session response.
       // Only runs once the Redash account is COMPLETED.
       //
       //   - group admins    → the group(s) they administer
-      //   - platform admins → every group on the platform(s) they administer
+      //   - platform admins: none. They manage platform groups without mass-provisioning.
       //   - super admins    → none. They get the cosmetic ACTIVE badge everywhere
       //                       (see group.controller) but are deliberately NOT mass-
       //                       provisioned into every group on every platform.
       //
-      // adminScopes.groups already unions the group-admin + platform-admin group
-      // slugs and is empty for super admins, so it is exactly the enrollment set.
+      // adminScopes.groups also contains platform-admin groups for UI/request
+      // scoping, so the provisioning set below uses direct GroupAdmin rows only.
       // Idempotent: enrollment skips any group the user is already a member of.
       const userCreationStatus = (userCreation as { status?: UserCreationStatus } | null)?.status;
-      if (userCreationStatus === UserCreationStatus.COMPLETED && adminScopes.groups.length > 0) {
+      if (userCreationStatus === UserCreationStatus.COMPLETED) {
         const enrollUser = { id: this.user.id, username: this.user.username, email: this.user.email };
+        const directGroupSlugs = await getDirectGroupAdminSlugs(this.user);
         accessWorkflowService
-          .ensureGroupAdminEnrollment(enrollUser, adminScopes.groups, 'Admin auto-enrollment')
+          .ensureGroupAdminEnrollment(enrollUser, directGroupSlugs, 'Group-admin auto-enrollment')
           .catch((err: any) => {
             logger.error(
               { err: err.message, userId: enrollUser.id },

@@ -53,6 +53,22 @@ export class RedashProvisioner implements PlatformAdapter {
     }
   }
 
+  // ── Group lifecycle ───────────────────────────────────────────────────────
+  // Lets the admin "add a permission-level" flow provision the backing Redash
+  // group automatically. Hermes owns the group's existence + membership; the
+  // admin configures its data-source permissions (read-only vs write) in Redash.
+
+  /** Create a backing Redash group; returns its id as a string. */
+  async createExternalGroup(name: string): Promise<{ externalGroupId: string; name?: string }> {
+    const group = await redashService.createGroup(name);
+    return { externalGroupId: group.id.toString(), name: group.name };
+  }
+
+  /** Delete a backing Redash group by its external id. */
+  async deleteExternalGroup(externalGroupId: string): Promise<void> {
+    await redashService.deleteGroup(parseInt(externalGroupId, 10));
+  }
+
   /** Look up whether a user exists on Redash, using the local cache. */
   async checkUserStatus(email: string): Promise<PlatformUserStatus> {
     const cached = await prisma.platformExternalUser.findUnique({

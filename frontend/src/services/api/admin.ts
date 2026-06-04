@@ -116,3 +116,50 @@ export async function listGroupMembers(groupId: string): Promise<GroupMember[]> 
 export async function removeGroupMember(groupId: string, userAccessId: string): Promise<void> {
   await apiClient.delete(`/api/admin/groups/${groupId}/members/${userAccessId}`);
 }
+
+// ── Group levels (subgroups) ───────────────────────────────────────────────────
+
+export interface GroupLevelRow {
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  permission: string | null;
+  externalGroupId: string | null;
+  rank: number;
+  isActive: boolean;
+  memberCount: number;
+}
+
+export interface GroupLevelInput {
+  name: string;
+  slug: string;
+  description?: string;
+  permission?: string;
+  externalGroupId?: string;
+  rank?: number;
+  isActive?: boolean;
+}
+
+export async function listGroupLevels(groupId: string): Promise<GroupLevelRow[]> {
+  const res = await apiClient.get(`/api/admin/groups/${groupId}/levels`);
+  return res.data as GroupLevelRow[];
+}
+
+export async function createGroupLevel(groupId: string, body: GroupLevelInput): Promise<GroupLevelRow> {
+  const res = await apiClient.post(`/api/admin/groups/${groupId}/levels`, body);
+  return res.data as GroupLevelRow;
+}
+
+export async function updateGroupLevel(
+  groupId: string,
+  levelId: string,
+  body: Partial<GroupLevelInput>,
+): Promise<GroupLevelRow> {
+  const res = await apiClient.put(`/api/admin/groups/${groupId}/levels/${levelId}`, body);
+  return res.data as GroupLevelRow;
+}
+
+export async function deleteGroupLevel(groupId: string, levelId: string): Promise<void> {
+  await apiClient.delete(`/api/admin/groups/${groupId}/levels/${levelId}`);
+}

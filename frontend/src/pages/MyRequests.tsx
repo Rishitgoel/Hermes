@@ -22,6 +22,10 @@ interface RequestData {
     name: string;
     color: string | null;
   };
+  level: {
+    name: string;
+    permission: string | null;
+  } | null;
 }
 
 export const MyRequests: React.FC = () => {
@@ -84,6 +88,11 @@ export const MyRequests: React.FC = () => {
                     }}>
                       {req.group.name}
                     </span>
+                    {req.level && (
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, paddingLeft: '11px', marginTop: '2px' }}>
+                        {req.level.name}{req.level.permission ? ` · ${req.level.permission}` : ''}
+                      </div>
+                    )}
                   </td>
                   <td style={{ maxWidth: '280px', fontSize: '13px' }} title={req.justification}>
                     {req.justification}

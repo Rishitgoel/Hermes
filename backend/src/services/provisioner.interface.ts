@@ -74,6 +74,18 @@ export interface PlatformAdapter {
   /** Optional: refresh the cached group list for this platform. */
   syncGroups?(): Promise<{ count: number }>;
 
+  /**
+   * Optional: create a backing group on the platform and return its external id.
+   * Used by the admin "add a permission-level" flow so Hermes provisions the
+   * level's backing group itself (instead of an admin pasting the id of a
+   * pre-existing one). The admin then configures that group's permissions
+   * (e.g. read-only vs write data-source access) on the platform directly.
+   * Adapters that can't create groups simply omit this.
+   */
+  createExternalGroup?(name: string): Promise<{ externalGroupId: string; name?: string }>;
+  /** Optional: delete a backing group on the platform by its external id. */
+  deleteExternalGroup?(externalGroupId: string): Promise<void>;
+
   /** Liveness probe surfaced on the `/health` endpoint. */
   healthCheck(): Promise<{ healthy: boolean; message?: string }>;
 }

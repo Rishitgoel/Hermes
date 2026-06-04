@@ -13,6 +13,7 @@ import {
 } from '../utils/authz';
 import { AuthorizationError, NotFoundError, ValidationError, ConflictError } from '../utils/errors';
 import { assignPlatformAdminSchema, assignGroupAdminSchema } from '../validations/admin.validation';
+import { createGroupLevelSchema, updateGroupLevelSchema } from '../validations/group-level.validation';
 import { UserCreationStatus } from '@prisma/client';
 import logger from '../utils/logger';
 
@@ -531,6 +532,287 @@ export class AdminManagementController extends BaseController {
       this.sendResponse({ id: userAccessId }, 'Member removed from group');
     } catch (error) {
       this.handleError(error, 'Failed to remove group member');
+    }
+  }
+
+  // ── Group levels (subgroups) ───────────────────────────────────────────────
+  // Levels carry the per-level externalGroupId that maps to a platform group, so
+  // managing them is platform configuration: super admin or platform admin of the
+  // group's platform. (Group admins approve requests for any level, but don't wire
+  // up the external mapping.) isPlatformAdminOf returns true for super admins too.
+
+  /** Shared gate for level CRUD: coarse precheck → load group → platform-tier check. */
+  private async authorizeLevelManagement(groupId: string) {
+    if (!(await isAnyAdmin(this.user!))) {
+      throw new AuthorizationError("You cannot manage this group's levels");
+    }
+    const group = await prisma.group.findUnique({ where: { id: groupId } });
+    if (!group) throw new NotFoundError('Group not found');
+    if (!(await isPlatformAdminOf(this.user!, group.platform))) {
+      throw new AuthorizationError("You cannot manage levels for this group's platform");
+    }
+    return group;
+  }
+
+  // GET /api/admin/groups/:groupId/levels — all levels (incl. inactive) + member counts.
+  async listGroupLevels(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!this.getUserId()) return;
+      const groupId = String(req.params.groupId);
+      await this.authorizeLevelManagement(groupId);
+
+      const levels = await prisma.groupLevel.findMany({
+        where: { groupId },
+        orderBy: [{ rank: 'desc' }, { name: 'asc' }],
+        include: {
+          _count: { select: { userAccesses: { where: { isActive: true } } } },
+        },
+      });
+
+      this.sendResponse(
+        levels.map((l) => ({
+          id: l.id,
+          name: l.name,
+          slug: l.slug,
+          description: l.description,
+          permission: l.permission,
+          externalGroupId: l.externalGroupId,
+          rank: l.rank,
+          isActive: l.isActive,
+          memberCount: l._count.userAccesses,
+        })),
+        'Group levels retrieved successfully',
+      );
+    } catch (error) {
+      this.handleError(error, 'Failed to retrieve group levels');
+    }
+  }
+
+  // POST /api/admin/groups/:groupId/levels
+  async createGroupLevel(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!this.getUserId()) return;
+      const groupId = String(req.params.groupId);
+      const group = await this.authorizeLevelManagement(groupId);
+
+      const validated = this.validateWithZod(createGroupLevelSchema, this.req.body);
+      if (!validated.success) return;
+      const data = validated.data;
+
+      // Resolve the backing platform group:
+      //  - if the admin pasted an externalGroupId, use it as-is (link an existing group);
+      //  - otherwise, if the platform adapter can create groups, provision one
+      //    automatically (named "<Group> — <Level>") and use its id. The admin
+      //    then sets that group's data-source permissions on the platform itself.
+      let externalGroupId = data.externalGroupId ?? null;
+      let autoCreatedExternalGroupId: string | null = null;
+      const adapter = provisioningRegistry.has(group.platform)
+        ? provisioningRegistry.get(group.platform)
+        : null;
+      if (!externalGroupId && adapter?.createExternalGroup) {
+        const created = await adapter.createExternalGroup(`${group.name} — ${data.name}`);
+        externalGroupId = created.externalGroupId;
+        autoCreatedExternalGroupId = created.externalGroupId;
+      }
+
+      let level;
+      try {
+        level = await prisma.groupLevel.create({
+          data: {
+            groupId,
+            name: data.name,
+            slug: data.slug,
+            description: data.description ?? null,
+            permission: data.permission ?? null,
+            externalGroupId,
+            rank: data.rank ?? 0,
+            isActive: data.isActive ?? true,
+          },
+        });
+      } catch (err: any) {
+        // Roll back an auto-created platform group so a failed insert doesn't orphan it.
+        if (autoCreatedExternalGroupId && adapter?.deleteExternalGroup) {
+          try {
+            await adapter.deleteExternalGroup(autoCreatedExternalGroupId);
+          } catch (cleanupErr: any) {
+            logger.warn(
+              { externalGroupId: autoCreatedExternalGroupId, error: cleanupErr.message },
+              'Failed to roll back auto-created platform group after level insert failure',
+            );
+          }
+        }
+        if (err?.code === 'P2002') {
+          throw new ConflictError('A level with this slug already exists in this group.');
+        }
+        throw err;
+      }
+
+      await prisma.auditEntry.create({
+        data: {
+          action: 'GROUP_LEVEL_CREATED',
+          performerId: this.user!.id,
+          performerName: this.user!.username,
+          groupId,
+          details: {
+            levelId: level.id,
+            slug: level.slug,
+            name: level.name,
+            platform: group.platform,
+            externalGroupId: level.externalGroupId,
+            autoCreated: !!autoCreatedExternalGroupId,
+          },
+        },
+      });
+
+      this.sendResponse(level, 'Level created successfully', 201);
+    } catch (error) {
+      this.handleError(error, 'Failed to create level');
+    }
+  }
+
+  // PUT /api/admin/groups/:groupId/levels/:levelId
+  async updateGroupLevel(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!this.getUserId()) return;
+      const groupId = String(req.params.groupId);
+      const levelId = String(req.params.levelId);
+      const group = await this.authorizeLevelManagement(groupId);
+
+      const existing = await prisma.groupLevel.findUnique({ where: { id: levelId } });
+      if (!existing || existing.groupId !== groupId) {
+        throw new NotFoundError('Level not found in this group');
+      }
+
+      const validated = this.validateWithZod(updateGroupLevelSchema, this.req.body);
+      if (!validated.success) return;
+      const data = validated.data;
+
+      let level;
+      try {
+        level = await prisma.groupLevel.update({
+          where: { id: levelId },
+          data: {
+            ...(data.name !== undefined ? { name: data.name } : {}),
+            ...(data.slug !== undefined ? { slug: data.slug } : {}),
+            ...(data.description !== undefined ? { description: data.description } : {}),
+            ...(data.permission !== undefined ? { permission: data.permission } : {}),
+            ...(data.externalGroupId !== undefined ? { externalGroupId: data.externalGroupId } : {}),
+            ...(data.rank !== undefined ? { rank: data.rank } : {}),
+            ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
+          },
+        });
+      } catch (err: any) {
+        if (err?.code === 'P2002') {
+          throw new ConflictError('A level with this slug already exists in this group.');
+        }
+        throw err;
+      }
+
+      await prisma.auditEntry.create({
+        data: {
+          action: 'GROUP_LEVEL_UPDATED',
+          performerId: this.user!.id,
+          performerName: this.user!.username,
+          groupId,
+          details: {
+            levelId: level.id,
+            slug: level.slug,
+            platform: group.platform,
+            changed: Object.keys(data),
+            externalGroupIdChanged: data.externalGroupId !== undefined && data.externalGroupId !== existing.externalGroupId,
+          },
+        },
+      });
+
+      this.sendResponse(level, 'Level updated successfully');
+    } catch (error) {
+      this.handleError(error, 'Failed to update level');
+    }
+  }
+
+  // DELETE /api/admin/groups/:groupId/levels/:levelId
+  // Soft-deletes (deactivates) when the level still has active members so they keep
+  // access until expiry/revoke; hard-deletes only an empty, never-used level.
+  async deleteGroupLevel(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!this.getUserId()) return;
+      const groupId = String(req.params.groupId);
+      const levelId = String(req.params.levelId);
+      const group = await this.authorizeLevelManagement(groupId);
+
+      const existing = await prisma.groupLevel.findUnique({
+        where: { id: levelId },
+        include: {
+          _count: { select: { userAccesses: { where: { isActive: true } }, accessRequests: true } },
+        },
+      });
+      if (!existing || existing.groupId !== groupId) {
+        throw new NotFoundError('Level not found in this group');
+      }
+
+      const activeMembers = existing._count.userAccesses;
+      const everReferenced = existing._count.accessRequests > 0;
+
+      // Hard delete only if no active members AND never referenced by a request
+      // (FK from access_requests.level_id would otherwise be set null and lose history).
+      if (activeMembers === 0 && !everReferenced) {
+        await prisma.groupLevel.delete({ where: { id: levelId } });
+
+        // Best-effort removal of the backing platform group. The level was never
+        // used (no members, no past requests), so no one is affected. Don't fail
+        // the delete if the platform cleanup errors — the Hermes row is already gone.
+        if (existing.externalGroupId) {
+          const adapter = provisioningRegistry.has(group.platform)
+            ? provisioningRegistry.get(group.platform)
+            : null;
+          if (adapter?.deleteExternalGroup) {
+            try {
+              await adapter.deleteExternalGroup(existing.externalGroupId);
+            } catch (cleanupErr: any) {
+              logger.warn(
+                { externalGroupId: existing.externalGroupId, error: cleanupErr.message },
+                'Level deleted but failed to remove its backing platform group',
+              );
+            }
+          }
+        }
+
+        await prisma.auditEntry.create({
+          data: {
+            action: 'GROUP_LEVEL_DELETED',
+            performerId: this.user!.id,
+            performerName: this.user!.username,
+            groupId,
+            details: { levelId, slug: existing.slug, name: existing.name, platform: group.platform, externalGroupId: existing.externalGroupId },
+          },
+        });
+        this.sendResponse({ id: levelId, deleted: true }, 'Level deleted');
+        return;
+      }
+
+      // Otherwise deactivate — members keep access until expiry/revoke; no new
+      // requests can select it (createRequest only offers active levels).
+      const level = await prisma.groupLevel.update({
+        where: { id: levelId },
+        data: { isActive: false },
+      });
+      await prisma.auditEntry.create({
+        data: {
+          action: 'GROUP_LEVEL_DEACTIVATED',
+          performerId: this.user!.id,
+          performerName: this.user!.username,
+          groupId,
+          details: { levelId, slug: existing.slug, name: existing.name, platform: group.platform, activeMembers },
+        },
+      });
+      this.sendResponse(
+        { id: levelId, deleted: false, activeMembers },
+        activeMembers > 0
+          ? `Level has ${activeMembers} active member(s); it was deactivated (not deleted) so they keep access until expiry/revoke.`
+          : 'Level was referenced by past requests; it was deactivated (not deleted) to preserve history.',
+      );
+    } catch (error) {
+      this.handleError(error, 'Failed to delete level');
     }
   }
 }

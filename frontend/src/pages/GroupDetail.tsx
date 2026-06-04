@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../contexts/AuthContext';
 import apiClient from '../services/apiClient';
 import LoadingSpinner from '../components/common/LoadingSpinner';
-import AccessRequestModal from '../components/access/AccessRequestModal';
+import AccessRequestModal, { type GroupLevelOption } from '../components/access/AccessRequestModal';
 import PlatformInviteModal from '../components/access/PlatformInviteModal';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../lib/queryKeys';
@@ -24,6 +24,8 @@ interface GroupMember {
   grantedAt: string;
   expiresAt: string | null;
   grantedBy: string;
+  levelId: string | null;
+  levelName: string | null;
 }
 
 interface GroupDetailData {
@@ -39,6 +41,9 @@ interface GroupDetailData {
   admins: GroupAdmin[];
   members: GroupMember[];
   tables: string[];
+  levels: GroupLevelOption[];
+  currentLevelId: string | null;
+  currentLevelName: string | null;
 }
 
 // Friendly display names per platform id. Falls back to a capitalised id so a
@@ -171,6 +176,7 @@ export const GroupDetail: React.FC = () => {
                 {group.accessStatus === 'ACTIVE' && (
                   <span className="badge badge-approved" style={{ gap: '6px' }}>
                     <Icons.CheckCircle size={12} /> Active Access
+                    {group.currentLevelName && ` · ${group.currentLevelName}`}
                   </span>
                 )}
                 {group.accessStatus === 'PENDING' && (
@@ -193,6 +199,38 @@ export const GroupDetail: React.FC = () => {
                 )}
               </div>
             </div>
+
+            {/* Permission levels (subgroups) available for this group */}
+            {group.levels && group.levels.length > 0 && (
+              <div className="detail-item" style={{ borderTop: '1px solid var(--border)', paddingTop: '16px' }}>
+                <span className="detail-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
+                  <Icons.Layers size={13} style={{ color: 'var(--primary)' }} />
+                  Permission Levels
+                </span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {group.levels.map((lvl) => (
+                    <div key={lvl.id} style={{ display: 'flex', flexDirection: 'column' }}>
+                      <span style={{ fontSize: '13px', fontWeight: 700 }}>
+                        {lvl.name}
+                        {lvl.permission && (
+                          <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '1px 6px' }}>
+                            {lvl.permission}
+                          </span>
+                        )}
+                        {group.currentLevelId === lvl.id && (
+                          <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: 'var(--primary)' }}>
+                            · your level
+                          </span>
+                        )}
+                      </span>
+                      {lvl.description && (
+                        <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{lvl.description}</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Tables section inside details */}
             <div className="detail-item" style={{ borderTop: '1px solid var(--border)', paddingTop: '16px' }}>
@@ -301,6 +339,7 @@ export const GroupDetail: React.FC = () => {
                   <tr>
                     <th>User</th>
                     <th>Email</th>
+                    {group.levels.length > 0 && <th>Level</th>}
                     <th>Granted</th>
                     <th>Expires</th>
                     {canManage && <th style={{ textAlign: 'right' }}>Actions</th>}
@@ -332,6 +371,15 @@ export const GroupDetail: React.FC = () => {
                         )}
                       </td>
                       <td>{member.userEmail}</td>
+                      {group.levels.length > 0 && (
+                        <td>
+                          {member.levelName ? (
+                            <span style={{ fontSize: '12px', fontWeight: 600 }}>{member.levelName}</span>
+                          ) : (
+                            <span style={{ fontSize: '12px', color: 'var(--text-light)', fontStyle: 'italic' }}>—</span>
+                          )}
+                        </td>
+                      )}
                       <td>{formatDate(member.grantedAt)}</td>
                       <td>
                         {member.expiresAt ? (
@@ -383,6 +431,7 @@ export const GroupDetail: React.FC = () => {
           onClose={() => setIsRequestModalOpen(false)}
           groupId={group.id}
           groupName={group.name}
+          levels={group.levels}
           onSuccess={() => {
             queryClient.invalidateQueries({ queryKey: queryKeys.groupDetail(slug ?? '') });
             queryClient.invalidateQueries({ queryKey: queryKeys.groups() });

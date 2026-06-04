@@ -80,6 +80,28 @@ async function main() {
     console.log(`Upserted group: ${upserted.name} (${upserted.slug})`);
   }
 
+  // Example permission-levels (subgroups) for Credit Card, demonstrating the
+  // feature. Each level is backed by its own Redash group id (see the mock groups
+  // in redash.service.ts syncGroups). The other five groups stay level-less and are
+  // requested directly, so both modes coexist. Levels are real config (not sim
+  // drift), so they seed in live mode too.
+  const creditCard = await prisma.group.findUnique({ where: { slug: 'credit-card' } });
+  if (creditCard) {
+    const creditCardLevels = [
+      { name: 'Intern', slug: 'intern', permission: 'read-only', externalGroupId: '1041', rank: 0, description: 'Read-only access to credit card dashboards.' },
+      { name: 'Junior Dev', slug: 'junior-dev', permission: 'read-only', externalGroupId: '1042', rank: 1, description: 'Read-only access plus saved-query history.' },
+      { name: 'Senior Dev', slug: 'senior-dev', permission: 'write', externalGroupId: '1043', rank: 2, description: 'Full read/write access to credit card data sources.' },
+    ];
+    for (const lvl of creditCardLevels) {
+      await prisma.groupLevel.upsert({
+        where: { groupId_slug: { groupId: creditCard.id, slug: lvl.slug } },
+        update: { name: lvl.name, permission: lvl.permission, externalGroupId: lvl.externalGroupId, rank: lvl.rank, description: lvl.description },
+        create: { groupId: creditCard.id, ...lvl },
+      });
+    }
+    console.log('Seeded Credit Card levels: Intern, Junior Dev, Senior Dev');
+  }
+
   // Sim-only fixtures below: fake admin/member rows that mirror the simulation
   // identities (group-admin-uuid-2222, platform-admin-uuid-4444). They reference
   // non-existent Keycloak users, so seeding them into a LIVE database just creates

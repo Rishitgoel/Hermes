@@ -116,6 +116,21 @@ export interface AdminScopes {
 }
 
 /**
+ * Group slugs for direct GroupAdmin assignments only. Platform admins can manage
+ * all groups on their platform, but they should not be physically enrolled into
+ * every external platform group.
+ */
+export async function getDirectGroupAdminSlugs(user: AuthenticatedUser): Promise<string[]> {
+  if (isSuperAdmin(user)) return [];
+
+  const dbGroups = await prisma.groupAdmin.findMany({
+    where: { userId: user.id },
+    select: { group: { select: { slug: true } } },
+  });
+  return Array.from(new Set(dbGroups.map((g) => g.group.slug)));
+}
+
+/**
  * Resolve the user's admin scopes for the frontend (nav gating + UI scoping) and
  * for server-side request scoping (e.g. pending-approvals). Returned on /auth/me.
  * Derived from the DB mirrors (mirror-authoritative model).
@@ -129,12 +144,9 @@ export async function computeAdminScopes(user: AuthenticatedUser): Promise<Admin
   }
 
   // Group slugs from the GroupAdmin mirror + every group on a platform the user
-  // administers (platform admins manage all groups on their platform).
-  const dbGroups = await prisma.groupAdmin.findMany({
-    where: { userId: user.id },
-    select: { group: { select: { slug: true } } },
-  });
-  const dbSlugs = dbGroups.map((g) => g.group.slug);
+  // administers (platform admins manage all groups on their platform). Do not use
+  // this expanded set for platform membership provisioning.
+  const dbSlugs = await getDirectGroupAdminSlugs(user);
 
   let platformGroupSlugs: string[] = [];
   if (platforms.length > 0) {

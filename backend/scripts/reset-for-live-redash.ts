@@ -13,15 +13,15 @@
  *     showing as an "active" admin of a group while absent from its members
  *     list. hermes_super_admin and the bare markers are left untouched; scoped
  *     roles are re-created on demand when admins are re-assigned via the UI.
- *  3. Keeps the Hermes Group rows (with their descriptions, icons, tables) but
- *     re-maps each Redash Group.externalGroupId to the matching live Redash
- *     group ID by name lookup against the configured REDASH_BASE_URL / REDASH_API_KEY.
+ *  3. Keeps the Hermes Group & GroupLevel rows (with their descriptions, icons, tables) but
+ *     re-maps each Redash Group.externalGroupId / GroupLevel.externalGroupId to the matching live
+ *     Redash group ID by name lookup against the configured REDASH_BASE_URL / REDASH_API_KEY.
  *
  * Usage (from backend/):
  *   npx ts-node scripts/reset-for-live-redash.ts
  *
- * Safe to re-run. Will NOT touch Hermes Group business config beyond
- * externalGroupId, and will NOT delete the Group rows themselves.
+ * Safe to re-run. Will NOT touch Hermes Group / GroupLevel business config beyond
+ *   externalGroupId, and will NOT delete the Group / GroupLevel rows themselves.
  */
 
 import axios from 'axios';
@@ -203,8 +203,8 @@ async function main() {
   }
   console.log('');
 
-  // ── 3. Re-map Hermes Group.externalGroupId by name ──────────────────
-  console.log('Step 3/3 — Remapping Hermes Group.externalGroupId to live Redash IDs…');
+  // ── 3. Re-map Hermes Group & GroupLevel externalGroupIds ─────────────
+  console.log('Step 3/3 — Remapping Hermes Group & GroupLevel externalGroupIds to live Redash IDs…');
   // Only Redash groups. `Group.platform` is now required and multi-platform, so
   // a name collision with a future AWS/Jira group must not get a Redash ID
   // written into its externalGroupId (which would route provisioning wrong).
@@ -239,11 +239,52 @@ async function main() {
   console.log('');
   console.log(`  Mapped ${mapped} group(s). Unmapped: ${unmapped.length === 0 ? 'none' : unmapped.join(', ')}`);
 
-  if (unmapped.length > 0) {
+  console.log('');
+  console.log('  Remapping Hermes GroupLevel externalGroupIds to live Redash IDs…');
+  const hermesLevels = await prisma.groupLevel.findMany({
+    where: { group: { platform: 'redash' } },
+    include: { group: true },
+  });
+
+  // Sort levels locally by group name and level name for cleaner log output
+  hermesLevels.sort((a, b) => {
+    const groupCmp = a.group.name.localeCompare(b.group.name);
+    if (groupCmp !== 0) return groupCmp;
+    return a.name.localeCompare(b.name);
+  });
+
+  let mappedLevels = 0;
+  let unmappedLevels: string[] = [];
+  for (const hl of hermesLevels) {
+    const fullName = `${hl.group.name} — ${hl.name}`;
+    const match = byName.get(fullName.trim().toLowerCase());
+    if (!match) {
+      unmappedLevels.push(fullName);
+      console.log(`  ✗ ${fullName.padEnd(30, ' ')} no matching Redash group (skipped)`);
+      continue;
+    }
+    const newExternalId = String(match.id);
+    if (hl.externalGroupId === newExternalId) {
+      console.log(`  · ${fullName.padEnd(30, ' ')} already mapped → ${newExternalId}`);
+      continue;
+    }
+    await prisma.groupLevel.update({
+      where: { id: hl.id },
+      data: { externalGroupId: newExternalId },
+    });
+    console.log(
+      `  ✓ ${fullName.padEnd(30, ' ')} ${hl.externalGroupId ?? '(null)'} → ${newExternalId}`,
+    );
+    mappedLevels++;
+  }
+  console.log('');
+  console.log(`  Mapped ${mappedLevels} level(s). Unmapped: ${unmappedLevels.length === 0 ? 'none' : unmappedLevels.join(', ')}`);
+
+  if (unmapped.length > 0 || unmappedLevels.length > 0) {
     console.log('');
-    console.log('  Heads-up: unmapped Hermes groups will not provision against Redash.');
+    console.log('  Heads-up: unmapped Hermes groups/levels will not provision against Redash.');
     console.log('  Either create matching groups in Redash UI (same name) or delete the');
-    console.log('  Hermes Group rows you don\'t need.');
+    console.log('  Hermes Group / GroupLevel rows you don\'t need.');
   }
 
   console.log('');

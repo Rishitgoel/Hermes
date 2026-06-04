@@ -18,6 +18,10 @@ export class GroupController extends BaseController {
           where: { isActive: true },
           include: {
             admins: true,
+            levels: {
+              where: { isActive: true },
+              orderBy: { rank: 'desc' },
+            },
             _count: {
               select: {
                 userAccesses: { where: { isActive: true } },
@@ -44,13 +48,14 @@ export class GroupController extends BaseController {
       // Platforms this user administers (lower-cased). Super admins implicitly
       // manage every registered platform; platform admins their own; everyone else
       // gets []. A platform admin reads as ACTIVE on every group of their platform —
-      // the same cosmetic short-circuit super admins already get. (Real Redash
-      // membership for platform admins is provisioned lazily in /auth/me.)
+      // the same cosmetic short-circuit super admins already get. Platform admins
+      // are not automatically provisioned into every Redash group.
       const managedPlatforms = this.user ? await getManageablePlatforms(this.user) : [];
 
       const enrichedGroups = groups.map(g => {
         let accessStatus = 'NONE';
-        
+
+        const myAccess = activeAccesses.find(a => a.groupId === g.id);
         const hasActive = activeAccesses.some(a => a.groupId === g.id);
         const hasWaitingForSetup = openRequests.some(
           r => r.groupId === g.id && r.status === RequestStatus.WAITING_FOR_SETUP,
@@ -84,6 +89,21 @@ export class GroupController extends BaseController {
           tables: g.tables,
           memberCount: g._count.userAccesses,
           accessStatus,
+          // Public level list — intentionally omits each level's externalGroupId
+          // (platform config, exposed only via the admin level endpoints).
+          levels: g.levels.map(l => ({
+            id: l.id,
+            name: l.name,
+            slug: l.slug,
+            description: l.description,
+            permission: l.permission,
+            rank: l.rank,
+          })),
+          // The level the current user is actively granted on, if any.
+          currentLevelId: myAccess?.levelId ?? null,
+          currentLevelName: myAccess?.levelId
+            ? g.levels.find(l => l.id === myAccess.levelId)?.name ?? null
+            : null,
           admins: g.admins.map(adm => ({
             userId: adm.userId,
             userName: adm.userName,
@@ -112,9 +132,14 @@ export class GroupController extends BaseController {
         where: { slug },
         include: {
           admins: true,
+          levels: {
+            where: { isActive: true },
+            orderBy: { rank: 'desc' },
+          },
           userAccesses: {
             where: { isActive: true },
             orderBy: { grantedAt: 'desc' },
+            include: { level: { select: { name: true, slug: true } } },
           },
         },
       });
@@ -127,6 +152,7 @@ export class GroupController extends BaseController {
       // Check current user's status
       const activeAccess = await prisma.userAccess.findFirst({
         where: { userId, groupId: group.id, isActive: true },
+        include: { level: { select: { name: true, slug: true } } },
       });
       // PENDING = awaiting admin review; WAITING_FOR_SETUP = approved but parked until
       // the requester finishes platform-account setup. Both are "open" for this group.
@@ -175,6 +201,16 @@ export class GroupController extends BaseController {
         externalGroupId: group.externalGroupId,
         tables: group.tables,
         accessStatus,
+        levels: group.levels.map(l => ({
+          id: l.id,
+          name: l.name,
+          slug: l.slug,
+          description: l.description,
+          permission: l.permission,
+          rank: l.rank,
+        })),
+        currentLevelId: activeAccess?.levelId ?? null,
+        currentLevelName: activeAccess?.level?.name ?? null,
         admins: group.admins.map(adm => ({
           userId: adm.userId,
           userName: adm.userName,
@@ -190,6 +226,8 @@ export class GroupController extends BaseController {
           grantedAt: m.grantedAt,
           expiresAt: m.expiresAt,
           grantedBy: m.grantedBy,
+          levelId: m.levelId,
+          levelName: m.level?.name ?? null,
         })),
       };
 

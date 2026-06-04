@@ -45,4 +45,10 @@ router.delete('/group-admins/:id', authenticateToken, adminMgmt('removeGroupAdmi
 router.get('/groups/:groupId/members', authenticateToken, adminMgmt('listGroupMembers'));
 router.delete('/groups/:groupId/members/:userAccessId', authenticateToken, adminMgmt('removeGroupMember'));
 
+// Group levels / subgroups (super or platform admin of the group's platform — enforced in controller)
+router.get('/groups/:groupId/levels', authenticateToken, adminMgmt('listGroupLevels'));
+router.post('/groups/:groupId/levels', authenticateToken, adminMgmt('createGroupLevel'));
+router.put('/groups/:groupId/levels/:levelId', authenticateToken, adminMgmt('updateGroupLevel'));
+router.delete('/groups/:groupId/levels/:levelId', authenticateToken, adminMgmt('deleteGroupLevel'));
+
 export default router;

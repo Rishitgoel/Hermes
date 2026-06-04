@@ -8,6 +8,15 @@ import PlatformInviteModal from '../components/access/PlatformInviteModal';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../lib/queryKeys';
 
+interface GroupLevelOption {
+  id: string;
+  name: string;
+  slug: string;
+  description?: string | null;
+  permission?: string | null;
+  rank?: number;
+}
+
 interface GroupData {
   id: string;
   name: string;
@@ -18,6 +27,7 @@ interface GroupData {
   platform: string;
   memberCount: number;
   accessStatus: 'ACTIVE' | 'PENDING' | 'AWAITING_SETUP' | 'NONE';
+  levels: GroupLevelOption[];
 }
 
 interface PlatformMetadata {
@@ -121,6 +131,8 @@ export const Groups: React.FC = () => {
   // Bulk Request States
   const [selectedGroups, setSelectedGroups] = useState<Record<string, boolean>>({});
   const [customReasons, setCustomReasons] = useState<Record<string, string>>({});
+  // Chosen level per group (only relevant for groups that have levels).
+  const [selectedLevels, setSelectedLevels] = useState<Record<string, string>>({});
   const [generalReason, setGeneralReason] = useState('');
   const [selectedDuration, setSelectedDuration] = useState('PERMANENT');
   const [activePopupGroupId, setActivePopupGroupId] = useState<string | null>(null);
@@ -151,7 +163,7 @@ export const Groups: React.FC = () => {
 
   const bulkSubmitMutation = useMutation({
     mutationFn: async (
-      requestsToSubmit: { groupId: string; justification: string }[]
+      requestsToSubmit: { groupId: string; justification: string; levelId?: string }[]
     ) => {
       return Promise.allSettled(
         requestsToSubmit.map((req) =>
@@ -159,6 +171,7 @@ export const Groups: React.FC = () => {
             groupId: req.groupId,
             justification: req.justification,
             duration: selectedDuration,
+            ...(req.levelId ? { levelId: req.levelId } : {}),
           })
         )
       );
@@ -174,6 +187,7 @@ export const Groups: React.FC = () => {
         setBulkSuccess(`Successfully requested access to ${successes.length} group(s).`);
         setSelectedGroups({});
         setCustomReasons({});
+        setSelectedLevels({});
         setGeneralReason('');
       }
 
@@ -288,17 +302,30 @@ export const Groups: React.FC = () => {
 
   const handleBulkSubmit = () => {
     const invalidGroupNames: string[] = [];
+    const missingLevelNames: string[] = [];
     const requestsToSubmit = checkedGroupIds.map((groupId) => {
       const custom = customReasons[groupId]?.trim() || '';
       const justification = custom.length > 0 ? custom : generalReason.trim();
-      const groupName = groups.find((g) => g.id === groupId)?.name || 'Unknown Group';
+      const group = groups.find((g) => g.id === groupId);
+      const groupName = group?.name || 'Unknown Group';
 
       if (justification.length < 10) {
         invalidGroupNames.push(groupName);
       }
 
-      return { groupId, justification };
+      // Groups with levels require one to be chosen before submit.
+      const levelId = group && group.levels.length > 0 ? selectedLevels[groupId] : undefined;
+      if (group && group.levels.length > 0 && !levelId) {
+        missingLevelNames.push(groupName);
+      }
+
+      return { groupId, justification, levelId };
     });
+
+    if (missingLevelNames.length > 0) {
+      setBulkError(`Please choose a level for: ${missingLevelNames.join(', ')}`);
+      return;
+    }
 
     if (invalidGroupNames.length > 0) {
       setBulkError(
@@ -711,7 +738,28 @@ export const Groups: React.FC = () => {
                         >
                           {group.name}
                         </span>
-                        
+
+                        {group.levels.length > 0 && (
+                          <span
+                            style={{
+                              fontSize: '10px',
+                              fontWeight: 700,
+                              letterSpacing: '0.03em',
+                              padding: '2px 8px',
+                              borderRadius: 999,
+                              background: 'var(--primary-light)',
+                              color: 'var(--primary)',
+                              border: '1px solid var(--border-focus)',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                            }}
+                            title="This group has permission levels"
+                          >
+                            <Icons.Layers size={11} /> {group.levels.length} levels
+                          </span>
+                        )}
+
                         <div className="info-tooltip-container">
                           <Icons.Info size={14} />
                           <div className="info-tooltip">
@@ -788,6 +836,7 @@ export const Groups: React.FC = () => {
                   onClick={() => {
                     setSelectedGroups({});
                     setCustomReasons({});
+                    setSelectedLevels({});
                   }}
                 >
                   Clear Selection
@@ -795,6 +844,43 @@ export const Groups: React.FC = () => {
               </div>
               
               <div className="bulk-request-body">
+                {/* Per-group level pickers — only for selected groups that have levels. */}
+                {(() => {
+                  const levelledSelected = checkedGroupIds
+                    .map((id) => groups.find((g) => g.id === id))
+                    .filter((g): g is GroupData => !!g && g.levels.length > 0);
+                  if (levelledSelected.length === 0) return null;
+                  return (
+                    <div className="form-group" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+                      <label className="form-label">Levels (required for these groups)</label>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {levelledSelected.map((g) => (
+                          <div key={g.id} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <span style={{ fontSize: '13px', fontWeight: 600, minWidth: '140px' }}>{g.name}</span>
+                            <select
+                              className="form-select"
+                              style={{ flex: 1, maxWidth: '260px' }}
+                              value={selectedLevels[g.id] ?? ''}
+                              onChange={(e) =>
+                                setSelectedLevels((prev) => ({ ...prev, [g.id]: e.target.value }))
+                              }
+                              disabled={isSubmittingBulk}
+                            >
+                              <option value="">Select a level…</option>
+                              {g.levels.map((lvl) => (
+                                <option key={lvl.id} value={lvl.id}>
+                                  {lvl.name}
+                                  {lvl.permission ? ` (${lvl.permission})` : ''}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 <div className="form-group" style={{ marginBottom: 0 }}>
                   <label className="form-label">
                     General Justification / Reason

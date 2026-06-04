@@ -3,6 +3,9 @@ import { AccessDuration } from '@prisma/client';
 
 export const createRequestSchema = z.object({
   groupId: z.string().uuid('Invalid Group ID format'),
+  // Optional here — whether a level is REQUIRED depends on whether the group has
+  // active levels, which is enforced in the workflow service (DB-state dependent).
+  levelId: z.string().uuid('Invalid Level ID format').optional(),
   justification: z
     .string()
     .trim()

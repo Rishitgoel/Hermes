@@ -34,8 +34,36 @@ model Group {
   admins           GroupAdmin[]
   accessRequests   AccessRequest[]
   userAccesses     UserAccess[]
+  levels           GroupLevel[]
 
   @@map("groups")
+}
+
+// A permission-level (subgroup) inside a Group, e.g. Credit Card → Intern / Junior / Senior.
+// Each level is backed by its own external platform group (its own externalGroupId); the real
+// read-only vs write distinction is configured on that external group (in Redash, on its data
+// sources), so Hermes just routes a requester to the right group. A Group with zero active
+// levels behaves exactly as before (request the group directly, provision to Group.externalGroupId).
+model GroupLevel {
+  id               String           @id @default(uuid())
+  groupId          String           @map("group_id")
+  name             String                              // "Intern", "Senior Dev"
+  slug             String                              // "intern", "senior-dev" (unique within the group)
+  description      String?
+  permission       String?                             // display/audit label: "read-only", "write" (real perms live on the external group)
+  externalGroupId  String?          @map("external_group_id")  // the platform group backing THIS level
+  rank             Int              @default(0)         // ordering; higher = more senior (also used to pick an admin's default level)
+  isActive         Boolean          @default(true) @map("is_active")
+  createdAt        DateTime         @default(now()) @map("created_at")
+  updatedAt        DateTime         @updatedAt @map("updated_at")
+
+  group            Group            @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  accessRequests   AccessRequest[]
+  userAccesses     UserAccess[]
+
+  @@unique([groupId, slug])
+  @@index([groupId])
+  @@map("group_levels")
 }
 
 model GroupAdmin {
@@ -82,6 +110,7 @@ model PlatformAdmin {
 model AccessRequest {
   id               String           @id @default(uuid())
   groupId          String           @map("group_id")
+  levelId          String?          @map("level_id")   // null = group-level request (group has no levels)
 
   // Requester (from Keycloak token)
   requesterId      String           @map("requester_id")
@@ -110,12 +139,14 @@ model AccessRequest {
   updatedAt        DateTime         @updatedAt @map("updated_at")
 
   group            Group            @relation(fields: [groupId], references: [id])
+  level            GroupLevel?      @relation(fields: [levelId], references: [id])
   auditEntries     AuditEntry[]
 
   @@index([requesterId])
   @@index([status])
   @@index([groupId, status])
   @@index([expiresAt])
+  @@index([levelId])
   @@map("access_requests")
 }
 
@@ -129,6 +160,7 @@ model UserAccess {
   userName         String           @map("user_name")
   userEmail        String           @map("user_email")
   groupId          String           @map("group_id")
+  levelId          String?          @map("level_id")          // null = legacy/group-level grant (group has no levels)
   externalUserId   String?          @map("external_user_id")  // ID of this user on the target platform
 
   isActive         Boolean          @default(true) @map("is_active")
@@ -143,12 +175,16 @@ model UserAccess {
   updatedAt        DateTime         @updatedAt @map("updated_at")
 
   group            Group            @relation(fields: [groupId], references: [id])
+  level            GroupLevel?      @relation(fields: [levelId], references: [id])
 
   // Removed: @@unique([userId, groupId, isActive])
   // This caused violations on repeated grant/revoke cycles.
   // Uniqueness for active access is now enforced via application logic
   // and a unique index on (userId, groupId) WHERE isActive = true.
+  // NOTE: that partial index is intentionally NOT keyed on levelId — a user holds
+  // at most one active grant (one level) per group at a time.
   @@index([expiresAt, isActive])
+  @@index([levelId])
   @@map("user_accesses")
 }
 

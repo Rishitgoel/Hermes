@@ -22,6 +22,10 @@ interface PendingRequest {
     name: string;
     color: string | null;
   };
+  level: {
+    name: string;
+    permission: string | null;
+  } | null;
 }
 
 export const PendingApprovals: React.FC = () => {
@@ -410,16 +414,31 @@ export const PendingApprovals: React.FC = () => {
                       </div>
                     </td>
                     <td>
-                      <span style={{ 
-                        fontWeight: 800, 
-                        fontSize: '13px', 
-                        color: req.group.color || 'var(--primary)',
-                        backgroundColor: 'var(--primary-light)',
-                        padding: '4px 10px',
-                        borderRadius: 'var(--radius-sm)'
-                      }}>
-                        {req.group.name}
-                      </span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                        <span style={{
+                          fontWeight: 800,
+                          fontSize: '13px',
+                          color: req.group.color || 'var(--primary)',
+                          backgroundColor: 'var(--primary-light)',
+                          padding: '4px 10px',
+                          borderRadius: 'var(--radius-sm)'
+                        }}>
+                          {req.group.name}
+                        </span>
+                        {req.level && (
+                          <span style={{
+                            fontWeight: 700,
+                            fontSize: '12px',
+                            color: 'var(--text-muted)',
+                            border: '1px solid var(--border)',
+                            padding: '3px 8px',
+                            borderRadius: 'var(--radius-sm)'
+                          }}>
+                            {req.level.name}
+                            {req.level.permission ? ` · ${req.level.permission}` : ''}
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td>
                       <span style={{ textTransform: 'capitalize', fontWeight: 600, color: 'var(--text-muted)' }}>

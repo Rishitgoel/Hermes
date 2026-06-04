@@ -5,8 +5,9 @@ import logger from '../utils/logger';
 import { AccessDuration, AccessRequest, RequestStatus, UserCreationStatus } from '@prisma/client';
 import { ValidationError, NotFoundError, ConflictError, UserNotApprovedError } from '../utils/errors';
 
-type GroupRow = { id: string; name: string; platform: string; externalGroupId: string | null };
-type AccessRequestWithGroup = AccessRequest & { group: GroupRow };
+type GroupRow = { id: string; name: string; slug: string; platform: string; externalGroupId: string | null };
+type LevelRow = { id: string; name: string; slug: string; externalGroupId: string | null };
+type AccessRequestWithGroup = AccessRequest & { group: GroupRow; level?: LevelRow | null };
 
 export class AccessWorkflowService {
   private calculateExpiry(duration: AccessDuration): Date | null {
@@ -38,10 +39,26 @@ export class AccessWorkflowService {
     requester: { id: string; username: string; email: string },
     groupId: string,
     justification: string,
-    duration: AccessDuration
+    duration: AccessDuration,
+    levelId?: string | null
   ) {
     const group = await prisma.group.findUnique({ where: { id: groupId } });
     if (!group) throw new NotFoundError('Group not found');
+
+    // Resolve the requested level. If the group has any active levels, one must be
+    // chosen; if it has none, a level must NOT be supplied. The single `find` check
+    // enforces both "belongs to this group" and "is active".
+    const activeLevels = await prisma.groupLevel.findMany({
+      where: { groupId, isActive: true },
+    });
+    let level: LevelRow | null = null;
+    if (activeLevels.length > 0) {
+      if (!levelId) throw new ValidationError('This group requires selecting a level.');
+      level = activeLevels.find((l) => l.id === levelId) ?? null;
+      if (!level) throw new ValidationError('Invalid or inactive level for this group.');
+    } else if (levelId) {
+      throw new ValidationError('This group has no levels; do not specify a level.');
+    }
 
     // Check if there is an active access
     const activeAccess = await prisma.userAccess.findFirst({
@@ -72,6 +89,7 @@ export class AccessWorkflowService {
     const request = await prisma.accessRequest.create({
       data: {
         groupId,
+        levelId: levelId ?? null,
         requesterId: requester.id,
         requesterName: requester.username,
         requesterEmail: requester.email,
@@ -92,7 +110,7 @@ export class AccessWorkflowService {
         targetUserName: requester.username,
         groupId,
         accessRequestId: request.id,
-        details: { duration, expiresAt },
+        details: { duration, expiresAt, levelId: level?.id ?? null, levelName: level?.name ?? null },
       },
     });
 
@@ -102,7 +120,7 @@ export class AccessWorkflowService {
       payload: {
         requestId: request.id,
         groupId,
-        groupName: group.name,
+        groupName: level ? `${group.name} — ${level.name}` : group.name,
         requesterName: requester.username,
         justification,
         duration,
@@ -122,7 +140,7 @@ export class AccessWorkflowService {
   ) {
     const request = await prisma.accessRequest.findUnique({
       where: { id: requestId },
-      include: { group: true },
+      include: { group: true, level: true },
     });
 
     if (!request) throw new NotFoundError('Access request not found');
@@ -276,15 +294,20 @@ export class AccessWorkflowService {
       const platform = this.requirePlatform(request.group);
       const provisioner = provisioningRegistry.get(platform);
 
-      const externalGroupId = request.group.externalGroupId;
+      // A level (if any) owns its own external group; fall back to the group's own
+      // externalGroupId for level-less (legacy) groups.
+      const externalGroupId = request.level?.externalGroupId ?? request.group.externalGroupId;
       if (!externalGroupId) {
-        throw new Error(`Group ${request.group.name} has no associated External Group ID configured`);
+        throw new Error(
+          `Group ${request.group.name}${request.level ? ` / level ${request.level.name}` : ''} has no associated External Group ID configured`,
+        );
       }
 
       const result = await provisioner.provision({
         email: request.requesterEmail,
         name: request.requesterName,
         externalGroupId,
+        metadata: { groupSlug: request.group.slug, levelSlug: request.level?.slug ?? null },
       });
       const externalUserId = result.externalUserId;
 
@@ -302,6 +325,7 @@ export class AccessWorkflowService {
             userName: request.requesterName,
             userEmail: request.requesterEmail,
             groupId: request.groupId,
+            levelId: request.levelId ?? null,
             externalUserId: externalUserId,
             isActive: true,
             grantedAt,
@@ -345,6 +369,8 @@ export class AccessWorkflowService {
                   platform,
                   externalUserId,
                   externalGroupId,
+                  levelId: request.levelId ?? null,
+                  levelName: request.level?.name ?? null,
                   expiresAt: existing.expiresAt,
                   note: 'Concurrent approval — reused existing UserAccess row',
                 },
@@ -380,6 +406,8 @@ export class AccessWorkflowService {
             platform,
             externalUserId,
             externalGroupId,
+            levelId: request.levelId ?? null,
+            levelName: request.level?.name ?? null,
             expiresAt,
           },
         },
@@ -500,7 +528,7 @@ export class AccessWorkflowService {
         requesterId: userId,
         status: RequestStatus.WAITING_FOR_SETUP,
       },
-      include: { group: true },
+      include: { group: true, level: true },
     });
     if (waiting.length === 0) return { provisioned: 0, failed: 0 };
 
@@ -534,16 +562,13 @@ export class AccessWorkflowService {
   }
 
   /**
-   * Ensure an admin actually holds real membership in the groups they administer.
-   * The Groups list shows admins as ACTIVE (a cosmetic short-circuit in
+   * Ensure a direct group admin actually holds real membership in the groups they
+   * administer. The Groups list shows admins as ACTIVE (a cosmetic short-circuit in
    * group.controller), but that's not a real grant — this creates the UserAccess
    * row + provisions them on the platform so they're an actual member on Redash.
    *
-   * Serves both scoped admin tiers; the caller resolves which slugs apply:
-   *   - group admins    → the single group they administer
-   *   - platform admins → every group on the platform(s) they administer
-   * Super admins are intentionally excluded by callers — they get the cosmetic
-   * ACTIVE badge everywhere but aren't mass-provisioned into every group.
+   * Platform admins and super admins are intentionally excluded by callers: they
+   * can manage groups without being mass-provisioned into every external group.
    *
    * Called lazily from GET /auth/me once the user's Redash account is COMPLETED,
    * since that's the only point where we have both their resolved admin scopes
@@ -591,10 +616,20 @@ export class AccessWorkflowService {
     });
     if (existing) return false;
 
-    if (!group.externalGroupId) {
+    // If the group has levels, enroll the admin into the highest-rank (most
+    // privileged) active level — they should hold the strongest access in the
+    // group they administer. Level-less groups fall back to the group itself.
+    const levels = await prisma.groupLevel.findMany({
+      where: { groupId: group.id, isActive: true },
+      orderBy: { rank: 'desc' },
+    });
+    const level = levels[0] ?? null;
+    const externalGroupId = level?.externalGroupId ?? group.externalGroupId;
+
+    if (!externalGroupId) {
       logger.warn(
-        { slug, groupId: group.id },
-        'Skipping group-admin auto-enroll — group has no externalGroupId configured',
+        { slug, groupId: group.id, levelId: level?.id ?? null },
+        'Skipping group-admin auto-enroll — no externalGroupId configured for the group/level',
       );
       return false;
     }
@@ -605,7 +640,8 @@ export class AccessWorkflowService {
     const result = await provisioner.provision({
       email: user.email,
       name: user.username,
-      externalGroupId: group.externalGroupId,
+      externalGroupId,
+      metadata: { groupSlug: group.slug, levelSlug: level?.slug ?? null },
     });
 
     const performer = { id: 'system_admin_enroll', name: 'System (admin auto-enroll)' };
@@ -617,6 +653,7 @@ export class AccessWorkflowService {
           userName: user.username,
           userEmail: user.email,
           groupId: group.id,
+          levelId: level?.id ?? null,
           externalUserId: result.externalUserId,
           isActive: true,
           grantedAt: new Date(),
@@ -638,7 +675,9 @@ export class AccessWorkflowService {
             userAccessId: userAccess.id,
             platform,
             externalUserId: result.externalUserId,
-            externalGroupId: group.externalGroupId,
+            externalGroupId,
+            levelId: level?.id ?? null,
+            levelName: level?.name ?? null,
             reason,
           },
         },
@@ -672,15 +711,17 @@ export class AccessWorkflowService {
   ) {
     const access = await prisma.userAccess.findUnique({
       where: { id: userAccessId },
-      include: { group: true },
+      include: { group: true, level: true },
     });
 
     if (!access) throw new NotFoundError('User access grant not found');
     if (!access.isActive) throw new ValidationError('Access is already inactive');
 
-    // 1. Remove from platform Group
+    // 1. Remove from platform Group — resolve via the level the user was actually
+    // granted on (falls back to the group for legacy/level-less grants), matching
+    // how _provision picked the target.
     const externalUserId = access.externalUserId;
-    const externalGroupId = access.group.externalGroupId;
+    const externalGroupId = access.level?.externalGroupId ?? access.group.externalGroupId;
     const platform = this.requirePlatform(access.group);
 
     if (externalUserId && externalGroupId) {
@@ -726,7 +767,7 @@ export class AccessWorkflowService {
         targetUserName: access.userName,
         groupId: access.groupId,
         accessRequestId: access.accessRequestId,
-        details: { reason, userAccessId },
+        details: { reason, userAccessId, levelId: access.levelId ?? null, levelName: access.level?.name ?? null },
       },
     });
 
@@ -749,16 +790,17 @@ export class AccessWorkflowService {
   async expireAccess(userAccessId: string) {
     const access = await prisma.userAccess.findUnique({
       where: { id: userAccessId },
-      include: { group: true },
+      include: { group: true, level: true },
     });
 
     if (!access || !access.isActive) return;
 
     logger.info(`Expiring temporary access grant ${userAccessId} for user ${access.userName} in group ${access.group.name}...`);
 
-    // 1. Remove from platform Group
+    // 1. Remove from platform Group — resolve via the granted level (falls back to
+    // the group for legacy/level-less grants), matching _provision's target.
     const externalUserId = access.externalUserId;
-    const externalGroupId = access.group.externalGroupId;
+    const externalGroupId = access.level?.externalGroupId ?? access.group.externalGroupId;
     const platform = this.requirePlatform(access.group);
 
     if (externalUserId && externalGroupId) {
@@ -802,7 +844,7 @@ export class AccessWorkflowService {
         targetUserName: access.userName,
         groupId: access.groupId,
         accessRequestId: access.accessRequestId,
-        details: { userAccessId },
+        details: { userAccessId, levelId: access.levelId ?? null, levelName: access.level?.name ?? null },
       },
     });
 

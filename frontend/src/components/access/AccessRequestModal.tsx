@@ -2,11 +2,22 @@ import React, { useState } from 'react';
 import Modal from '../common/Modal';
 import apiClient from '../../services/apiClient';
 
+export interface GroupLevelOption {
+  id: string;
+  name: string;
+  slug: string;
+  description?: string | null;
+  permission?: string | null;
+  rank?: number;
+}
+
 interface AccessRequestModalProps {
   isOpen: boolean;
   onClose: () => void;
   groupId: string;
   groupName: string;
+  /** Permission-levels (subgroups) of this group. When non-empty, the user must pick one. */
+  levels?: GroupLevelOption[];
   onSuccess: () => void;
 }
 
@@ -15,15 +26,23 @@ export const AccessRequestModal: React.FC<AccessRequestModalProps> = ({
   onClose,
   groupId,
   groupName,
+  levels = [],
   onSuccess,
 }) => {
   const [justification, setJustification] = useState('');
   const [duration, setDuration] = useState('PERMANENT');
+  const [levelId, setLevelId] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  const hasLevels = levels.length > 0;
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (hasLevels && !levelId) {
+      setErrorMsg('Please select a level for this group.');
+      return;
+    }
     if (justification.trim().length < 10) {
       setErrorMsg('Please write a justification of at least 10 characters.');
       return;
@@ -37,9 +56,11 @@ export const AccessRequestModal: React.FC<AccessRequestModalProps> = ({
         groupId,
         justification,
         duration,
+        ...(hasLevels ? { levelId } : {}),
       });
       setJustification('');
       setDuration('PERMANENT');
+      setLevelId('');
       onSuccess();
       onClose();
     } catch (err: any) {
@@ -89,6 +110,68 @@ export const AccessRequestModal: React.FC<AccessRequestModalProps> = ({
             marginBottom: '16px'
           }}>
             {errorMsg}
+          </div>
+        )}
+
+        {hasLevels && (
+          <div className="form-group">
+            <label className="form-label">Level</label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {levels.map((lvl) => {
+                const selected = levelId === lvl.id;
+                return (
+                  <label
+                    key={lvl.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '10px',
+                      padding: '10px 12px',
+                      border: `1px solid ${selected ? 'var(--primary)' : 'var(--border)'}`,
+                      borderRadius: 'var(--radius-sm)',
+                      backgroundColor: selected ? 'var(--primary-subtle, rgba(0,0,0,0.03))' : 'transparent',
+                      cursor: isSubmitting ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="level"
+                      value={lvl.id}
+                      checked={selected}
+                      onChange={() => setLevelId(lvl.id)}
+                      disabled={isSubmitting}
+                      style={{ marginTop: '3px' }}
+                    />
+                    <span style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <span style={{ fontWeight: 600, fontSize: '13px' }}>
+                        {lvl.name}
+                        {lvl.permission && (
+                          <span
+                            style={{
+                              marginLeft: '8px',
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              color: 'var(--text-muted)',
+                              border: '1px solid var(--border)',
+                              borderRadius: 'var(--radius-sm)',
+                              padding: '1px 6px',
+                            }}
+                          >
+                            {lvl.permission}
+                          </span>
+                        )}
+                      </span>
+                      {lvl.description && (
+                        <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{lvl.description}</span>
+                      )}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            <span style={{ fontSize: '11px', color: 'var(--text-light)' }}>
+              Each level grants a different permission tier for this group.
+            </span>
           </div>
         )}
 
