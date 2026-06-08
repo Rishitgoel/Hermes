@@ -1,5 +1,6 @@
 import prisma from '../config/prisma';
 import provisioningRegistry from './provisioning.registry';
+import { PlatformAdapter } from './provisioner.interface';
 import eventBus from './event-bus';
 import logger from '../utils/logger';
 import { AccessDuration, AccessRequest, RequestStatus, UserCreationStatus, Prisma } from '@prisma/client';
@@ -95,12 +96,29 @@ export class AccessWorkflowService {
       throw new ConflictError('You already have a pending request for this group.');
     }
 
+    return this._persistPendingRequest(requester, group, level, justification, duration);
+  }
+
+  /**
+   * Persist a PENDING access request + its REQUEST_CREATED audit row, and notify
+   * admins. Shared by the first-time request flow (createRequest) and the gated
+   * (promotion) branch of a level change (changeLevel). Both produce an identical
+   * "awaiting admin review" request — the only difference upstream is the guard
+   * logic that decides whether a request is allowed.
+   */
+  private async _persistPendingRequest(
+    requester: { id: string; username: string; email: string },
+    group: { id: string; name: string },
+    level: LevelRow | null,
+    justification: string,
+    duration: AccessDuration,
+  ): Promise<AccessRequest> {
     const expiresAt = this.calculateExpiry(duration);
 
     const request = await prisma.accessRequest.create({
       data: {
-        groupId,
-        levelId: levelId ?? null,
+        groupId: group.id,
+        levelId: level?.id ?? null,
         requesterId: requester.id,
         requesterName: requester.username,
         requesterEmail: requester.email,
@@ -119,7 +137,7 @@ export class AccessWorkflowService {
         performerName: requester.username,
         targetUserId: requester.id,
         targetUserName: requester.username,
-        groupId,
+        groupId: group.id,
         accessRequestId: request.id,
         details: { duration, expiresAt, levelId: level?.id ?? null, levelName: level?.name ?? null },
       },
@@ -130,7 +148,7 @@ export class AccessWorkflowService {
       type: 'request.created',
       payload: {
         requestId: request.id,
-        groupId,
+        groupId: group.id,
         groupName: level ? `${group.name} — ${level.name}` : group.name,
         requesterName: requester.username,
         justification,
@@ -140,6 +158,222 @@ export class AccessWorkflowService {
     });
 
     return request;
+  }
+
+  /**
+   * Change the level a user already holds in a group (promote or demote). The user
+   * keeps exactly one active grant per group — this resolves to a swap, never an
+   * extra grant.
+   *
+   * Direction is decided server-side by level `rank` (higher = more senior):
+   *   - demotion  (target rank < current rank): self-service — provisioned
+   *     immediately. Lowering your own access carries no escalation risk.
+   *   - promotion / lateral (target rank ≥ current, or coming from a level-less
+   *     grant): goes through the normal request → admin approval flow. The current
+   *     level stays active until an admin approves; the swap happens at provision.
+   *
+   * Returns `kind: 'instant'` with the provisioned request, or `kind: 'request'`
+   * with the new PENDING request, so the caller can tell the user what happened.
+   */
+  async changeLevel(
+    requester: { id: string; username: string; email: string },
+    groupId: string,
+    levelId: string,
+    justification: string,
+    duration: AccessDuration,
+  ): Promise<{ kind: 'instant' | 'request'; request: AccessRequest }> {
+    const group = await prisma.group.findUnique({ where: { id: groupId } });
+    if (!group) throw new NotFoundError('Group not found');
+
+    const activeLevels = await prisma.groupLevel.findMany({
+      where: { groupId, isActive: true },
+    });
+    if (activeLevels.length === 0) {
+      throw new ValidationError('This group has no levels to switch between.');
+    }
+
+    const targetLevel = activeLevels.find((l) => l.id === levelId) ?? null;
+    if (!targetLevel) throw new ValidationError('Invalid or inactive level for this group.');
+    // A level must be backed by its own external group, same rule as createRequest.
+    if (!targetLevel.externalGroupId) {
+      throw new ValidationError('This level is not fully configured yet (no backing platform group). Please contact an admin.');
+    }
+
+    // The user must already hold active access to this group — otherwise there is
+    // nothing to change; they should request access the normal way first.
+    const currentAccess = await prisma.userAccess.findFirst({
+      where: { userId: requester.id, groupId, isActive: true },
+      include: { level: true },
+    });
+    if (!currentAccess) {
+      throw new ConflictError('You do not have active access to this group, so there is no level to change. Request access first.');
+    }
+    if (currentAccess.levelId === targetLevel.id) {
+      throw new ConflictError('You already hold this level for this group.');
+    }
+
+    // One open request per group — block if a previous request is still in flight.
+    const pendingRequest = await prisma.accessRequest.findFirst({
+      where: {
+        requesterId: requester.id,
+        groupId,
+        status: { in: [RequestStatus.PENDING, RequestStatus.WAITING_FOR_SETUP] },
+      },
+    });
+    if (pendingRequest) {
+      throw new ConflictError('You already have a pending request for this group. Wait for it to be reviewed before changing your level.');
+    }
+
+    // A move to a strictly lower rank is a demotion (instant). A level-less current
+    // grant has no rank to compare against, so it is treated as a promotion (gated).
+    const currentRank = currentAccess.level?.rank ?? Number.NEGATIVE_INFINITY;
+    const isDemotion = currentAccess.levelId != null && targetLevel.rank < currentRank;
+
+    if (!isDemotion) {
+      // Promotion / lateral move → gated request, current level kept until approved.
+      const request = await this._persistPendingRequest(requester, group, targetLevel, justification, duration);
+      return { kind: 'request', request };
+    }
+
+    // Demotion → record a self-reviewed request and provision immediately. The
+    // actual swap (remove old level group, add new) happens inside _provision.
+    const expiresAt = this.calculateExpiry(duration);
+    const created = await prisma.accessRequest.create({
+      data: {
+        groupId,
+        levelId: targetLevel.id,
+        requesterId: requester.id,
+        requesterName: requester.username,
+        requesterEmail: requester.email,
+        justification,
+        duration,
+        expiresAt,
+        status: RequestStatus.PROVISIONING,
+        reviewerId: requester.id,
+        reviewerName: requester.username,
+        reviewNote: 'Self-service demotion (applied immediately)',
+        reviewedAt: new Date(),
+      },
+    });
+
+    await prisma.auditEntry.create({
+      data: {
+        action: 'REQUEST_CREATED',
+        performerId: requester.id,
+        performerName: requester.username,
+        targetUserId: requester.id,
+        targetUserName: requester.username,
+        groupId,
+        accessRequestId: created.id,
+        details: {
+          duration,
+          expiresAt,
+          levelId: targetLevel.id,
+          levelName: targetLevel.name,
+          selfDemotion: true,
+          fromLevelId: currentAccess.levelId,
+          fromLevelName: currentAccess.level?.name ?? null,
+        },
+      },
+    });
+
+    const fullRequest = await prisma.accessRequest.findUnique({
+      where: { id: created.id },
+      include: { group: true, level: true },
+    });
+    const provisioned = await this._provision(fullRequest!, { id: requester.id, name: requester.username });
+    return { kind: 'instant', request: provisioned };
+  }
+
+  /**
+   * Admin override: set the level a member holds in a group directly — no
+   * promote/demote gating, the admin has authority. Applies immediately via the
+   * same swap machinery (one active grant per group is preserved). The grant's
+   * duration is carried over from the member's originating request, so a time-bound
+   * grant stays time-bound and a permanent grant stays permanent (the expiry window
+   * is re-applied from now).
+   */
+  async adminSetMemberLevel(
+    performer: { id: string; username: string },
+    userAccessId: string,
+    levelId: string,
+  ): Promise<AccessRequest> {
+    const access = await prisma.userAccess.findUnique({
+      where: { id: userAccessId },
+      include: { group: true, level: true },
+    });
+    if (!access) throw new NotFoundError('Member access grant not found');
+    if (!access.isActive) throw new ValidationError('This grant is no longer active.');
+
+    const activeLevels = await prisma.groupLevel.findMany({
+      where: { groupId: access.groupId, isActive: true },
+    });
+    if (activeLevels.length === 0) {
+      throw new ValidationError('This group has no levels to assign.');
+    }
+    const targetLevel = activeLevels.find((l) => l.id === levelId) ?? null;
+    if (!targetLevel) throw new ValidationError('Invalid or inactive level for this group.');
+    if (!targetLevel.externalGroupId) {
+      throw new ValidationError('This level is not fully configured yet (no backing platform group). Configure it first.');
+    }
+    if (access.levelId === targetLevel.id) {
+      throw new ConflictError('This member already holds that level.');
+    }
+
+    // Carry the duration over from the originating request so the expiry policy is
+    // preserved (default PERMANENT for legacy/seeded grants with no request).
+    let duration: AccessDuration = AccessDuration.PERMANENT;
+    if (access.accessRequestId) {
+      const orig = await prisma.accessRequest.findUnique({
+        where: { id: access.accessRequestId },
+        select: { duration: true },
+      });
+      if (orig) duration = orig.duration;
+    }
+
+    const created = await prisma.accessRequest.create({
+      data: {
+        groupId: access.groupId,
+        levelId: targetLevel.id,
+        requesterId: access.userId,
+        requesterName: access.userName,
+        requesterEmail: access.userEmail,
+        justification: `Level set to "${targetLevel.name}" by ${performer.username} via Admin Management`,
+        duration,
+        expiresAt: this.calculateExpiry(duration),
+        status: RequestStatus.PROVISIONING,
+        reviewerId: performer.id,
+        reviewerName: performer.username,
+        reviewNote: 'Level set by admin',
+        reviewedAt: new Date(),
+      },
+    });
+
+    await prisma.auditEntry.create({
+      data: {
+        action: 'REQUEST_CREATED',
+        performerId: performer.id,
+        performerName: performer.username,
+        targetUserId: access.userId,
+        targetUserName: access.userName,
+        groupId: access.groupId,
+        accessRequestId: created.id,
+        details: {
+          adminSetLevel: true,
+          duration,
+          levelId: targetLevel.id,
+          levelName: targetLevel.name,
+          fromLevelId: access.levelId,
+          fromLevelName: access.level?.name ?? null,
+        },
+      },
+    });
+
+    const fullRequest = await prisma.accessRequest.findUnique({
+      where: { id: created.id },
+      include: { group: true, level: true },
+    });
+    return this._provision(fullRequest!, { id: performer.id, name: performer.username });
   }
 
   // Review Request (Admin)
@@ -201,12 +435,16 @@ export class AccessWorkflowService {
       return updatedRequest;
     }
 
-    // Status: APPROVED → gate on user-creation status, then either provision or queue.
+    // Status: APPROVED → gate on user-creation status FOR THIS GROUP'S PLATFORM,
+    // then either provision or queue. The gate is per-platform: a user approved on
+    // Redash is NOT thereby approved on AWS — each platform has its own account, so
+    // we look up the account-creation request keyed on (user, this group's platform).
+    const platform = this.requirePlatform(request.group);
     const userCreation = await prisma.userCreationRequest.findUnique({
-      where: { userId: request.requesterId },
+      where: { userId_platform: { userId: request.requesterId, platform } },
     });
 
-    // No user-creation row, or it isn't past the admin-approval bar → block.
+    // No user-creation row for this platform, or it isn't past the admin-approval bar → block.
     const isApprovedOrLater =
       userCreation &&
       (userCreation.status === UserCreationStatus.APPROVED ||
@@ -215,12 +453,12 @@ export class AccessWorkflowService {
 
     if (!isApprovedOrLater) {
       throw new UserNotApprovedError(
-        'Cannot approve this request — the requester is not yet an approved Hermes user. Approve their user-creation request first.',
-        { userCreationStatus: userCreation?.status ?? 'MISSING' },
+        `Cannot approve this request — the requester is not yet an approved Hermes user on ${platform}. Approve their ${platform} account request first.`,
+        { userCreationStatus: userCreation?.status ?? 'MISSING', platform },
       );
     }
 
-    // User-creation approved but Redash account not finalized yet → queue for setup completion.
+    // User-creation approved but the platform account isn't finalized yet → queue for setup completion.
     if (userCreation.status !== UserCreationStatus.COMPLETED) {
       const queued = await prisma.accessRequest.update({
         where: { id: requestId },
@@ -334,6 +572,35 @@ export class AccessWorkflowService {
       const grantedAt = new Date();
       const expiresAt = this.calculateExpiry(request.duration);
 
+      // A pre-existing active grant on a DIFFERENT level means this is a level
+      // change → swap it (atomically deactivate the old grant + create the new one,
+      // then remove the user from the old level's external group) and finalize.
+      // A grant on the SAME level is a genuine duplicate (e.g. concurrent approval)
+      // and is left to the P2002 short-circuit in the create branch below.
+      const existingGrant = await prisma.userAccess.findFirst({
+        where: { userId: request.requesterId, groupId: request.groupId, isActive: true },
+        include: { level: true },
+      });
+      if (existingGrant && existingGrant.levelId !== request.levelId) {
+        const swapped = await this._swapGrant(request, existingGrant, {
+          externalUserId,
+          grantedAt,
+          expiresAt,
+          performer,
+          platform,
+          newExternalGroupId: externalGroupId,
+          provisioner,
+        });
+        return this._finalizeProvisioned(request, swapped, {
+          performer,
+          platform,
+          externalUserId,
+          externalGroupId,
+          expiresAt,
+          note,
+        });
+      }
+
       let userAccess;
       try {
         userAccess = await prisma.userAccess.create({
@@ -399,53 +666,14 @@ export class AccessWorkflowService {
         throw createErr;
       }
 
-      const finalRequest = await prisma.accessRequest.update({
-        where: { id: request.id },
-        data: {
-          status: RequestStatus.PROVISIONED,
-          provisionedAt: new Date(),
-          // Sync the request's expiry to the actual grant so the UI shows the truth.
-          expiresAt,
-        },
+      return this._finalizeProvisioned(request, userAccess, {
+        performer,
+        platform,
+        externalUserId,
+        externalGroupId,
+        expiresAt,
+        note,
       });
-
-      await prisma.auditEntry.create({
-        data: {
-          action: 'ACCESS_GRANTED',
-          performerId: performer.id,
-          performerName: performer.name,
-          targetUserId: request.requesterId,
-          targetUserName: request.requesterName,
-          groupId: request.groupId,
-          accessRequestId: request.id,
-          details: {
-            userAccessId: userAccess.id,
-            platform,
-            externalUserId,
-            externalGroupId,
-            levelId: request.levelId ?? null,
-            levelName: request.level?.name ?? null,
-            expiresAt,
-          },
-        },
-      });
-
-      eventBus.emitAccessEvent({
-        type: 'request.approved',
-        payload: {
-          requesterId: request.requesterId,
-          requesterEmail: request.requesterEmail,
-          groupName: request.group.name,
-          // The persisted reviewer wins so the post-setup path shows the real
-          // approving admin, not "System (post-setup)". note falls back to the
-          // note stored at review time (post-setup path has no inline note).
-          reviewerName: request.reviewerName ?? performer.name,
-          note: note ?? request.reviewNote ?? undefined,
-        },
-        timestamp: new Date(),
-      });
-
-      return finalRequest;
     } catch (err: any) {
       logger.error(`Provisioning failed for request ${request.id}:`, err.message);
 
@@ -472,6 +700,184 @@ export class AccessWorkflowService {
 
       throw err;
     }
+  }
+
+  /**
+   * Swap a user from one level grant to another within the same group, preserving
+   * the one-active-grant-per-(user,group) invariant. The caller has already
+   * provisioned the user into the NEW level's external group; here we atomically
+   * deactivate the old grant + create the new one, then remove the user from the
+   * OLD level's external group.
+   *
+   * The platform deprovision is best-effort: the Hermes-side swap has already
+   * committed, so a failure is logged + audited for manual cleanup (the user may
+   * briefly remain in the old group on the platform) rather than rolled back.
+   */
+  private async _swapGrant(
+    request: AccessRequestWithGroup,
+    existingGrant: Prisma.UserAccessGetPayload<{ include: { level: true } }>,
+    ctx: {
+      externalUserId: string;
+      grantedAt: Date;
+      expiresAt: Date | null;
+      performer: { id: string; name: string };
+      platform: string;
+      newExternalGroupId: string;
+      provisioner: PlatformAdapter;
+    },
+  ) {
+    const { externalUserId, grantedAt, expiresAt, performer, platform, newExternalGroupId, provisioner } = ctx;
+    const oldExternalGroupId = existingGrant.level?.externalGroupId ?? request.group.externalGroupId;
+
+    // Atomic: old grant out, new grant in — the partial unique index on
+    // (user_id, group_id) WHERE is_active is never violated mid-swap.
+    const [, newAccess] = await prisma.$transaction([
+      prisma.userAccess.update({
+        where: { id: existingGrant.id },
+        data: { isActive: false, revokedAt: new Date() },
+      }),
+      prisma.userAccess.create({
+        data: {
+          userId: request.requesterId,
+          userName: request.requesterName,
+          userEmail: request.requesterEmail,
+          groupId: request.groupId,
+          levelId: request.levelId ?? null,
+          externalUserId,
+          isActive: true,
+          grantedAt,
+          expiresAt,
+          grantedBy: performer.name,
+          accessRequestId: request.id,
+        },
+      }),
+    ]);
+
+    // Remove the user from the OLD level's external group on the platform. Skip if
+    // both levels resolve to the same external group (that would undo the provision
+    // we just did). Best-effort — see method doc.
+    let oldDeprovisionError: string | null = null;
+    if (existingGrant.externalUserId && oldExternalGroupId && oldExternalGroupId !== newExternalGroupId) {
+      try {
+        await provisioner.deprovision({
+          externalUserId: existingGrant.externalUserId,
+          externalGroupId: oldExternalGroupId,
+        });
+      } catch (err: any) {
+        oldDeprovisionError = err.message;
+        logger.error(
+          { userAccessId: existingGrant.id, platform, oldExternalGroupId, error: err.message },
+          'Level change: failed to remove the user from the previous level group — flagged for manual cleanup',
+        );
+      }
+    }
+
+    // Mark the superseded request (the one that granted the old level) REVOKED so
+    // request history reflects the swap.
+    if (existingGrant.accessRequestId) {
+      await prisma.accessRequest.update({
+        where: { id: existingGrant.accessRequestId },
+        data: {
+          status: RequestStatus.REVOKED,
+          revokeReason: `Superseded by level change to "${request.level?.name ?? 'another level'}"`,
+          revokedAt: new Date(),
+        },
+      });
+    }
+
+    await prisma.auditEntry.create({
+      data: {
+        action: 'ACCESS_LEVEL_CHANGED',
+        performerId: performer.id,
+        performerName: performer.name,
+        targetUserId: request.requesterId,
+        targetUserName: request.requesterName,
+        groupId: request.groupId,
+        accessRequestId: request.id,
+        details: {
+          fromLevelId: existingGrant.levelId,
+          fromLevelName: existingGrant.level?.name ?? null,
+          toLevelId: request.levelId ?? null,
+          toLevelName: request.level?.name ?? null,
+          oldUserAccessId: existingGrant.id,
+          newUserAccessId: newAccess.id,
+          platform,
+          oldExternalGroupId,
+          newExternalGroupId,
+          oldDeprovisionError,
+        },
+      },
+    });
+
+    return newAccess;
+  }
+
+  /**
+   * Shared tail of a successful provision: flip the request to PROVISIONED, write
+   * the ACCESS_GRANTED audit row, and emit request.approved. Used by both the
+   * first-grant path and the level-swap path of _provision.
+   */
+  private async _finalizeProvisioned(
+    request: AccessRequestWithGroup,
+    userAccess: { id: string },
+    ctx: {
+      performer: { id: string; name: string };
+      platform: string;
+      externalUserId: string;
+      externalGroupId: string;
+      expiresAt: Date | null;
+      note?: string;
+    },
+  ): Promise<AccessRequest> {
+    const { performer, platform, externalUserId, externalGroupId, expiresAt, note } = ctx;
+
+    const finalRequest = await prisma.accessRequest.update({
+      where: { id: request.id },
+      data: {
+        status: RequestStatus.PROVISIONED,
+        provisionedAt: new Date(),
+        // Sync the request's expiry to the actual grant so the UI shows the truth.
+        expiresAt,
+      },
+    });
+
+    await prisma.auditEntry.create({
+      data: {
+        action: 'ACCESS_GRANTED',
+        performerId: performer.id,
+        performerName: performer.name,
+        targetUserId: request.requesterId,
+        targetUserName: request.requesterName,
+        groupId: request.groupId,
+        accessRequestId: request.id,
+        details: {
+          userAccessId: userAccess.id,
+          platform,
+          externalUserId,
+          externalGroupId,
+          levelId: request.levelId ?? null,
+          levelName: request.level?.name ?? null,
+          expiresAt,
+        },
+      },
+    });
+
+    eventBus.emitAccessEvent({
+      type: 'request.approved',
+      payload: {
+        requesterId: request.requesterId,
+        requesterEmail: request.requesterEmail,
+        groupName: request.group.name,
+        // The persisted reviewer wins so the post-setup path shows the real
+        // approving admin, not "System (post-setup)". note falls back to the
+        // note stored at review time (post-setup path has no inline note).
+        reviewerName: request.reviewerName ?? performer.name,
+        note: note ?? request.reviewNote ?? undefined,
+      },
+      timestamp: new Date(),
+    });
+
+    return finalRequest;
   }
 
   /**
@@ -539,11 +945,18 @@ export class AccessWorkflowService {
    * of that user's group requests that were queued in WAITING_FOR_SETUP.
    * Per-row try/catch so one provisioning failure doesn't abort the batch.
    */
-  async provisionWaitingRequests(userId: string): Promise<{ provisioned: number; failed: number }> {
+  async provisionWaitingRequests(
+    userId: string,
+    platform?: string,
+  ): Promise<{ provisioned: number; failed: number }> {
+    // When a platform's account completes, only release that platform's queued
+    // requests — a user's AWS requests must keep waiting until their AWS account
+    // is ready, even after their Redash account completes (and vice versa).
     const waiting = await prisma.accessRequest.findMany({
       where: {
         requesterId: userId,
         status: RequestStatus.WAITING_FOR_SETUP,
+        ...(platform ? { group: { platform } } : {}),
       },
       include: { group: true, level: true },
     });

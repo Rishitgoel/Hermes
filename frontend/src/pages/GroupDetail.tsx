@@ -5,7 +5,9 @@ import { useAuth } from '../contexts/AuthContext';
 import apiClient from '../services/apiClient';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import AccessRequestModal, { type GroupLevelOption } from '../components/access/AccessRequestModal';
+import ChangeLevelModal from '../components/access/ChangeLevelModal';
 import PlatformInviteModal from '../components/access/PlatformInviteModal';
+import { getMyUserCreation } from '../services/api/userCreation';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../lib/queryKeys';
 
@@ -63,6 +65,7 @@ export const GroupDetail: React.FC = () => {
   const queryClient = useQueryClient();
 
   const [isRequestModalOpen, setIsRequestModalOpen] = useState(false);
+  const [isChangeLevelModalOpen, setIsChangeLevelModalOpen] = useState(false);
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
 
   const groupQuery = useQuery<GroupDetailData>({
@@ -74,12 +77,20 @@ export const GroupDetail: React.FC = () => {
   const group = groupQuery.data;
   const isLoading = groupQuery.isLoading;
 
-  // Gate by the user's user-creation status — see Groups.tsx for the same logic.
-  // DRAFT or REJECTED users must act on their account first; everyone else can
-  // queue an access request, which will auto-provision once Redash setup completes.
-  const userCreationStatus = user?.userCreation?.status ?? null;
+  // Gate per-platform on THIS group's platform account (see Groups.tsx for the same
+  // logic): DRAFT/REJECTED — or no account request yet for this platform — must act
+  // first; everyone else can queue, auto-provisioning once their account is set up.
+  const accountQuery = useQuery({
+    queryKey: queryKeys.userCreation(group?.platform ?? 'redash'),
+    queryFn: () => getMyUserCreation(group?.platform ?? 'redash'),
+    enabled: !!group?.platform,
+  });
+  const account = accountQuery.data ?? null;
+  const userCreationStatus = account?.status ?? null;
   const needsAccountAction =
-    userCreationStatus === 'DRAFT' || userCreationStatus === 'REJECTED';
+    !!group &&
+    !accountQuery.isLoading &&
+    (!account || userCreationStatus === 'DRAFT' || userCreationStatus === 'REJECTED');
   const isPlatformUser = !needsAccountAction;
 
   // If the group fetch errors (e.g. 404), bounce back to the listing.
@@ -118,6 +129,14 @@ export const GroupDetail: React.FC = () => {
   const isSuperAdmin = user?.roles.includes('hermes_super_admin') || false;
   const isGroupAdminOfThisGroup = group.admins.some((adm) => adm.userId === user?.id);
   const canManage = isSuperAdmin || isGroupAdminOfThisGroup;
+  // A real member of a leveled group (not an admin holding a cosmetic ACTIVE badge:
+  // those have currentLevelId === null) can switch levels, provided there's another
+  // level to move to. Promote vs demote is decided server-side on submit.
+  const canChangeLevel =
+    !canManage &&
+    group.accessStatus === 'ACTIVE' &&
+    group.levels.length > 1 &&
+    !!group.currentLevelId;
   // Members who are also group admins: badge them and suppress Revoke (an admin's
   // access is auto-granted by their role — demote them first to remove it).
   const adminUserIds = new Set(group.admins.map((a) => a.userId));
@@ -284,6 +303,17 @@ export const GroupDetail: React.FC = () => {
             </button>
           )}
 
+          {/* Change level — for a member who already holds a level in this group. */}
+          {canChangeLevel && (
+            <button
+              className="btn btn-outline"
+              onClick={() => setIsChangeLevelModalOpen(true)}
+              style={{ width: '100%', marginTop: '12px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+            >
+              <Icons.ArrowLeftRight size={16} /> Change Level
+            </button>
+          )}
+
           {/* Approved, but the requester hasn't finished platform-account setup yet.
               Nothing to do here — it activates automatically post-setup, so don't
               offer a (duplicate) Request Access button. */}
@@ -440,16 +470,37 @@ export const GroupDetail: React.FC = () => {
         />
       )}
 
+      {/* Change Level Modal — only for members holding a real leveled grant. */}
+      {group.currentLevelId && (
+        <ChangeLevelModal
+          isOpen={isChangeLevelModalOpen}
+          onClose={() => setIsChangeLevelModalOpen(false)}
+          groupId={group.id}
+          groupName={group.name}
+          levels={group.levels}
+          currentLevelId={group.currentLevelId}
+          currentLevelName={group.currentLevelName}
+          onSuccess={() => {
+            queryClient.invalidateQueries({ queryKey: queryKeys.groupDetail(slug ?? '') });
+            queryClient.invalidateQueries({ queryKey: queryKeys.groups() });
+            queryClient.invalidateQueries({ queryKey: queryKeys.myRequests() });
+            queryClient.invalidateQueries({ queryKey: queryKeys.myAccess() });
+          }}
+        />
+      )}
+
       {/* Platform Invite Modal — routes the user into the account-creation flow when needed. */}
       <PlatformInviteModal
         isOpen={isInviteModalOpen}
         onClose={() => setIsInviteModalOpen(false)}
         platformId={group.platform}
         platformName={platformDisplayName(group.platform)}
+        accountStatus={account}
         onSuccess={() => {
-          // After submission, the modal closes itself; just refetch group data
-          // in case the user's status changed.
+          // After submission, the modal closes itself; refetch group data + this
+          // platform's account status in case the user's status changed.
           queryClient.invalidateQueries({ queryKey: queryKeys.groupDetail(slug ?? '') });
+          queryClient.invalidateQueries({ queryKey: queryKeys.userCreation(group.platform) });
         }}
       />
     </div>

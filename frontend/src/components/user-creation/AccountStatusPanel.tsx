@@ -1,43 +1,69 @@
 import React, { useState } from 'react';
-import { useAuth } from '../../contexts/AuthContext';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useAuth, type UserCreationInfo } from '../../contexts/AuthContext';
 import {
-  resendRedashInvite,
+  getMyUserCreations,
+  resendInvite,
   syncUserCreationStatusNow,
 } from '../../services/api/userCreation';
+import { queryKeys } from '../../lib/queryKeys';
 import UserCreationFormModal from './UserCreationFormModal';
 import * as Icons from 'lucide-react';
 
+const PLATFORM_LABELS: Record<string, string> = { redash: 'Redash', aws: 'AWS', jira: 'Jira' };
+const platformLabel = (p: string): string =>
+  PLATFORM_LABELS[p] ?? p.charAt(0).toUpperCase() + p.slice(1);
+
 /**
- * Account-creation lifecycle panel. Rendered at the top of the My Requests page
- * (it used to be the standalone `/account-status` page). Keeps the user's
- * account status — and all of its actions (submit, retry, sync now, continue to
- * Redash setup) — alongside their group access requests.
- *
- * Behaviour per status:
- *  - DRAFT          → "Submit account request" CTA opens the form modal.
- *  - PENDING        → "Waiting on admin" passive state.
- *  - APPROVED       → invite call failed last time; show a "Retry setup" button.
- *  - AWAITING_SETUP → direct "Continue to Redash setup" link (uses inviteLink) + Sync now.
- *  - COMPLETED      → compact "account active" confirmation (rendered early below).
- *  - REJECTED       → show admin's note + "Request again".
+ * Account-creation lifecycle panel — now PER PLATFORM. Renders one status card for
+ * each platform the user has an account request on (from /me/all). A user can hold
+ * separate accounts (e.g. Redash + AWS), each with its own lifecycle + actions.
  */
 export const AccountStatusPanel: React.FC = () => {
-  const { user, refreshUserCreation } = useAuth();
+  const { data: rows = [], isLoading } = useQuery<UserCreationInfo[]>({
+    queryKey: queryKeys.userCreations(),
+    queryFn: getMyUserCreations,
+  });
+
+  // Nothing to show until /me/all resolves (or the user has no requests at all).
+  if (isLoading || rows.length === 0) return null;
+
+  return (
+    <div style={{ marginBottom: '24px' }}>
+      <div className="section-header">
+        <h3 className="section-title">Account status</h3>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        {rows.map((uc) => (
+          <PlatformAccountCard key={uc.id} uc={uc} />
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const PlatformAccountCard: React.FC<{ uc: UserCreationInfo }> = ({ uc }) => {
+  const { refreshUserCreation } = useAuth();
+  const queryClient = useQueryClient();
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [busy, setBusy] = useState<null | 'retry' | 'sync'>(null);
   const [message, setMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
 
-  const uc = user?.userCreation ?? null;
+  const label = platformLabel(uc.platform);
 
-  // Retry only exists for the failure case: status APPROVED with inviteError. It
-  // calls the same backend endpoint as a "resend" — `findOrInviteUser` is idempotent.
+  const refresh = async () => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.userCreations() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.userCreation(uc.platform) });
+    await refreshUserCreation();
+  };
+
   const handleRetry = async () => {
     setBusy('retry');
     setMessage(null);
     try {
-      await resendRedashInvite();
-      await refreshUserCreation();
-      setMessage({ kind: 'success', text: 'Setup link generated. Click "Continue to Redash setup" below.' });
+      await resendInvite(uc.platform);
+      await refresh();
+      setMessage({ kind: 'success', text: `Setup link regenerated. Use "Continue to ${label} setup" below.` });
     } catch (err: any) {
       setMessage({ kind: 'error', text: err.message || 'Retry failed.' });
     } finally {
@@ -49,9 +75,9 @@ export const AccountStatusPanel: React.FC = () => {
     setBusy('sync');
     setMessage(null);
     try {
-      await syncUserCreationStatusNow();
-      await refreshUserCreation();
-      setMessage({ kind: 'success', text: 'Synced with Redash. If your account is set up, this panel will reflect it now.' });
+      await syncUserCreationStatusNow(uc.platform);
+      await refresh();
+      setMessage({ kind: 'success', text: `Synced with ${label}. If your account is set up, this will reflect it now.` });
     } catch (err: any) {
       setMessage({ kind: 'error', text: err.message || 'Sync failed.' });
     } finally {
@@ -59,11 +85,7 @@ export const AccountStatusPanel: React.FC = () => {
     }
   };
 
-  // /auth/me hasn't resolved yet — let the requests table render on its own.
-  if (!uc) return null;
-
-  // COMPLETED → compact, single-line confirmation so a fully-onboarded user
-  // isn't shown the full lifecycle card every time they open My Requests.
+  // COMPLETED → compact one-line confirmation.
   if (uc.status === 'COMPLETED') {
     return (
       <div
@@ -78,12 +100,11 @@ export const AccountStatusPanel: React.FC = () => {
           borderRadius: 'var(--radius-md)',
           fontSize: '13px',
           fontWeight: 600,
-          marginBottom: '24px',
         }}
       >
         <Icons.CheckCircle2 size={16} />
         <span>
-          Your Redash account is active
+          Your {label} account is active
           {uc.completedAt ? ` · set up ${new Date(uc.completedAt).toLocaleDateString()}` : ''}.
         </span>
       </div>
@@ -99,7 +120,7 @@ export const AccountStatusPanel: React.FC = () => {
       style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
     >
       <Icons.ExternalLink size={14} />
-      Continue to Redash setup
+      Continue to {label} setup
     </a>
   ) : null;
 
@@ -109,8 +130,8 @@ export const AccountStatusPanel: React.FC = () => {
         return (
           <>
             <p>
-              You haven't submitted an account request yet. Submit a quick justification and an
-              admin will review it.
+              You haven't submitted a {label} account request yet. Submit a quick justification and
+              an admin will review it.
             </p>
             <button type="button" className="btn btn-primary" onClick={() => setIsFormOpen(true)}>
               <Icons.Send size={14} style={{ marginRight: '6px' }} />
@@ -122,8 +143,8 @@ export const AccountStatusPanel: React.FC = () => {
         return (
           <>
             <p>
-              Your account request is waiting for an admin to review. You can keep browsing groups
-              and queue access requests — they'll activate after your account is set up.
+              Your {label} account request is waiting for an admin to review. You can keep browsing
+              groups and queue access requests — they'll activate after your account is set up.
             </p>
             <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
               Submitted {uc.submittedAt ? new Date(uc.submittedAt).toLocaleString() : '—'}
@@ -147,12 +168,15 @@ export const AccountStatusPanel: React.FC = () => {
           </>
         );
       case 'APPROVED':
-        // Approved but the Redash invite call failed — offer to retry.
         return (
           <>
             <p>
-              An admin approved your account but Hermes hit a snag generating your Redash setup
-              link. Click <strong>Retry setup</strong> to try again.
+              An admin approved your {label} account but Hermes hit a snag finalizing setup.
+              {uc.platform === 'redash' ? (
+                <> Click <strong>Retry setup</strong> to try again.</>
+              ) : (
+                <> Please contact an admin to retry.</>
+              )}
             </p>
             {uc.inviteError && (
               <div
@@ -168,55 +192,39 @@ export const AccountStatusPanel: React.FC = () => {
                 <strong>Last error:</strong> {uc.inviteError}
               </div>
             )}
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={handleRetry}
-              disabled={busy !== null}
-            >
-              <Icons.RefreshCw size={14} style={{ marginRight: '6px' }} />
-              {busy === 'retry' ? 'Retrying…' : 'Retry setup'}
-            </button>
+            {uc.platform === 'redash' && (
+              <button type="button" className="btn btn-primary" onClick={handleRetry} disabled={busy !== null}>
+                <Icons.RefreshCw size={14} style={{ marginRight: '6px' }} />
+                {busy === 'retry' ? 'Retrying…' : 'Retry setup'}
+              </button>
+            )}
           </>
         );
       case 'AWAITING_SETUP':
         return (
           <>
             <p>
-              Your account is approved. Click the button below to set your Redash password —
-              once that's done, any group access an admin has approved for you will activate
-              automatically.
+              Your {label} account is approved.{' '}
+              {uc.inviteLink
+                ? `Click the button below to finish setup — once done, any approved group access will activate automatically.`
+                : `Check your email for ${label} sign-in instructions — your approved group access will activate automatically.`}
             </p>
             <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-              {inviteLinkButton ?? (
-                <span
-                  style={{
-                    fontSize: '13px',
-                    color: 'var(--status-rejected-text)',
-                  }}
-                >
-                  No setup link available — please contact your admin.
-                </span>
-              )}
-              <button
-                type="button"
-                className="btn btn-outline"
-                onClick={handleSync}
-                disabled={busy !== null}
-              >
+              {inviteLinkButton}
+              <button type="button" className="btn btn-outline" onClick={handleSync} disabled={busy !== null}>
                 <Icons.RefreshCw size={14} style={{ marginRight: '6px' }} />
-                {busy === 'sync' ? 'Syncing…' : 'I\'ve finished — sync now'}
+                {busy === 'sync' ? 'Syncing…' : "I've finished — sync now"}
               </button>
             </div>
             <div style={{ fontSize: '12px', color: 'var(--text-light)' }}>
-              Link issued: {uc.inviteSentAt ? new Date(uc.inviteSentAt).toLocaleString() : '—'}
+              {uc.inviteSentAt ? `Issued ${new Date(uc.inviteSentAt).toLocaleString()}` : ''}
             </div>
           </>
         );
       case 'REJECTED':
         return (
           <>
-            <p>An admin rejected your account request.</p>
+            <p>An admin rejected your {label} account request.</p>
             {uc.rejectionReason && (
               <blockquote
                 style={{
@@ -233,10 +241,6 @@ export const AccountStatusPanel: React.FC = () => {
                 "{uc.rejectionReason}"
               </blockquote>
             )}
-            <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
-              You can address the feedback above and submit a new request, or contact your admin
-              if you'd like to appeal.
-            </p>
             <button type="button" className="btn btn-primary" onClick={() => setIsFormOpen(true)}>
               <Icons.Send size={14} style={{ marginRight: '6px' }} />
               Request again
@@ -249,14 +253,7 @@ export const AccountStatusPanel: React.FC = () => {
   };
 
   return (
-    <div style={{ marginBottom: '24px' }}>
-      <div className="section-header">
-        <h3 className="section-title">Account status</h3>
-        <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
-          {uc.status.replace('_', ' ')}
-        </span>
-      </div>
-
+    <div>
       {message && (
         <div
           style={{
@@ -267,27 +264,19 @@ export const AccountStatusPanel: React.FC = () => {
             border: `1px solid ${
               message.kind === 'success' ? 'var(--status-approved-text)' : 'var(--status-rejected-text)'
             }`,
-            padding: '12px 16px',
+            padding: '10px 14px',
             borderRadius: 'var(--radius-md)',
             fontSize: '13px',
             fontWeight: 600,
-            marginBottom: '16px',
+            marginBottom: '8px',
             display: 'flex',
             alignItems: 'center',
             gap: '8px',
           }}
         >
-          {message.kind === 'success' ? (
-            <Icons.CheckCircle2 size={16} />
-          ) : (
-            <Icons.AlertTriangle size={16} />
-          )}
+          {message.kind === 'success' ? <Icons.CheckCircle2 size={16} /> : <Icons.AlertTriangle size={16} />}
           <div style={{ flex: 1 }}>{message.text}</div>
-          <button
-            type="button"
-            onClick={() => setMessage(null)}
-            style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer' }}
-          >
+          <button type="button" onClick={() => setMessage(null)} style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer' }}>
             <Icons.X size={14} />
           </button>
         </div>
@@ -298,21 +287,29 @@ export const AccountStatusPanel: React.FC = () => {
           background: 'white',
           border: '1px solid var(--border)',
           borderRadius: 'var(--radius-lg)',
-          padding: '24px',
+          padding: '20px 24px',
           display: 'flex',
           flexDirection: 'column',
-          gap: '16px',
+          gap: '14px',
           boxShadow: 'var(--shadow-sm)',
         }}
       >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span style={{ fontWeight: 700, fontSize: '15px' }}>{label} account</span>
+          <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+            {uc.status.replace('_', ' ')}
+          </span>
+        </div>
         {renderBody()}
       </div>
 
       <UserCreationFormModal
         isOpen={isFormOpen}
         onClose={() => setIsFormOpen(false)}
+        platform={uc.platform}
+        platformName={label}
         onSubmitted={() => {
-          /* refreshUserCreation handled inside the modal */
+          /* invalidation handled inside the modal */
         }}
       />
     </div>

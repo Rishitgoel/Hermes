@@ -43,6 +43,7 @@ router.delete('/group-admins/:id', authenticateToken, adminMgmt('removeGroupAdmi
 
 // Members
 router.get('/groups/:groupId/members', authenticateToken, adminMgmt('listGroupMembers'));
+router.put('/groups/:groupId/members/:userAccessId/level', authenticateToken, adminMgmt('setGroupMemberLevel'));
 router.delete('/groups/:groupId/members/:userAccessId', authenticateToken, adminMgmt('removeGroupMember'));
 
 // Group levels / subgroups (super or platform admin of the group's platform — enforced in controller)

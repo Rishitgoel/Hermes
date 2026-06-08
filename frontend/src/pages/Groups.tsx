@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useAuth } from '../contexts/AuthContext';
 import apiClient from '../services/apiClient';
+import { getMyUserCreation } from '../services/api/userCreation';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import PlatformInviteModal from '../components/access/PlatformInviteModal';
 import * as Icons from 'lucide-react';
@@ -54,10 +54,10 @@ const PLATFORMS: PlatformMetadata[] = [
     id: 'aws',
     name: 'AWS',
     fullName: 'Amazon Web Services',
-    description: 'Cloud infrastructure resources, IAM policies, and VPC access permissions.',
+    description: 'IAM Identity Center groups, SSO access, and permission-set memberships.',
     iconName: 'Cloud',
     color: '#FF9900',
-    status: 'COMING_SOON',
+    status: 'ACTIVE',
   },
   {
     id: 'jira',
@@ -118,7 +118,6 @@ const PLATFORMS: PlatformMetadata[] = [
 export const Groups: React.FC = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const activePlatform = searchParams.get('platform');
 
@@ -147,19 +146,26 @@ export const Groups: React.FC = () => {
     queryFn: () => apiClient.get('/api/groups').then((r) => r.data),
   });
 
-  // Gate group requests by the user's user-creation status rather than the legacy
-  // platform-status check. The user can queue group requests as soon as they've
-  // submitted an account request (PENDING/APPROVED/AWAITING_SETUP) — those will
-  // auto-provision once they complete Redash setup. Only DRAFT (haven't submitted)
-  // and REJECTED states are blocked. COMPLETED is the normal already-on-Redash case.
-  const userCreationStatus = user?.userCreation?.status ?? null;
+  // Gate group requests by the user's account-creation status FOR THE PLATFORM
+  // being viewed (per-platform): viewing AWS groups checks the AWS account, Redash
+  // checks Redash. The user can queue requests once they've submitted an account
+  // request (PENDING/APPROVED/AWAITING_SETUP) — those auto-provision once setup
+  // completes. DRAFT/REJECTED, or no row yet, must act first. COMPLETED is normal.
+  const accountQuery = useQuery({
+    queryKey: queryKeys.userCreation(activePlatform ?? 'redash'),
+    queryFn: () => getMyUserCreation(activePlatform ?? 'redash'),
+    enabled: !!activePlatform,
+  });
+  const account = accountQuery.data ?? null;
+  const userCreationStatus = account?.status ?? null;
   const canQueueRequests =
     userCreationStatus === 'PENDING' ||
     userCreationStatus === 'APPROVED' ||
     userCreationStatus === 'AWAITING_SETUP' ||
     userCreationStatus === 'COMPLETED';
   const needsAccountAction =
-    userCreationStatus === 'DRAFT' || userCreationStatus === 'REJECTED';
+    !accountQuery.isLoading &&
+    (!account || userCreationStatus === 'DRAFT' || userCreationStatus === 'REJECTED');
 
   const bulkSubmitMutation = useMutation({
     mutationFn: async (
@@ -543,7 +549,7 @@ export const Groups: React.FC = () => {
         }}>
           <Icons.Info size={18} />
           <span style={{ flex: 1, color: 'var(--text-muted)', fontWeight: 500 }}>
-            You can request group access now — any requests admins approve will activate as soon as your Redash setup is complete.
+            You can request group access now — any requests admins approve will activate as soon as your {activePlatformMeta?.name ?? 'platform'} account is set up.
           </span>
         </div>
       )}
@@ -957,11 +963,11 @@ export const Groups: React.FC = () => {
         onClose={() => setIsInviteModalOpen(false)}
         platformId={activePlatform ?? ''}
         platformName={activePlatformMeta?.name ?? 'the platform'}
+        accountStatus={account}
         onSuccess={() => {
           if (activePlatform) {
-            queryClient.invalidateQueries({
-              queryKey: queryKeys.platformStatus(activePlatform),
-            });
+            queryClient.invalidateQueries({ queryKey: queryKeys.platformStatus(activePlatform) });
+            queryClient.invalidateQueries({ queryKey: queryKeys.userCreation(activePlatform) });
           }
         }}
       />

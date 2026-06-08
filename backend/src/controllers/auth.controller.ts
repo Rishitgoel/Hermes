@@ -25,6 +25,7 @@ export class AuthController extends BaseController {
         });
         userCreation = {
           id: row.id,
+          platform: row.platform,
           status: row.status,
           justification: row.justification,
           submittedAt: row.submittedAt,

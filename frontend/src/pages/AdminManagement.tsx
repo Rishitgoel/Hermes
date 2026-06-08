@@ -15,6 +15,7 @@ import {
   removeGroupAdmin,
   listGroupMembers,
   removeGroupMember,
+  setGroupMemberLevel,
   searchUsers,
   listGroupLevels,
   createGroupLevel,
@@ -383,6 +384,27 @@ const GroupCard: React.FC<GroupCardProps> = ({
     onError: (e: any) => onBanner({ type: 'error', text: e.message || 'Failed to remove member.' }),
   });
 
+  // Active levels for this group — drives the per-member level selector below.
+  // Shares the query key with GroupLevelsSection, so the data is fetched once.
+  const levelsQuery = useQuery({
+    queryKey: queryKeys.adminGroupLevels(group.id),
+    queryFn: () => listGroupLevels(group.id),
+    enabled: expanded,
+  });
+  const activeLevels = (levelsQuery.data ?? []).filter((l) => l.isActive);
+
+  const setLevelMutation = useMutation({
+    mutationFn: ({ userAccessId, levelId }: { userAccessId: string; levelId: string }) =>
+      setGroupMemberLevel(group.id, userAccessId, levelId),
+    onSuccess: () => {
+      onBanner({ type: 'success', text: 'Member level updated.' });
+      queryClient.invalidateQueries({ queryKey: queryKeys.adminGroupMembers(group.id) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.adminGroupLevels(group.id) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.adminGroups(group.platform) });
+    },
+    onError: (e: any) => onBanner({ type: 'error', text: e.message || 'Failed to update member level.' }),
+  });
+
   return (
     <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', background: 'var(--bg-card)', overflow: 'hidden' }}>
       {/* Header row */}
@@ -470,6 +492,36 @@ const GroupCard: React.FC<GroupCardProps> = ({
                       <span style={{ fontWeight: 600, fontSize: '13.5px' }}>{cleanName(m.userName)}</span>
                       <span style={{ color: 'var(--text-muted)', fontSize: '12px', marginLeft: '8px' }}>{m.userEmail}</span>
                     </div>
+                    {/* Level: shows the member's current level and lets an admin change it.
+                        Only rendered for groups that have active levels. */}
+                    {activeLevels.length > 0 && (() => {
+                      const currentIsActive = activeLevels.some((l) => l.id === m.levelId);
+                      return (
+                        <select
+                          className="form-select"
+                          title="Member level"
+                          style={{ height: '30px', fontSize: '12px', padding: '2px 8px', width: 'auto', maxWidth: '180px' }}
+                          value={currentIsActive ? (m.levelId ?? '') : ''}
+                          disabled={setLevelMutation.isPending}
+                          onChange={(e) => {
+                            const newLevelId = e.target.value;
+                            if (!newLevelId || newLevelId === m.levelId) return;
+                            setLevelMutation.mutate({ userAccessId: m.id, levelId: newLevelId });
+                          }}
+                        >
+                          {!currentIsActive && (
+                            <option value="" disabled>
+                              {m.levelName ? `${m.levelName} (inactive)` : '— no level —'}
+                            </option>
+                          )}
+                          {activeLevels.map((l) => (
+                            <option key={l.id} value={l.id}>
+                              {l.name}{l.permission ? ` · ${l.permission}` : ''}
+                            </option>
+                          ))}
+                        </select>
+                      );
+                    })()}
                     {m.expiresAt && (
                       <span className="badge badge-pending" style={{ fontSize: '10px' }}>
                         expires {new Date(m.expiresAt).toLocaleDateString()}

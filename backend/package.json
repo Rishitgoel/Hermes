@@ -11,6 +11,7 @@
     "prisma:seed": "ts-node prisma/hermes/seed.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-identitystore": "^3.1063.0",
     "@aws-sdk/client-secrets-manager": "^3.1053.0",
     "@aws-sdk/client-sesv2": "^3.1056.0",
     "@prisma/client": "^6.8.2",

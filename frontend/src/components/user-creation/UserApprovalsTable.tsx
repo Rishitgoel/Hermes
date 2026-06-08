@@ -149,6 +149,7 @@ export const UserApprovalsTable: React.FC = () => {
             <thead>
               <tr>
                 <th>Requester</th>
+                <th style={{ width: '110px' }}>Platform</th>
                 <th>Justification</th>
                 <th style={{ width: '180px' }}>Submitted</th>
                 <th style={{ width: '300px', textAlign: 'right' }}>Action</th>
@@ -178,6 +179,23 @@ export const UserApprovalsTable: React.FC = () => {
                         <div style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{row.userEmail}</div>
                       </div>
                     </div>
+                  </td>
+                  <td>
+                    <span
+                      style={{
+                        fontSize: '10px',
+                        fontWeight: 700,
+                        letterSpacing: '0.03em',
+                        textTransform: 'uppercase',
+                        padding: '2px 8px',
+                        borderRadius: 999,
+                        background: 'var(--primary-light)',
+                        color: 'var(--primary)',
+                        border: '1px solid var(--border-focus)',
+                      }}
+                    >
+                      {row.platform}
+                    </span>
                   </td>
                   <td>
                     <span style={{ color: 'var(--text-muted)', fontSize: '13px', lineHeight: 1.4 }}>

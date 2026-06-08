@@ -22,6 +22,17 @@ export interface ProvisionContext {
 /** Identifies the user on the platform after a successful provision/invite. */
 export interface ProvisionResult {
   externalUserId: string;
+  /**
+   * Platform-specific extras. For {@link PlatformAdapter.inviteUser} the
+   * user-creation flow understands two optional keys:
+   *  - `inviteLink?: string` — a one-time setup URL the user must visit to finish
+   *    signup (Redash issues one). When present, the account-creation request goes
+   *    to AWAITING_SETUP and waits for sync to confirm completion.
+   *  - `alreadyExists?: boolean` — the account already existed (no setup needed),
+   *    so the request can complete immediately.
+   * A platform that creates a ready-to-use account (AWS Identity Center) returns
+   * neither, and the request completes right away.
+   */
   metadata?: Record<string, unknown>;
 }
 
@@ -73,6 +84,13 @@ export interface PlatformAdapter {
   syncUsers?(): Promise<{ count: number }>;
   /** Optional: refresh the cached group list for this platform. */
   syncGroups?(): Promise<{ count: number }>;
+  /**
+   * Optional: refresh a single user by email (the "I've finished setup — sync now"
+   * fast-path). Returns true if the user now exists on the platform. Adapters that
+   * back the user-creation flow should also advance any AWAITING_SETUP request via
+   * `userCreationService.handlePlatformUserDetected`.
+   */
+  syncSingleUser?(email: string): Promise<boolean>;
 
   /**
    * Optional: create a backing group on the platform and return its external id.

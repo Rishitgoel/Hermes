@@ -55,6 +55,10 @@ export interface GroupMember {
   grantedAt: string;
   expiresAt: string | null;
   grantedBy: string;
+  // The level the member currently holds (null = level-less/legacy grant).
+  levelId: string | null;
+  levelName: string | null;
+  levelPermission: string | null;
 }
 
 // ── Lookups ─────────────────────────────────────────────────────────────────
@@ -115,6 +119,15 @@ export async function listGroupMembers(groupId: string): Promise<GroupMember[]> 
 
 export async function removeGroupMember(groupId: string, userAccessId: string): Promise<void> {
   await apiClient.delete(`/api/admin/groups/${groupId}/members/${userAccessId}`);
+}
+
+/** Admin override: set the level a member holds in a group. */
+export async function setGroupMemberLevel(
+  groupId: string,
+  userAccessId: string,
+  levelId: string,
+): Promise<void> {
+  await apiClient.put(`/api/admin/groups/${groupId}/members/${userAccessId}/level`, { levelId });
 }
 
 // ── Group levels (subgroups) ───────────────────────────────────────────────────

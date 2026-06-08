@@ -1,5 +1,6 @@
 import prisma from '../config/prisma';
 import redashService from './redash.service';
+import provisioningRegistry from './provisioning.registry';
 import syncService from './sync.service';
 import accessWorkflowService from './access-workflow.service';
 import eventBus from './event-bus';
@@ -43,9 +44,9 @@ export class UserCreationService {
    *   COMPLETED with externalUserId populated, so the banner never shows.
    * - If not on Redash, creates a DRAFT row that the user can submit later.
    */
-  async ensureDraftForUser(user: RequesterIdentity) {
+  async ensureDraftForUser(user: RequesterIdentity, platform: string = 'redash') {
     const existing = await prisma.userCreationRequest.findUnique({
-      where: { userId: user.id },
+      where: { userId_platform: { userId: user.id, platform } },
     });
     if (existing) return normalizeInviteLink(existing);
 
@@ -56,7 +57,7 @@ export class UserCreationService {
     // address), adopt it instead of crashing on the unique constraint — the email is
     // the stable identity here and /auth/me only uses this row for display.
     const byEmail = await prisma.userCreationRequest.findUnique({
-      where: { userEmail: lowerEmail },
+      where: { userEmail_platform: { userEmail: lowerEmail, platform } },
     });
     if (byEmail) {
       // Same email under a different Keycloak userId (user re-created in Keycloak,
@@ -75,25 +76,26 @@ export class UserCreationService {
       return normalizeInviteLink(adopted);
     }
 
-    // The user-creation gate is Redash-specific today, so we read the Redash
-    // slice of the generic platform cache directly.
-    const cachedRedashUser = await prisma.platformExternalUser.findUnique({
-      where: { platform_email: { platform: 'redash', email: lowerEmail } },
+    // If the user already exists on this platform (provisioned out-of-band), read
+    // the platform's slice of the generic cache and short-circuit to COMPLETED so
+    // the onboarding banner never shows.
+    const cachedUser = await prisma.platformExternalUser.findUnique({
+      where: { platform_email: { platform, email: lowerEmail } },
     });
 
-    if (cachedRedashUser && !cachedRedashUser.isDisabled && !cachedRedashUser.isPending) {
-      const redashUserId = parseInt(cachedRedashUser.externalId, 10);
+    if (cachedUser && !cachedUser.isDisabled && !cachedUser.isPending) {
       logger.info(
-        { userId: user.id, email: lowerEmail, redashUserId },
-        '🌱 Auto-completing user-creation request (user already exists on Redash)',
+        { userId: user.id, email: lowerEmail, platform, externalId: cachedUser.externalId },
+        '🌱 Auto-completing user-creation request (user already exists on platform)',
       );
       return prisma.userCreationRequest.create({
         data: {
           userId: user.id,
           userName: user.username,
           userEmail: lowerEmail,
+          platform,
           status: UserCreationStatus.COMPLETED,
-          externalUserId: redashUserId,
+          externalUserId: cachedUser.externalId,
           completedAt: new Date(),
         },
       }).then(normalizeInviteLink);
@@ -104,6 +106,7 @@ export class UserCreationService {
         userId: user.id,
         userName: user.username,
         userEmail: lowerEmail,
+        platform,
         status: UserCreationStatus.DRAFT,
       },
     }).then(normalizeInviteLink);
@@ -117,15 +120,44 @@ export class UserCreationService {
    * clear the previous review fields (reviewer, note, rejection reason) so admins
    * see a clean pending request rather than last round's decision.
    */
-  async submitRequest(userId: string, justification: string) {
+  async submitRequest(requester: RequesterIdentity, justification: string, platform: string = 'redash') {
     if (!justification || justification.trim().length < 10) {
       throw new ValidationError('Justification must be at least 10 characters long');
     }
 
-    const row = await prisma.userCreationRequest.findUnique({ where: { userId } });
+    const row = await prisma.userCreationRequest.findUnique({
+      where: { userId_platform: { userId: requester.id, platform } },
+    });
+
+    // No row yet for this (user, platform). Platforms other than the login-default
+    // (Redash) aren't auto-drafted on /auth/me, so the first submit creates the row
+    // straight into PENDING with the justification.
     if (!row) {
-      throw new NotFoundError('User-creation request not found. Refresh the page and try again.');
+      const created = await prisma.userCreationRequest.create({
+        data: {
+          userId: requester.id,
+          userName: requester.username,
+          userEmail: requester.email.toLowerCase(),
+          platform,
+          justification: justification.trim(),
+          status: UserCreationStatus.PENDING,
+          submittedAt: new Date(),
+        },
+      });
+      eventBus.emitAccessEvent({
+        type: 'user-creation.submitted',
+        payload: {
+          requestId: created.id,
+          userId: created.userId,
+          userName: created.userName,
+          userEmail: created.userEmail,
+          justification: created.justification,
+        },
+        timestamp: new Date(),
+      });
+      return normalizeInviteLink(created);
     }
+
     const isResubmit = row.status === UserCreationStatus.REJECTED;
     if (row.status !== UserCreationStatus.DRAFT && !isResubmit) {
       throw new ConflictError(`Cannot submit: request is already ${row.status}`);
@@ -179,8 +211,16 @@ export class UserCreationService {
     return normalizeInviteLink(updated);
   }
 
-  async getMyRequest(userId: string) {
-    return prisma.userCreationRequest.findUnique({ where: { userId } }).then(row => row ? normalizeInviteLink(row) : null);
+  async getMyRequest(userId: string, platform: string = 'redash') {
+    return prisma.userCreationRequest
+      .findUnique({ where: { userId_platform: { userId, platform } } })
+      .then(row => (row ? normalizeInviteLink(row) : null));
+  }
+
+  /** All of a user's account-creation requests across platforms. */
+  async getMyRequests(userId: string) {
+    const rows = await prisma.userCreationRequest.findMany({ where: { userId } });
+    return rows.map(normalizeInviteLink);
   }
 
   /** Admin: list everything currently in PENDING state. */
@@ -280,16 +320,21 @@ export class UserCreationService {
     });
 
     try {
-      const { id: externalUserId, inviteLink } = await redashService.findOrInviteUser(
-        row.userEmail,
-        row.userName,
-      );
+      // Route the account creation through the platform's adapter (Redash invites,
+      // AWS Identity Center CreateUser, …). The adapter may return a one-time setup
+      // link in metadata; if so the user must finish setup, otherwise the account
+      // is ready immediately.
+      const adapter = provisioningRegistry.get(row.platform);
+      const inviteResult = await adapter.inviteUser(row.userEmail, row.userName);
+      const externalUserId = inviteResult.externalUserId;
+      const inviteLink = (inviteResult.metadata?.inviteLink as string | undefined) ?? null;
 
-      // If the user already exists on Redash (no inviteLink returned), skip AWAITING_SETUP
-      // and go straight to COMPLETED — they don't need a setup link.
-      const alreadyOnRedash = !inviteLink;
+      // No setup link → account is ready now (an existing Redash user, or an AWS
+      // Identity Center user we just created): complete immediately. A fresh Redash
+      // invite returns a link → wait for the user to finish setup (sync completes it).
+      const completeNow = !inviteLink;
 
-      if (alreadyOnRedash) {
+      if (completeNow) {
         const completed = await prisma.userCreationRequest.update({
           where: { id: row.id },
           data: {
@@ -308,7 +353,7 @@ export class UserCreationService {
             performerName: reviewer.username,
             targetUserId: row.userId,
             targetUserName: row.userName,
-            details: { externalUserId, shortCircuited: true },
+            details: { externalUserId, platform: row.platform, shortCircuited: true },
           },
         });
 
@@ -324,9 +369,9 @@ export class UserCreationService {
           timestamp: new Date(),
         });
 
-        // Provision any group requests that landed in WAITING_FOR_SETUP earlier
-        // (shouldn't exist at this point, but be defensive).
-        accessWorkflowService.provisionWaitingRequests(completed.userId).catch((err) => {
+        // Release any of this user's group requests for THIS platform that were
+        // queued in WAITING_FOR_SETUP.
+        accessWorkflowService.provisionWaitingRequests(completed.userId, row.platform).catch((err) => {
           logger.error(
             { userId: completed.userId, error: err.message },
             'provisionWaitingRequests failed after short-circuit completion',
@@ -353,7 +398,7 @@ export class UserCreationService {
           performerName: reviewer.username,
           targetUserId: row.userId,
           targetUserName: row.userName,
-          details: { externalUserId, note },
+          details: { externalUserId, platform: row.platform, note },
         },
       });
 
@@ -372,8 +417,8 @@ export class UserCreationService {
       return normalizeInviteLink(awaiting);
     } catch (err: any) {
       logger.error(
-        { requestId: row.id, error: err.message },
-        'Redash invite failed during user-creation approval; row stays at APPROVED for retry',
+        { requestId: row.id, platform: row.platform, error: err.message },
+        'Platform invite failed during user-creation approval; row stays at APPROVED for retry',
       );
       await prisma.userCreationRequest.update({
         where: { id: row.id },
@@ -389,9 +434,17 @@ export class UserCreationService {
    * links can be stale (different host/port) if REDASH_BASE_URL changed.
    * Only meaningful in APPROVED (retry after failure) or AWAITING_SETUP (user wants a fresh email).
    */
-  async resendInvite(userId: string) {
-    const row = await prisma.userCreationRequest.findUnique({ where: { userId } });
+  async resendInvite(userId: string, platform: string = 'redash') {
+    const row = await prisma.userCreationRequest.findUnique({
+      where: { userId_platform: { userId, platform } },
+    });
     if (!row) throw new NotFoundError('User-creation request not found');
+
+    // Re-issuing a setup link is a Redash concept. AWS Identity Center sends its
+    // own SSO sign-in setup email, so there is nothing for Hermes to regenerate.
+    if (row.platform !== 'redash') {
+      throw new ValidationError(`Resend is not supported for ${row.platform} accounts`);
+    }
 
     if (
       row.status !== UserCreationStatus.AWAITING_SETUP &&
@@ -405,27 +458,27 @@ export class UserCreationService {
     }
 
     try {
-      // First make sure we know the Redash user ID.
-      const { id: externalUserId } = await redashService.findOrInviteUser(
+      // First make sure we know the Redash user ID (numeric on the wire).
+      const { id: redashUserId } = await redashService.findOrInviteUser(
         row.userEmail,
         row.userName,
       );
 
       // Then explicitly regenerate the invite link so the row always points at
       // a token that still exists in the configured Redash instance.
-      const freshLink = await redashService.regenerateInviteLink(externalUserId);
+      const freshLink = await redashService.regenerateInviteLink(redashUserId);
 
       const updated = await prisma.userCreationRequest.update({
         where: { id: row.id },
         data: {
           status: UserCreationStatus.AWAITING_SETUP,
-          externalUserId,
+          externalUserId: redashUserId.toString(),
           inviteSentAt: new Date(),
           inviteError: null,
           ...(freshLink ? { inviteLink: freshLink } : {}),
         },
       });
-      logger.info({ userId, externalUserId, hadNewLink: !!freshLink }, '📨 Resent Redash invite');
+      logger.info({ userId, externalUserId: redashUserId, hadNewLink: !!freshLink }, '📨 Resent Redash invite');
       return normalizeInviteLink(updated);
     } catch (err: any) {
       await prisma.userCreationRequest.update({
@@ -441,32 +494,40 @@ export class UserCreationService {
    * Runs a full Redash sync; if the user now exists, handleRedashUserDetected will fire
    * inside the sync upsert loop and advance the row to COMPLETED.
    */
-  async forceSync(userId: string) {
-    const row = await prisma.userCreationRequest.findUnique({ where: { userId } });
+  async forceSync(userId: string, platform: string = 'redash') {
+    const row = await prisma.userCreationRequest.findUnique({
+      where: { userId_platform: { userId, platform } },
+    });
     if (row) {
-      await syncService.syncSingleUser(row.userEmail);
+      await syncService.syncSingleUser(row.userEmail, platform);
     }
-    return this.getMyRequest(userId);
+    return this.getMyRequest(userId, platform);
   }
 
   /**
-   * Called from the Redash user-sync upsert loop whenever a RedashUser row is newly inserted
-   * (or its isDisabled flipped false). Quietly no-ops if there's nothing to do.
+   * Called from a platform adapter's user-sync loop (Redash, AWS, …) whenever a
+   * platform user is seen. Advances that platform's account-creation request to
+   * COMPLETED once the user exists and is no longer pending. Quietly no-ops if
+   * there's no tracked request for this (email, platform). `externalId` is the
+   * user's id on the platform as a string.
    */
-  async handleRedashUserDetected(redashUser: { id: number; email: string; name: string; isInvitationPending?: boolean }) {
-    const lowerEmail = redashUser.email.toLowerCase();
+  async handlePlatformUserDetected(
+    platform: string,
+    user: { externalId: string; email: string; name?: string; isPending?: boolean },
+  ) {
+    const lowerEmail = user.email.toLowerCase();
     const row = await prisma.userCreationRequest.findUnique({
-      where: { userEmail: lowerEmail },
+      where: { userEmail_platform: { userEmail: lowerEmail, platform } },
     });
-    if (!row) return; // No tracked request for this email — nothing to do.
+    if (!row) return; // No tracked request for this email+platform — nothing to do.
 
     // If the invite is still pending, they are not finished setting up.
     // Record externalUserId if needed, but do not advance to COMPLETED.
-    if (redashUser.isInvitationPending) {
-      if (row.externalUserId !== redashUser.id) {
+    if (user.isPending) {
+      if (row.externalUserId !== user.externalId) {
         await prisma.userCreationRequest.update({
           where: { id: row.id },
-          data: { externalUserId: redashUser.id },
+          data: { externalUserId: user.externalId },
         });
       }
       return;
@@ -477,10 +538,10 @@ export class UserCreationService {
       row.status !== UserCreationStatus.AWAITING_SETUP &&
       row.status !== UserCreationStatus.APPROVED
     ) {
-      if (row.externalUserId !== redashUser.id) {
+      if (row.externalUserId !== user.externalId) {
         await prisma.userCreationRequest.update({
           where: { id: row.id },
-          data: { externalUserId: redashUser.id },
+          data: { externalUserId: user.externalId },
         });
       }
       return;
@@ -492,15 +553,15 @@ export class UserCreationService {
       where: { id: row.id },
       data: {
         status: UserCreationStatus.COMPLETED,
-        externalUserId: redashUser.id,
+        externalUserId: user.externalId,
         completedAt: new Date(),
         inviteLink: null,
       },
     });
 
     logger.info(
-      { userId: completed.userId, externalUserId: redashUser.id },
-      '✅ User-creation request completed (Redash user detected)',
+      { userId: completed.userId, platform, externalUserId: user.externalId },
+      '✅ User-creation request completed (platform user detected)',
     );
 
     await prisma.auditEntry.create({
@@ -510,7 +571,7 @@ export class UserCreationService {
         performerName: 'System Sync',
         targetUserId: completed.userId,
         targetUserName: completed.userName,
-        details: { externalUserId: redashUser.id },
+        details: { externalUserId: user.externalId, platform },
       },
     });
 
@@ -521,14 +582,14 @@ export class UserCreationService {
         userId: completed.userId,
         userName: completed.userName,
         userEmail: completed.userEmail,
-        externalUserId: redashUser.id,
+        externalUserId: user.externalId,
       },
       timestamp: new Date(),
     });
 
-    // Provision any group requests that were waiting on this user.
+    // Provision any group requests for THIS platform that were waiting on this user.
     try {
-      await accessWorkflowService.provisionWaitingRequests(completed.userId);
+      await accessWorkflowService.provisionWaitingRequests(completed.userId, platform);
     } catch (err: any) {
       logger.error(
         { userId: completed.userId, error: err.message },

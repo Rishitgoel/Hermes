@@ -15,6 +15,11 @@ router.get('/me', authenticateToken, (req: Request, res: Response, next: NextFun
   controller.getMine(req, res, next).catch(next);
 });
 
+router.get('/me/all', authenticateToken, (req: Request, res: Response, next: NextFunction) => {
+  const controller = new UserCreationController(req, res, next);
+  controller.getMineAll(req, res, next).catch(next);
+});
+
 router.post('/me/resend', authenticateToken, (req: Request, res: Response, next: NextFunction) => {
   const controller = new UserCreationController(req, res, next);
   controller.resendMine(req, res, next).catch(next);

@@ -12,6 +12,9 @@ export const queryKeys = {
     ['audit', params] as const,
   platformStatus: (platform: string) => ['platform-status', platform] as const,
   pendingUserCreations: () => ['pending-user-creations'] as const,
+  // Per-platform account-creation status for the current user.
+  userCreation: (platform: string) => ['user-creation', platform] as const,
+  userCreations: () => ['user-creation', 'all'] as const,
 
   // Admin Management
   adminPlatforms: () => ['admin', 'platforms'] as const,

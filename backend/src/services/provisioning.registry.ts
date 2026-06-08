@@ -1,5 +1,6 @@
 import { PlatformAdapter } from './provisioner.interface';
 import { redashProvisioner } from './redash.provisioner';
+import { awsProvisioner } from './aws.provisioner';
 import logger from '../utils/logger';
 
 /**
@@ -16,8 +17,8 @@ class ProvisioningRegistry {
 
   constructor() {
     // Register standard platform provisioners.
-    // TODO(aws): this.register('aws', awsProvisioner) once the adapter exists.
     this.register('redash', redashProvisioner);
+    this.register('aws', awsProvisioner);
   }
 
   /** Add (or replace) the adapter for a platform. Key is lower-cased. */

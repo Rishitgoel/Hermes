@@ -12,3 +12,8 @@ export const assignGroupAdminSchema = z.object({
   userId: z.string().trim().min(1, 'userId is required'),
   groupId: z.string().uuid('Invalid Group ID format'),
 });
+
+// Admin override: set the level a member holds in a group (Admin Management).
+export const setMemberLevelSchema = z.object({
+  levelId: z.string().uuid('Invalid Level ID format'),
+});

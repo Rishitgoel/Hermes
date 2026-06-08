@@ -1,5 +1,4 @@
 import provisioningRegistry from './provisioning.registry';
-import redashProvisioner from './redash.provisioner';
 import logger from '../utils/logger';
 
 /**
@@ -54,14 +53,21 @@ export class SyncService {
 
   /**
    * Fast-path single-user refresh for the user-creation "sync now" button.
-   * Redash-specific (the user-creation gate only applies to Redash today).
+   * Platform-aware: resolves the adapter via the registry and uses its optional
+   * `syncSingleUser` hook. Returns false if the platform's adapter doesn't support
+   * it or the user isn't there yet.
    */
-  async syncSingleUser(email: string): Promise<boolean> {
-    logger.info({ email }, '🔄 SyncService: Fast-path single-user sync...');
+  async syncSingleUser(email: string, platform: string = 'redash'): Promise<boolean> {
+    logger.info({ email, platform }, '🔄 SyncService: Fast-path single-user sync...');
     try {
-      return await redashProvisioner.syncSingleUser(email);
+      const adapter = provisioningRegistry.get(platform);
+      if (!adapter.syncSingleUser) {
+        logger.warn({ platform }, '🔄 SyncService: adapter has no single-user sync; skipping');
+        return false;
+      }
+      return await adapter.syncSingleUser(email);
     } catch (error: any) {
-      logger.error({ email, error: error.message }, '🔄 SyncService: Single user sync failed');
+      logger.error({ email, platform, error: error.message }, '🔄 SyncService: Single user sync failed');
       return false;
     }
   }

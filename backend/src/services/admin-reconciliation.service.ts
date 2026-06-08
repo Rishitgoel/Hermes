@@ -72,7 +72,8 @@ export class AdminReconciliationService {
 
   /** Name/email for a mirror row: prefer what Hermes has seen, fall back to Keycloak. */
   private async resolveProfile(userId: string): Promise<{ userName: string; userEmail: string }> {
-    const seen = await prisma.userCreationRequest.findUnique({
+    // One row per (user, platform) now; name/email match across them, so findFirst.
+    const seen = await prisma.userCreationRequest.findFirst({
       where: { userId },
       select: { userName: true, userEmail: true },
     });

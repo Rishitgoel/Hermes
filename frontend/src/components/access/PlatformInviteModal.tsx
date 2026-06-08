@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../../contexts/AuthContext';
+import { useAuth, type UserCreationInfo } from '../../contexts/AuthContext';
 import UserCreationFormModal from '../user-creation/UserCreationFormModal';
 import { UserPlus, Mail, Clock, AlertTriangle } from 'lucide-react';
 
@@ -9,6 +9,8 @@ interface PlatformInviteModalProps {
   onClose: () => void;
   platformId: string;
   platformName: string;
+  /** This user's account-creation status for THIS platform (null = none yet). */
+  accountStatus?: UserCreationInfo | null;
   onSuccess: () => void;
 }
 
@@ -29,7 +31,9 @@ interface PlatformInviteModalProps {
 export const PlatformInviteModal: React.FC<PlatformInviteModalProps> = ({
   isOpen,
   onClose,
+  platformId,
   platformName,
+  accountStatus,
   onSuccess,
 }) => {
   const { user } = useAuth();
@@ -38,7 +42,9 @@ export const PlatformInviteModal: React.FC<PlatformInviteModalProps> = ({
 
   if (!isOpen) return null;
 
-  const uc = user?.userCreation ?? null;
+  // Per-platform account status for THIS platform (passed in by the caller), not
+  // the single /auth/me default-platform row.
+  const uc = accountStatus ?? null;
   const displayName = user?.username.split('_').join(' ') || '';
 
   const goToStatus = () => {
@@ -176,6 +182,8 @@ export const PlatformInviteModal: React.FC<PlatformInviteModalProps> = ({
       <UserCreationFormModal
         isOpen={showForm}
         onClose={() => setShowForm(false)}
+        platform={platformId}
+        platformName={platformName}
         onSubmitted={() => {
           // After submit, let the caller know so it can refresh & close.
           onSuccess();

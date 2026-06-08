@@ -16,6 +16,22 @@ export const createRequestSchema = z.object({
   }),
 });
 
+// Change the level the requester already holds in a group (promote/demote). Both
+// fields are required — unlike createRequestSchema, a level is always supplied
+// because changing a level only makes sense for groups that have levels.
+export const changeLevelSchema = z.object({
+  groupId: z.string().uuid('Invalid Group ID format'),
+  levelId: z.string().uuid('Invalid Level ID format'),
+  justification: z
+    .string()
+    .trim()
+    .min(10, 'Justification must be at least 10 characters long')
+    .max(1000, 'Justification must not exceed 1000 characters'),
+  duration: z.nativeEnum(AccessDuration, {
+    errorMap: () => ({ message: 'Invalid access duration value' }),
+  }),
+});
+
 export const reviewRequestSchema = z.object({
   status: z.enum(['APPROVED', 'REJECTED'], {
     errorMap: () => ({ message: 'Status must be APPROVED or REJECTED' }),

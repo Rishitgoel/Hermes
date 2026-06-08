@@ -12,7 +12,7 @@ import {
   getManageablePlatforms,
 } from '../utils/authz';
 import { AuthorizationError, NotFoundError, ValidationError, ConflictError } from '../utils/errors';
-import { assignPlatformAdminSchema, assignGroupAdminSchema } from '../validations/admin.validation';
+import { assignPlatformAdminSchema, assignGroupAdminSchema, setMemberLevelSchema } from '../validations/admin.validation';
 import { createGroupLevelSchema, updateGroupLevelSchema } from '../validations/group-level.validation';
 import logger from '../utils/logger';
 
@@ -39,7 +39,9 @@ const groupAdminRole = (platform: string, slug: string) =>
 export class AdminManagementController extends BaseController {
   /** Look up a user's display name/email from the "users Hermes has seen" set. */
   private async resolveUserProfile(userId: string): Promise<{ userName: string; userEmail: string }> {
-    const row = await prisma.userCreationRequest.findUnique({
+    // A user can now have one account-creation row per platform; name/email are
+    // identical across them, so any row answers the "have we seen this user" question.
+    const row = await prisma.userCreationRequest.findFirst({
       where: { userId },
       select: { userName: true, userEmail: true },
     });
@@ -458,13 +460,32 @@ export class AdminManagementController extends BaseController {
         prisma.userAccess.findMany({
           where: { groupId, isActive: true },
           orderBy: { grantedAt: 'desc' },
+          include: { level: { select: { name: true, permission: true } } },
         }),
         prisma.groupAdmin.findMany({ where: { groupId }, select: { userId: true } }),
       ]);
       const adminUserIds = new Set(admins.map((a) => a.userId));
       const nonAdminMembers = members.filter((m) => !adminUserIds.has(m.userId));
 
-      this.sendResponse(nonAdminMembers, 'Group members retrieved successfully');
+      this.sendResponse(
+        nonAdminMembers.map((m) => ({
+          id: m.id,
+          userId: m.userId,
+          userName: m.userName,
+          userEmail: m.userEmail,
+          groupId: m.groupId,
+          externalUserId: m.externalUserId,
+          isActive: m.isActive,
+          grantedAt: m.grantedAt,
+          expiresAt: m.expiresAt,
+          grantedBy: m.grantedBy,
+          // The level the member is currently on (null = level-less/legacy grant).
+          levelId: m.levelId,
+          levelName: m.level?.name ?? null,
+          levelPermission: m.level?.permission ?? null,
+        })),
+        'Group members retrieved successfully',
+      );
     } catch (error) {
       this.handleError(error, 'Failed to retrieve group members');
     }
@@ -510,6 +531,50 @@ export class AdminManagementController extends BaseController {
       this.sendResponse({ id: userAccessId }, 'Member removed from group');
     } catch (error) {
       this.handleError(error, 'Failed to remove group member');
+    }
+  }
+
+  // PUT /api/admin/groups/:groupId/members/:userAccessId/level  { levelId }
+  // Admin override: set the level a member holds. Same authorization as the other
+  // member actions (group admin of this group, or platform/super above it). The
+  // swap (and platform re-provisioning) happens in the workflow service.
+  async setGroupMemberLevel(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const userId = this.getUserId();
+      if (!userId) return;
+
+      // Coarse precheck before the group lookup (avoids a 404-vs-403 existence oracle).
+      if (!(await isAnyAdmin(this.user!))) {
+        throw new AuthorizationError('You do not administer this group');
+      }
+
+      const groupId = String(req.params.groupId);
+      const userAccessId = String(req.params.userAccessId);
+
+      const group = await prisma.group.findUnique({ where: { id: groupId } });
+      if (!group) throw new NotFoundError('Group not found');
+
+      if (!(await isGroupAdminOf(this.user!, groupId, group.slug))) {
+        throw new AuthorizationError('You do not administer this group');
+      }
+
+      const validated = this.validateWithZod(setMemberLevelSchema, this.req.body);
+      if (!validated.success) return;
+
+      const access = await prisma.userAccess.findUnique({ where: { id: userAccessId } });
+      if (!access || access.groupId !== groupId) {
+        throw new NotFoundError('Member not found in this group');
+      }
+
+      const updated = await accessWorkflowService.adminSetMemberLevel(
+        { id: userId, username: this.user!.username },
+        userAccessId,
+        validated.data.levelId,
+      );
+
+      this.sendResponse(updated, 'Member level updated');
+    } catch (error) {
+      this.handleError(error, 'Failed to update member level');
     }
   }
 

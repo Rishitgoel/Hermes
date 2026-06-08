@@ -13,16 +13,19 @@ export type UserCreationStatus =
 
 export interface UserCreationInfo {
   id: string;
+  /** Which platform this account request targets ("redash", "aws", …). */
+  platform: string;
   status: UserCreationStatus;
   justification: string | null;
   submittedAt: string | null;
   approvedAt: string | null;
   inviteSentAt: string | null;
   inviteError: string | null;
-  /** Redash one-time setup URL — present while AWAITING_SETUP, null once COMPLETED. */
+  /** One-time setup URL — present while AWAITING_SETUP (Redash), null otherwise. */
   inviteLink: string | null;
   completedAt: string | null;
-  externalUserId: number | null;
+  /** Platform user id as a string (Redash int-as-string, AWS Identity Store GUID). */
+  externalUserId: string | null;
   rejectionReason: string | null;
   reviewerName: string | null;
   reviewedAt: string | null;

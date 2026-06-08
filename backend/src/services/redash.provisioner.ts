@@ -83,7 +83,7 @@ export class RedashProvisioner implements PlatformAdapter {
 
   /** Invite a brand-new user to Redash and seed a cache row for them. */
   async inviteUser(email: string, name: string): Promise<ProvisionResult> {
-    const { id: redashUserId } = await redashService.findOrInviteUser(email, name);
+    const { id: redashUserId, inviteLink } = await redashService.findOrInviteUser(email, name);
     const externalId = redashUserId.toString();
     await prisma.platformExternalUser.upsert({
       where: { platform_externalId: { platform: PLATFORM, externalId } },
@@ -104,7 +104,10 @@ export class RedashProvisioner implements PlatformAdapter {
         lastSyncedAt: new Date(),
       },
     });
-    return { externalUserId: externalId };
+    // A fresh invite returns a one-time setup link; an already-existing user
+    // returns none. The user-creation flow uses these to pick AWAITING_SETUP vs
+    // immediate completion (see provisioner.interface ProvisionResult.metadata).
+    return { externalUserId: externalId, metadata: { inviteLink, alreadyExists: !inviteLink } };
   }
 
   async healthCheck(): Promise<{ healthy: boolean; message?: string }> {
@@ -243,16 +246,16 @@ export class RedashProvisioner implements PlatformAdapter {
     for (const u of users) {
       if (u.is_disabled) continue;
       try {
-        await userCreationService.handleRedashUserDetected({
-          id: u.id,
+        await userCreationService.handlePlatformUserDetected(PLATFORM, {
+          externalId: u.id.toString(),
           email: u.email,
           name: u.name,
-          isInvitationPending: u.is_invitation_pending,
+          isPending: u.is_invitation_pending,
         });
       } catch (err: any) {
         logger.error(
           { redashUserId: u.id, email: u.email, error: err.message },
-          'handleRedashUserDetected failed for one user; continuing batch',
+          'handlePlatformUserDetected failed for one user; continuing batch',
         );
       }
     }

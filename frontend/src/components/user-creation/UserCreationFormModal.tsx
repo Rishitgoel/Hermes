@@ -1,20 +1,29 @@
 import React, { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../contexts/AuthContext';
 import { submitUserCreationRequest } from '../../services/api/userCreation';
+import { queryKeys } from '../../lib/queryKeys';
 import { Send, AlertCircle, Loader } from 'lucide-react';
 
 interface UserCreationFormModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSubmitted: () => void;
+  /** Platform this account request is for. Defaults to the login-default. */
+  platform?: string;
+  /** Friendly platform name for copy (e.g. "AWS"). */
+  platformName?: string;
 }
 
 export const UserCreationFormModal: React.FC<UserCreationFormModalProps> = ({
   isOpen,
   onClose,
   onSubmitted,
+  platform = 'redash',
+  platformName = 'Redash',
 }) => {
   const { user, refreshUserCreation } = useAuth();
+  const queryClient = useQueryClient();
   const [justification, setJustification] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -32,7 +41,10 @@ export const UserCreationFormModal: React.FC<UserCreationFormModalProps> = ({
     }
     setIsSubmitting(true);
     try {
-      await submitUserCreationRequest(justification.trim());
+      await submitUserCreationRequest(justification.trim(), platform);
+      // Refresh both the per-platform status and the /auth/me default-platform row.
+      queryClient.invalidateQueries({ queryKey: queryKeys.userCreation(platform) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.userCreations() });
       await refreshUserCreation();
       onSubmitted();
       onClose();
@@ -47,7 +59,7 @@ export const UserCreationFormModal: React.FC<UserCreationFormModalProps> = ({
     <div className="modal-overlay">
       <div className="modal-content" style={{ maxWidth: '520px' }}>
         <div className="modal-header">
-          <h3 className="modal-title">Request a Hermes Account</h3>
+          <h3 className="modal-title">Request a {platformName} Account</h3>
           <button className="modal-close-btn" onClick={onClose} disabled={isSubmitting}>
             &times;
           </button>
@@ -56,7 +68,7 @@ export const UserCreationFormModal: React.FC<UserCreationFormModalProps> = ({
         <form onSubmit={handleSubmit}>
           <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <p style={{ fontSize: '14px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
-              You don't have a Redash account yet. Submit a quick justification so an
+              You don't have a {platformName} account yet. Submit a quick justification so an
               admin can approve creating one for you. While you wait, you can still browse
               groups and queue access requests.
             </p>
@@ -83,7 +95,7 @@ export const UserCreationFormModal: React.FC<UserCreationFormModalProps> = ({
 
             <div className="form-group" style={{ marginBottom: 0 }}>
               <label className="form-label" htmlFor="justification">
-                Why do you need a Redash account?
+                Why do you need a {platformName} account?
               </label>
               <textarea
                 id="justification"

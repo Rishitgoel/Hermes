@@ -84,10 +84,41 @@ export const config = {
   },
 
   aws: {
-    region: process.env.AWS_REGION,
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-    secretName: process.env.AWS_SECRET_NAME || 'Hermes-Prod',
+    // Lazy getters (see keycloak/redash notes): several of these can arrive from
+    // AWS Secrets Manager *after* this module is imported, so a static capture
+    // would be stale. `region` is special — secrets.ts reads it at module load to
+    // build the Secrets Manager client *before* loadSecrets() runs; the getter
+    // reads the same process.env at that moment, so the conversion is harmless for
+    // it (it must already be in .env to bootstrap secrets).
+    get region() { return process.env.AWS_REGION; },
+    get accessKeyId() { return process.env.AWS_ACCESS_KEY_ID; },
+    get secretAccessKey() { return process.env.AWS_SECRET_ACCESS_KEY; },
+    get secretName() { return process.env.AWS_SECRET_NAME || 'Hermes-Prod'; },
+
+    // ── IAM Identity Center (the `aws` provisioning adapter) ──
+    // The Identity Store the adapter manages users/groups/memberships in, e.g.
+    // "d-1234567890". Console: IAM Identity Center → Settings → Identity Store ID.
+    get identityStoreId() { return process.env.AWS_IDENTITY_STORE_ID; },
+    // Region the Identity Center instance lives in (it is a regional service).
+    // Falls back to the general AWS_REGION when unset.
+    get identityCenterRegion() { return process.env.AWS_IDENTITY_CENTER_REGION || process.env.AWS_REGION; },
+    // Optional: the SSO instance ARN. Only needed if Hermes ever automates account
+    // assignments (group → permission set → account) via sso-admin. The
+    // membership-only flow does not use it — admins configure assignments once per
+    // group in the console (analogous to Redash data-source permissions).
+    get ssoInstanceArn() { return process.env.AWS_SSO_INSTANCE_ARN; },
+
+    // Simulate the AWS adapter (mock, no real AWS calls) when explicitly requested,
+    // or whenever no Identity Store id is configured (so a half-configured env can
+    // never accidentally fire real Identity Store calls). This flag is INDEPENDENT
+    // of KEYCLOAK/REDASH simulation and of the secrets.ts boot gate: every
+    // aws-identity-center.service method checks it BEFORE constructing the SDK
+    // client, so sim short-circuits even after secrets have loaded. Going live
+    // therefore needs AWS_SIMULATION=false + AWS_IDENTITY_STORE_ID + a region +
+    // credentials (task role in prod; never root).
+    get isSimulation() {
+      return process.env.AWS_SIMULATION === 'true' || !this.identityStoreId;
+    },
   },
 
   frontend: {

@@ -7,7 +7,14 @@ import {
 } from '../validations/user-creation.validation';
 
 export class UserCreationController extends BaseController {
-  // POST /api/user-creation-requests — DRAFT → PENDING
+  /** Resolve the target platform from query/body, defaulting to the login-default. */
+  private platformParam(): string {
+    const raw = (this.req.query.platform ?? this.req.body?.platform) as string | undefined;
+    return (raw && raw.trim() ? raw : 'redash').toLowerCase();
+  }
+
+  // POST /api/user-creation-requests — DRAFT → PENDING (creates the row for
+  // non-default platforms on first submit)
   async submit(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const validated = this.validateWithZod(submitUserCreationSchema, this.req.body);
@@ -16,23 +23,38 @@ export class UserCreationController extends BaseController {
       const userId = this.getUserId();
       if (!userId) return;
 
-      const updated = await userCreationService.submitRequest(userId, validated.data.justification);
+      const platform = (validated.data.platform || 'redash').toLowerCase();
+      const requester = { id: userId, username: this.user!.username, email: this.user!.email };
+      const updated = await userCreationService.submitRequest(requester, validated.data.justification, platform);
       this.sendResponse(updated, 'User-creation request submitted', 201);
     } catch (error) {
       this.handleError(error, 'Failed to submit user-creation request');
     }
   }
 
-  // GET /api/user-creation-requests/me
+  // GET /api/user-creation-requests/me?platform=redash|aws
   async getMine(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const userId = this.getUserId();
       if (!userId) return;
 
-      const row = await userCreationService.getMyRequest(userId);
+      const row = await userCreationService.getMyRequest(userId, this.platformParam());
       this.sendResponse(row, 'User-creation request retrieved');
     } catch (error) {
       this.handleError(error, 'Failed to retrieve user-creation request');
+    }
+  }
+
+  // GET /api/user-creation-requests/me/all — every platform's request for this user
+  async getMineAll(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const userId = this.getUserId();
+      if (!userId) return;
+
+      const rows = await userCreationService.getMyRequests(userId);
+      this.sendResponse(rows, 'User-creation requests retrieved');
+    } catch (error) {
+      this.handleError(error, 'Failed to retrieve user-creation requests');
     }
   }
 
@@ -42,8 +64,8 @@ export class UserCreationController extends BaseController {
       const userId = this.getUserId();
       if (!userId) return;
 
-      const updated = await userCreationService.resendInvite(userId);
-      this.sendResponse(updated, 'Redash invite resent');
+      const updated = await userCreationService.resendInvite(userId, this.platformParam());
+      this.sendResponse(updated, 'Invite resent');
     } catch (error) {
       this.handleError(error, 'Failed to resend invite');
     }
@@ -55,10 +77,10 @@ export class UserCreationController extends BaseController {
       const userId = this.getUserId();
       if (!userId) return;
 
-      const updated = await userCreationService.forceSync(userId);
+      const updated = await userCreationService.forceSync(userId, this.platformParam());
       this.sendResponse(updated, 'Sync completed');
     } catch (error) {
-      this.handleError(error, 'Failed to run Redash sync');
+      this.handleError(error, 'Failed to run platform sync');
     }
   }
 

@@ -9,6 +9,13 @@ router.post('/', authenticateToken, (req: Request, res: Response, next: NextFunc
   controller.createRequest(req, res, next).catch(next);
 });
 
+// Change the level the caller already holds in a group (promote/demote). Authorized
+// in the controller (the caller may only change their own level).
+router.post('/change-level', authenticateToken, (req: Request, res: Response, next: NextFunction) => {
+  const controller = new AccessRequestController(req, res, next);
+  controller.changeLevel(req, res, next).catch(next);
+});
+
 router.get('/my', authenticateToken, (req: Request, res: Response, next: NextFunction) => {
   const controller = new AccessRequestController(req, res, next);
   controller.getMyRequests(req, res, next).catch(next);

@@ -244,12 +244,17 @@ model AuditEntry {
 model UserCreationRequest {
   id               String              @id @default(uuid())
 
-  // Identity (from Keycloak token). Unique on both so we never get two
-  // open requests for the same person, and so the Redash sync can match
-  // by email cheaply.
-  userId           String              @unique @map("user_id")
+  // Identity (from Keycloak token). Unique per (identity, platform): one open
+  // request per person *per platform*, so the same user can have separate
+  // account-creation requests for Redash and AWS. The platform sync matches by
+  // (userEmail, platform).
+  userId           String              @map("user_id")
   userName         String              @map("user_name")
-  userEmail        String              @unique @map("user_email")
+  userEmail        String              @map("user_email")
+  // Which platform this account-creation request targets. Default "redash" for
+  // back-compat with the original single-platform flow; AWS rows set "aws". Matches
+  // Group.platform and the provisioning-registry key.
+  platform         String              @default("redash")
 
   // Request body — null while DRAFT, required when moving to PENDING.
   justification    String?
@@ -274,12 +279,16 @@ model UserCreationRequest {
   inviteLink       String?             @map("invite_link")
   completedAt      DateTime?           @map("completed_at")
 
-  // Populated by the Redash sync once the user exists on Redash.
-  externalUserId   Int?                @map("external_user_id")
+  // The user's id on the target platform, populated once they exist there.
+  // String (not Int) because non-Redash platforms (AWS Identity Center) use
+  // non-numeric ids; Redash stores its integer id as a string.
+  externalUserId   String?             @map("external_user_id")
 
   createdAt        DateTime            @default(now()) @map("created_at")
   updatedAt        DateTime            @updatedAt @map("updated_at")
 
+  @@unique([userId, platform])
+  @@unique([userEmail, platform])
   @@index([status])
   @@index([userEmail])
   @@map("user_creation_requests")

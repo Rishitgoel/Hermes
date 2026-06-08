@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import BaseController from './base.controller';
 import prisma from '../config/prisma';
 import accessWorkflowService from '../services/access-workflow.service';
-import { createRequestSchema, reviewRequestSchema } from '../validations/access-request.validation';
+import { createRequestSchema, reviewRequestSchema, changeLevelSchema } from '../validations/access-request.validation';
 import { RequestStatus, Prisma } from '@prisma/client';
 import { ValidationError, AuthorizationError, NotFoundError } from '../utils/errors';
 import { isGroupAdminOf, computeAdminScopes } from '../utils/authz';
@@ -41,6 +41,51 @@ export class AccessRequestController extends BaseController {
       this.sendResponse(request, 'Access request submitted successfully', 201);
     } catch (error) {
       this.handleError(error, 'Failed to create access request');
+    }
+  }
+
+  // POST /api/access-requests/change-level
+  // Change the level the caller already holds in a group (promote/demote). The
+  // service decides, by level rank, whether this is an instant self-service
+  // demotion or a gated (admin-approval) promotion — and keeps the user on exactly
+  // one level per group either way.
+  async changeLevel(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const validated = this.validateWithZod(changeLevelSchema, this.req.body);
+      if (!validated.success) return;
+
+      const userId = this.getUserId();
+      if (!userId) return;
+
+      const requester = {
+        id: userId,
+        username: this.user!.username,
+        email: this.user!.email,
+      };
+
+      const { groupId, levelId, justification, duration } = validated.data;
+
+      // Group admins hold a cosmetic ACTIVE badge but no real grant, so there is no
+      // level to change. Mirror the createRequest self-request guard.
+      if (await isGroupAdminOf(this.user!, groupId)) {
+        throw new ValidationError('You administer this group; level changes apply to members, not admins.');
+      }
+
+      const result = await accessWorkflowService.changeLevel(
+        requester,
+        groupId,
+        levelId,
+        justification,
+        duration
+      );
+
+      const message =
+        result.kind === 'instant'
+          ? 'Your level was changed and applied immediately.'
+          : 'Level change request submitted for approval.';
+      this.sendResponse(result, message, result.kind === 'instant' ? 200 : 201);
+    } catch (error) {
+      this.handleError(error, 'Failed to change level');
     }
   }
 
