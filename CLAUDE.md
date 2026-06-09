@@ -4,7 +4,7 @@ Read this first whenever you start a chat in this repo. It encodes how the proje
 
 ## TL;DR
 
-Hermes is an internal **access-management portal**. Users request access to groups; admins approve; the backend provisions the user on the target platform (currently only Redash has a live adapter; AWS / Jira / etc. are stubs in the UI). The provisioning layer is platform-agnostic — Redash is one adapter among N, registered behind `PlatformAdapter` / `ProvisioningRegistry`. AWS is the next adapter to land. Stack: Node/Express + Prisma + Postgres on the backend, React + Vite on the frontend, Keycloak for auth.
+Hermes is an internal **access-management portal**. Users request access to groups; admins approve; the backend provisions the user on the target platform. **Two adapters are live today — Redash and AWS IAM Identity Center** — both registered behind `PlatformAdapter` / `ProvisioningRegistry`; Jira / etc. are still UI stubs. The provisioning layer is platform-agnostic: adding a platform is implement-the-adapter-and-register-it (no workflow / schema / Keycloak changes). Stack: Node/Express + Prisma + Postgres on the backend, React + Vite on the frontend, Keycloak for auth.
 
 If the user asks for "the roadmap" or for the next thing to work on, check **`ROADMAP.md`** at the repo root — that's the prioritized backlog (P1 → P3).
 
@@ -68,7 +68,7 @@ D:\Bachatt\Hermes 2\
 To save RAM on local development (especially on 8GB machines), the project keeps its local footprint minimal: the only required Docker container is **Postgres**, while **auth and integrations run in Simulation Mode** so Keycloak and Redash don't need to run.
 * **Database**: A local **Postgres** running in Docker (`localhost:15433`, database `hermes`) — connection string in `backend/.env` as `DATABASE_URL_HERMES`.
 * **Authentication**: Skips Keycloak and runs in **Simulation Mode** (enabled in `.env` files).
-* **Integrations**: Skips Redash and runs in **Simulation Mode** (enabled in `.env` files).
+* **Integrations**: Skips Redash and AWS and runs in **Simulation Mode** (enabled in `.env` files).
 
 ### Docker Services (`docker-compose.yml`)
 The dev **Postgres runs in its own Docker container** on `localhost:15433` (the `postgres` service in `docker-compose.yml` is left commented — Postgres is started separately). The **Keycloak, Redis, and Redash-stack** services in `docker-compose.yml` are uncommented but only matter if you switch off Simulation Mode; otherwise the backend never talks to them. To bring one of those up live locally:
@@ -85,7 +85,8 @@ The dev **Postgres runs in its own Docker container** on `localhost:15433` (the 
   - `KEYCLOAK_SIMULATION=true|false` (backend). When `true`, the backend accepts `Bearer super_admin`, `Bearer platform_admin`, `Bearer group_admin`, or `Bearer user` as the entire token. Enabled (`true`) by default for local dev.
   - `VITE_KEYCLOAK_SIMULATION=true|false` (frontend). When `true`, AuthContext skips Keycloak entirely and reads a mock role from `localStorage['hermes_mock_token']`. Enabled (`true`) by default for local dev.
   - `REDASH_SIMULATION=true|false` (backend). When `true`, `redash.service.ts` returns mock users/groups instead of hitting Redash. Enabled (`true`) by default for local dev.
-- **The user runs in simulation mode for local dev** (`KEYCLOAK_SIMULATION=true`, `REDASH_SIMULATION=true`, `VITE_KEYCLOAK_SIMULATION=true`).
+  - `AWS_SIMULATION=true|false` (backend). When `true` — or whenever `AWS_IDENTITY_STORE_ID` is unset — `aws-identity-center.service.ts` uses an in-process mock store instead of real Identity Store calls, so the whole grant/revoke/expire flow is testable locally. Enabled (`true`) by default. Going live needs `AWS_SIMULATION=false` + `AWS_IDENTITY_STORE_ID` + a region (code, e.g. `us-east-1`) + credentials (ECS task role / IRSA in prod; never root).
+- **The user runs in simulation mode for local dev** (`KEYCLOAK_SIMULATION=true`, `REDASH_SIMULATION=true`, `AWS_SIMULATION=true`, `VITE_KEYCLOAK_SIMULATION=true`).
 
 ### Commands (run from the directory shown)
 
@@ -198,6 +199,7 @@ interface PlatformAdapter {
   syncGroups?(): Promise<{ count: number }>;   // optional: refresh cached groups
   createExternalGroup?(name): Promise<{ externalGroupId, name? }>;  // optional: back a group level
   deleteExternalGroup?(externalGroupId): Promise<void>;            // optional: rollback/cleanup
+  getOnboardingMessage?(): OnboardingMessage;  // optional: platform-specific "account ready" copy (notification + email + DM)
   healthCheck(): Promise<{ healthy, message? }>;
 }
 ```
@@ -208,6 +210,10 @@ Cached platform state lives in **generic, platform-keyed tables** `platform_exte
 
 The admin model keys off the **same** `platform` string (see Auth → Admin tiers). Onboarding a platform is therefore: register the adapter → create `Group` rows with that `platform` → assign a platform admin via the Admin Management UI. No schema migration, no Keycloak role config (scoped roles are created on demand), and the admin-management layer needs no changes — `getManageablePlatforms` reads the registry, so the new platform appears automatically.
 
+**Live adapters today: `redash` + `aws`.** Redash is `redash.provisioner.ts` (over `redash.service.ts`); AWS IAM Identity Center is `aws.provisioner.ts` (over `aws-identity-center.service.ts`, which owns every Identity Store SDK call plus the in-process simulation store + the eventual-consistency retry helpers). `GET /api/platforms` (`platform.controller.ts`) returns the registered platform keys, and the frontend derives each platform card's ACTIVE vs COMING_SOON from that — so `frontend/src/lib/platforms.ts` holds **presentation metadata only**; registering an adapter flips its card to ACTIVE with no frontend change. **Onboarding copy is adapter-owned** via `getOnboardingMessage()` (in-app notification + email + DM); `notificationService.notifyUserCreationCompleted` asks the adapter and falls back to generic copy, so it never branches on the platform string.
+
+**Per-platform account creation.** Before a user can be provisioned on a platform they need an account there, gated by a `UserCreationRequest` that is **unique per `(user, platform)`** (and `externalUserId` is a `String` — Redash int-as-string, AWS Identity Store GUID). The approval gate in `accessWorkflowService.reviewRequest` is per-platform — being approved on Redash does **not** imply approval on AWS. `userCreationService.approveRequest` routes account creation through the adapter's `inviteUser` (extracted into `_executeInvite`, reused by `resendInvite` so a failed non-Redash invite is retryable): a platform that returns a setup link (Redash) → `AWAITING_SETUP`, one that creates a ready account (AWS) → `COMPLETED` immediately. `cascadeRejectForUser(userId, note, platform?)` and `provisionWaitingRequests(userId, platform?)` are both **platform-scoped** — rejecting or releasing one platform's requests never touches another's. `submitRequest` rejects platforms not in the registry.
+
 #### Group levels (subgroups)
 
 A `Group` can carry **levels** (`GroupLevel`, table `group_levels`) — e.g. Credit Card → Intern / Junior Dev / Senior Dev — each with a different permission tier. **Each level is backed by its own external group** (its own `externalGroupId`); in Redash, read-only vs write is configured on that level's group's data sources, so Hermes just routes the requester to the right group. The model is platform-agnostic — it works for any adapter.
@@ -217,7 +223,7 @@ A `Group` can carry **levels** (`GroupLevel`, table `group_levels`) — e.g. Cre
 - **Requiredness** ("group has active levels ⇒ levelId required") is enforced in `accessWorkflowService.createRequest`, not the Zod schema (it's DB-state dependent).
 - **Level CRUD** is super-admin / platform-admin only (mapping `externalGroupId` is platform config) — `admin-management.controller.ts` handlers under `/api/admin/groups/:groupId/levels`, surfaced in the expandable group row on `AdminManagement.tsx`. Group admins still review requests for **any** level with no new role. Deleting a level with active members **soft-deactivates** it (members keep access until expiry/revoke).
 - ⚠ Adding levels to a group does **not** auto-migrate existing members — legacy `levelId=null` grants keep working on the group's base `externalGroupId`; only new requesters pick a level.
-- **Changing levels (promote/demote):** a member who already holds a level can move to a different one via `POST /api/access-requests/change-level` (UI: the *Change Level* button on the group detail page). Direction is decided **server-side by level `rank`**: a move to a **lower** rank is a self-service **demotion** applied immediately; a move to a **higher or equal** rank (or up from a level-less grant) is a **promotion** that goes through the normal request → admin approval flow, keeping the current level until approved. Either way the user holds **exactly one level per group** — granting the new level swaps out the old one in `_provision` (which detects an existing active grant and calls `accessWorkflowService._swapGrant`: atomic deactivate-old + create-new, then a best-effort deprovision of the old level's external group, audited `ACCESS_LEVEL_CHANGED`). First-time access still goes through `POST /api/access-requests`, which keeps blocking when the user already has active access to the group. **Admins can also set a member's level directly** from the Admin Management group row (`PUT /api/admin/groups/:groupId/members/:userAccessId/level` → `accessWorkflowService.adminSetMemberLevel`): no promote/demote gating (admin authority), applies immediately via the same swap, and carries the grant's duration over from its originating request. The Admin Management members list shows each member's current level (`listGroupMembers` now returns `levelId`/`levelName`).
+- **Changing levels (promote/demote):** a member who already holds a level can move to a different one via `POST /api/access-requests/change-level` (UI: the *Change Level* button on the group detail page). Direction is decided **server-side by level `rank`**: a move to a **lower** rank is a self-service **demotion** applied immediately (carrying the member's **current grant duration** over — a demotion can't extend its own expiry, so the modal hides the duration picker for it); a move to a **higher or equal** rank (or up from a level-less grant) is a **promotion** that goes through the normal request → admin approval flow, keeping the current level until approved. Either way the user holds **exactly one level per group** — granting the new level swaps out the old one in `_provision` (which detects an existing active grant and calls `accessWorkflowService._swapGrant`: atomic deactivate-old + create-new, then a best-effort deprovision of the old level's external group, audited `ACCESS_LEVEL_CHANGED`). First-time access still goes through `POST /api/access-requests`, which keeps blocking when the user already has active access to the group. **Admins can also set a member's level directly** from the Admin Management group row (`PUT /api/admin/groups/:groupId/members/:userAccessId/level` → `accessWorkflowService.adminSetMemberLevel`): no promote/demote gating (admin authority), applies immediately via the same swap, and carries the grant's duration over from its originating request. The Admin Management members list shows each member's current level (`listGroupMembers` now returns `levelId`/`levelName`).
 
 ### Frontend
 
@@ -287,6 +293,10 @@ Tell the user what passed/failed before reporting "done."
 - ✅ `.env.example` files exist for backend + frontend (P1-4, done)
 - ✅ Three-tier admin model (super → platform → group) + Admin Management UI; Keycloak-authoritative roles with `platform_admins` / `group_admins` DB mirror
 - ✅ Group levels / subgroups (`group_levels`) — each level backed by its own external group; non-breaking (level-less groups unchanged); CRUD is super/platform-admin only (see Provisioning → Group levels)
+- ✅ **AWS IAM Identity Center adapter live** (`aws.provisioner.ts` + `aws-identity-center.service.ts`); `AWS_SIMULATION` mock by default, real Identity Store when configured
+- ✅ Per-platform account creation — `UserCreationRequest` unique per `(user, platform)`, `externalUserId` is `String`; the user-creation gate, `cascadeRejectForUser`, and `provisionWaitingRequests` are all platform-scoped; failed non-Redash invites are retryable
+- ✅ Onboarding copy is adapter-owned (`getOnboardingMessage()`); platform notification copy is platform-aware (no hardcoded "Redash")
+- ✅ Platform ACTIVE/COMING_SOON derived from the registry via `GET /api/platforms` — `frontend/src/lib/platforms.ts` is presentation-only
 - ✅ Frontend ESLint wired (`cd frontend; npm run lint`)
 - ❌ No tests
 - ❌ No CI
