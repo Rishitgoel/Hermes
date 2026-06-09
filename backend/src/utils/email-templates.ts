@@ -143,6 +143,35 @@ export function userAccountSetupComplete(): EmailContent {
   };
 }
 
+/**
+ * AWS Identity Center onboarding. AWS does NOT email API-created users, so this is
+ * the activation nudge: the user sets their own password via the access portal's
+ * "Forgot password" flow. `portalUrl` is the SSO start URL (config.aws.accessPortalUrl);
+ * the CTA button is omitted if it isn't configured.
+ */
+export function userAwsAccountReady(opts: { portalUrl: string }): EmailContent {
+  const portalLine = opts.portalUrl
+    ? `<p style="margin:6px 0 0;color:${MUTED};font-size:13px;">Portal: ${esc(opts.portalUrl)}</p>`
+    : `<p style="margin:6px 0 0;color:${MUTED};font-size:13px;">Ask your admin for your organization's AWS access portal URL.</p>`;
+  return {
+    subject: '[Hermes] Your AWS access is ready — set your password',
+    html: layout({
+      heading: 'Your AWS account is ready 🎉',
+      bodyHtml: `<p style="margin:0;">Your AWS access has been set up. To sign in for the first time:</p>
+        <ol style="margin:12px 0 0;padding-left:20px;color:${TEXT};">
+          <li style="margin-bottom:6px;">Open the AWS access portal${opts.portalUrl ? ' (button below)' : ''}.</li>
+          <li style="margin-bottom:6px;">Click <strong>Forgot password</strong> and enter <strong>this email address</strong> to set your password.</li>
+          <li>Follow the prompts (including MFA setup, if required), then sign in.</li>
+        </ol>
+        ${portalLine}
+        <p style="margin:12px 0 0;color:${MUTED};font-size:13px;">Any group access an admin has approved is already attached to your account — it'll be available as soon as you sign in.</p>`,
+      ctaLabel: opts.portalUrl ? 'Open AWS access portal' : undefined,
+      ctaHref: opts.portalUrl || undefined,
+    }),
+    text: `Your AWS access is ready. Open the AWS access portal${opts.portalUrl ? ` (${opts.portalUrl})` : ''}, click "Forgot password" with this email to set your password, complete MFA setup if prompted, and sign in. Approved group access is already attached to your account.`,
+  };
+}
+
 export function userAccountRejected(opts: { reviewerName: string; note?: string }): EmailContent {
   const href = url('/my-requests');
   const noteHtml = opts.note ? `<p style="margin:12px 0 0;"><strong>Reason:</strong> ${esc(opts.note)}</p>` : '';

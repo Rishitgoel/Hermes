@@ -104,8 +104,8 @@ export function registerEventListeners(): void {
 
   eventBus.on('user-creation.completed', async (event) => {
     try {
-      const { userId, userEmail } = event.payload as any;
-      await notificationService.notifyUserCreationCompleted(userId, userEmail);
+      const { userId, userEmail, platform } = event.payload as any;
+      await notificationService.notifyUserCreationCompleted(userId, userEmail, platform);
     } catch (err: any) {
       logger.error('Failed to notify user-creation.completed event:', err.message);
     }

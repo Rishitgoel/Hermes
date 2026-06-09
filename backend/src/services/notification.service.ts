@@ -368,7 +368,25 @@ export class NotificationService {
   async notifyUserCreationCompleted(
     requesterId: string,
     userEmail: string,
+    platform: string = 'redash',
   ): Promise<void> {
+    // AWS Identity Center sends no activation email for API-created users, so this
+    // is their onboarding nudge: set a password via the access portal on first sign-in.
+    if (platform === 'aws') {
+      const portalUrl = config.aws.accessPortalUrl || '';
+      await this.createNotification(
+        requesterId,
+        'AWS account created',
+        'Your AWS access is set up. Check your email for sign-in instructions — open the AWS access portal and use "Forgot password" to set your password.',
+        '/my-requests',
+      );
+      const dm =
+        `🎉 Your AWS access is set up! On first sign-in, open the AWS access portal and use "Forgot password" to set your password` +
+        (portalUrl ? `:\n👉 ${portalUrl}` : '.');
+      await this.emailAndDm(userEmail, templates.userAwsAccountReady({ portalUrl }), dm);
+      return;
+    }
+
     await this.createNotification(
       requesterId,
       'Account setup complete',

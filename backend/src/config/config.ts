@@ -107,6 +107,10 @@ export const config = {
     // membership-only flow does not use it — admins configure assignments once per
     // group in the console (analogous to Redash data-source permissions).
     get ssoInstanceArn() { return process.env.AWS_SSO_INSTANCE_ARN; },
+    // The AWS access portal (SSO start) URL, e.g. https://d-xxxx.awsapps.com/start.
+    // Used in the onboarding email so a newly-created user can set their password on
+    // first sign-in (AWS does not send an activation email for API-created users).
+    get accessPortalUrl() { return process.env.AWS_ACCESS_PORTAL_URL; },
 
     // Simulate the AWS adapter (mock, no real AWS calls) when explicitly requested,
     // or whenever no Identity Store id is configured (so a half-configured env can

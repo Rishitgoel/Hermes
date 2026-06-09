@@ -365,6 +365,7 @@ export class UserCreationService {
             userName: completed.userName,
             userEmail: completed.userEmail,
             externalUserId,
+            platform: completed.platform,
           },
           timestamp: new Date(),
         });
@@ -583,6 +584,7 @@ export class UserCreationService {
         userName: completed.userName,
         userEmail: completed.userEmail,
         externalUserId: user.externalId,
+        platform,
       },
       timestamp: new Date(),
     });

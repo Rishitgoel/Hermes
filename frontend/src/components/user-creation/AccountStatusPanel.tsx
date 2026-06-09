@@ -104,8 +104,14 @@ const PlatformAccountCard: React.FC<{ uc: UserCreationInfo }> = ({ uc }) => {
       >
         <Icons.CheckCircle2 size={16} />
         <span>
-          Your {label} account is active
-          {uc.completedAt ? ` · set up ${new Date(uc.completedAt).toLocaleDateString()}` : ''}.
+          {uc.platform === 'aws' ? (
+            <>Your AWS account is set up. First sign-in? Check your email to set your password.</>
+          ) : (
+            <>
+              Your {label} account is active
+              {uc.completedAt ? ` · set up ${new Date(uc.completedAt).toLocaleDateString()}` : ''}.
+            </>
+          )}
         </span>
       </div>
     );
