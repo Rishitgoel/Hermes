@@ -131,14 +131,18 @@ export class AwsProvisioner implements PlatformAdapter {
 
     // Prune groups that disappeared — but never one written within the grace
     // window (eventual consistency: a just-created group may miss this list).
+    // Skip entirely on an empty list: `notIn: []` matches every row, so a transient
+    // empty ListGroups response would wipe the whole cache.
     const activeIds = groups.map(g => g.groupId);
-    await prisma.platformExternalGroup.deleteMany({
-      where: {
-        platform: PLATFORM,
-        externalId: { notIn: activeIds },
-        lastSyncedAt: { lt: new Date(now.getTime() - PRUNE_GRACE_MS) },
-      },
-    });
+    if (activeIds.length > 0) {
+      await prisma.platformExternalGroup.deleteMany({
+        where: {
+          platform: PLATFORM,
+          externalId: { notIn: activeIds },
+          lastSyncedAt: { lt: new Date(now.getTime() - PRUNE_GRACE_MS) },
+        },
+      });
+    }
 
     return { count: groups.length };
   }
@@ -149,8 +153,10 @@ export class AwsProvisioner implements PlatformAdapter {
     const users = await awsIdentityCenterService.listUsers();
     logger.info(`🔄 AwsProvisioner: Fetched ${users.length} users from Identity Center.`);
 
-    for (const user of users) {
-      await prisma.platformExternalUser.upsert({
+    // Batch the upserts into chunked transactions instead of awaiting one per user
+    // sequentially (O(users) serial DB round-trips on every sync cycle).
+    const upserts = users.map((user) =>
+      prisma.platformExternalUser.upsert({
         where: { platform_externalId: { platform: PLATFORM, externalId: user.userId } },
         update: {
           name: user.displayName,
@@ -172,20 +178,27 @@ export class AwsProvisioner implements PlatformAdapter {
           metadata: { userName: user.userName },
           lastSyncedAt: now,
         },
-      });
+      }),
+    );
+    for (let i = 0; i < upserts.length; i += 100) {
+      await prisma.$transaction(upserts.slice(i, i + 100));
     }
 
     // Prune deleted users — guarded by the grace window AND isPending so a
     // freshly-invited user that hasn't surfaced in ListUsers yet is never erased.
+    // Skip entirely on an empty list: `notIn: []` matches every row, so a transient
+    // empty ListUsers response would wipe the whole cache.
     const activeIds = users.map(u => u.userId);
-    await prisma.platformExternalUser.deleteMany({
-      where: {
-        platform: PLATFORM,
-        externalId: { notIn: activeIds },
-        isPending: false,
-        lastSyncedAt: { lt: new Date(now.getTime() - PRUNE_GRACE_MS) },
-      },
-    });
+    if (activeIds.length > 0) {
+      await prisma.platformExternalUser.deleteMany({
+        where: {
+          platform: PLATFORM,
+          externalId: { notIn: activeIds },
+          isPending: false,
+          lastSyncedAt: { lt: new Date(now.getTime() - PRUNE_GRACE_MS) },
+        },
+      });
+    }
 
     await this.recomputeGroupMemberCounts();
     await this.notifyUserCreationWorkflow(users);
@@ -224,8 +237,19 @@ export class AwsProvisioner implements PlatformAdapter {
    * Loaded lazily to avoid a static import cycle; per-user try/catch.
    */
   private async notifyUserCreationWorkflow(users: IdcUser[]): Promise<void> {
+    // Only users with a tracked account-creation request for this platform can be
+    // advanced. Prefetch those emails once so we don't issue a findUnique per synced
+    // user (handlePlatformUserDetected would otherwise be an O(users) DB storm).
+    const tracked = await prisma.userCreationRequest.findMany({
+      where: { platform: PLATFORM },
+      select: { userEmail: true },
+    });
+    if (tracked.length === 0) return;
+    const trackedEmails = new Set(tracked.map((r) => r.userEmail.toLowerCase()));
+
     const { default: userCreationService } = await import('./user-creation.service');
     for (const u of users) {
+      if (!trackedEmails.has(u.email.toLowerCase())) continue;
       try {
         await userCreationService.handlePlatformUserDetected(PLATFORM, {
           externalId: u.userId,
@@ -293,37 +317,46 @@ export class AwsProvisioner implements PlatformAdapter {
       return;
     }
     if (existing.externalGroupIds.includes(groupId)) return;
+    // Atomic append (array_append) rather than read-modify-write of the whole array,
+    // so a concurrent cache write for a different group isn't clobbered.
     await prisma.platformExternalUser.update({
       where: { id: existing.id },
-      data: { externalGroupIds: [...existing.externalGroupIds, groupId], lastSyncedAt: new Date() },
+      data: { externalGroupIds: { push: groupId }, lastSyncedAt: new Date() },
     });
   }
 
   /** Remove a groupId from a user's cached membership list (best-effort). */
   private async cacheRemoveGroup(userId: string, groupId: string): Promise<void> {
-    const existing = await prisma.platformExternalUser.findUnique({
-      where: { platform_externalId: { platform: PLATFORM, externalId: userId } },
-    });
-    if (!existing || !existing.externalGroupIds.includes(groupId)) return;
-    await prisma.platformExternalUser.update({
-      where: { id: existing.id },
-      data: { externalGroupIds: existing.externalGroupIds.filter(g => g !== groupId), lastSyncedAt: new Date() },
-    });
+    // Atomic array_remove rather than read-filter-write, so a concurrent cache write
+    // for a different group isn't clobbered. No-op if the row/group isn't present.
+    await prisma.$executeRaw`
+      UPDATE platform_external_users
+      SET external_group_ids = array_remove(external_group_ids, ${groupId}),
+          last_synced_at = NOW()
+      WHERE platform = ${PLATFORM} AND external_id = ${userId}
+    `;
   }
 
   /** Recompute and persist member counts for every cached AWS group. */
   private async recomputeGroupMemberCounts(): Promise<void> {
     const [groups, users] = await Promise.all([
-      prisma.platformExternalGroup.findMany({ where: { platform: PLATFORM } }),
-      prisma.platformExternalUser.findMany({ where: { platform: PLATFORM } }),
+      prisma.platformExternalGroup.findMany({ where: { platform: PLATFORM }, select: { id: true, externalId: true } }),
+      prisma.platformExternalUser.findMany({ where: { platform: PLATFORM }, select: { externalGroupIds: true } }),
     ]);
-    const updates = groups.map(group => {
-      const count = users.filter(u => u.externalGroupIds.includes(group.externalId)).length;
-      return prisma.platformExternalGroup.update({
+    // Tally members per group in a single pass over users instead of an
+    // O(groups × users) nested scan.
+    const counts = new Map<string, number>();
+    for (const u of users) {
+      for (const gid of u.externalGroupIds) {
+        counts.set(gid, (counts.get(gid) ?? 0) + 1);
+      }
+    }
+    const updates = groups.map(group =>
+      prisma.platformExternalGroup.update({
         where: { id: group.id },
-        data: { memberCount: count },
-      });
-    });
+        data: { memberCount: counts.get(group.externalId) ?? 0 },
+      }),
+    );
     if (updates.length) await prisma.$transaction(updates);
   }
 }

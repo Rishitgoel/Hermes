@@ -127,12 +127,19 @@ const ERR_VALIDATION = 'ValidationException';
 /** True if this error is a transient/retryable AWS condition. */
 function isRetryable(err: any): boolean {
   const name = err?.name;
-  return (
+  if (
     name === 'ThrottlingException' ||
     name === 'InternalServerException' ||
-    name === 'TooManyRequestsException' ||
-    err?.$retryable !== undefined
-  );
+    name === 'TooManyRequestsException'
+  ) {
+    return true;
+  }
+  // AWS SDK v3 attaches `$retryable` as an object on retryable errors; only the
+  // `throttling: true` shape is a genuine transient. The previous `!== undefined`
+  // check treated permanent errors that merely carry the annotation (e.g. some
+  // AccessDenied / quota cases) as retryable, burning the whole backoff budget and
+  // logging them as "transient" — masking the real cause.
+  return err?.$retryable?.throttling === true;
 }
 
 export class AwsIdentityCenterService {
@@ -359,15 +366,50 @@ export class AwsIdentityCenterService {
         }
         nextToken = res.NextToken;
       } while (nextToken);
-      // Resolve memberships per user. Identity Store has no "list all memberships"
-      // call, so we ask per member; keep it simple and correct over clever.
+      // Resolve memberships by listing each GROUP's members once (O(groups) calls)
+      // instead of each user's groups (O(users) calls). Groups are far fewer than
+      // users, so this avoids an N+1 across the whole directory on every sync.
+      const membershipMap = await this.buildUserGroupMap();
       for (const u of users) {
-        u.groupIds = await this.listGroupIdsForUser(u.userId);
+        u.groupIds = membershipMap.get(u.userId) ?? [];
       }
       return users;
     } catch (err: any) {
       this.mapError(err, 'listUsers');
     }
+  }
+
+  /**
+   * Build a userId → groupIds map by listing memberships per GROUP (O(groups) API
+   * calls) rather than per user (O(users)). Used by listUsers so a full directory
+   * sync doesn't fan out one membership call per user.
+   */
+  private async buildUserGroupMap(): Promise<Map<string, string[]>> {
+    const map = new Map<string, string[]>();
+    const groups = await this.listGroups();
+    for (const g of groups) {
+      let nextToken: string | undefined;
+      do {
+        const res = await this.getClient().send(
+          new ListGroupMembershipsCommand({
+            IdentityStoreId: this.identityStoreId,
+            GroupId: g.groupId,
+            MaxResults: 100,
+            NextToken: nextToken,
+          }),
+        );
+        for (const m of res.GroupMemberships ?? []) {
+          const uid = (m.MemberId as { UserId?: string } | undefined)?.UserId;
+          if (uid) {
+            const existing = map.get(uid);
+            if (existing) existing.push(g.groupId);
+            else map.set(uid, [g.groupId]);
+          }
+        }
+        nextToken = res.NextToken;
+      } while (nextToken);
+    }
+    return map;
   }
 
   // ── Groups ───────────────────────────────────────────────────────────────

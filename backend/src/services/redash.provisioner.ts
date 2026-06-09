@@ -139,11 +139,14 @@ export class RedashProvisioner implements PlatformAdapter {
       });
     }
 
-    // Drop groups that no longer exist on Redash.
+    // Drop groups that no longer exist on Redash. Skip on an empty list: `notIn: []`
+    // matches every row, so a transient empty fetch would wipe the whole cache.
     const activeIds = redashGroups.map(g => g.id.toString());
-    await prisma.platformExternalGroup.deleteMany({
-      where: { platform: PLATFORM, externalId: { notIn: activeIds } },
-    });
+    if (activeIds.length > 0) {
+      await prisma.platformExternalGroup.deleteMany({
+        where: { platform: PLATFORM, externalId: { notIn: activeIds } },
+      });
+    }
 
     return { count: redashGroups.length };
   }
@@ -162,11 +165,14 @@ export class RedashProvisioner implements PlatformAdapter {
       await this.upsertUserRow(user, now);
     }
 
-    // Remove users that no longer exist on Redash.
+    // Remove users that no longer exist on Redash. Skip on an empty list: `notIn: []`
+    // matches every row, so a transient empty fetch would wipe the whole cache.
     const activeIds = redashUsers.map(u => u.id.toString());
-    await prisma.platformExternalUser.deleteMany({
-      where: { platform: PLATFORM, externalId: { notIn: activeIds } },
-    });
+    if (activeIds.length > 0) {
+      await prisma.platformExternalUser.deleteMany({
+        where: { platform: PLATFORM, externalId: { notIn: activeIds } },
+      });
+    }
 
     await this.recomputeGroupMemberCounts();
     await this.notifyUserCreationWorkflow(redashUsers);

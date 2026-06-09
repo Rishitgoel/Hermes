@@ -124,6 +124,12 @@ export class UserCreationService {
     if (!justification || justification.trim().length < 10) {
       throw new ValidationError('Justification must be at least 10 characters long');
     }
+    // Reject account requests for platforms Hermes can't actually provision: an
+    // unregistered platform string would create a PENDING row that can never be
+    // approved (the registry lookup throws at approval time), leaving an orphan.
+    if (!provisioningRegistry.has(platform)) {
+      throw new ValidationError(`Unknown platform "${platform}".`);
+    }
 
     const row = await prisma.userCreationRequest.findUnique({
       where: { userId_platform: { userId: requester.id, platform } },
@@ -152,6 +158,7 @@ export class UserCreationService {
           userName: created.userName,
           userEmail: created.userEmail,
           justification: created.justification,
+          platform: created.platform,
         },
         timestamp: new Date(),
       });
@@ -204,6 +211,7 @@ export class UserCreationService {
         userName: updated.userName,
         userEmail: updated.userEmail,
         justification: updated.justification,
+        platform: updated.platform,
       },
       timestamp: new Date(),
     });
@@ -281,7 +289,7 @@ export class UserCreationService {
 
       // Cascade-reject any of this user's pending group requests.
       try {
-        await accessWorkflowService.cascadeRejectForUser(row.userId, 'User creation rejected');
+        await accessWorkflowService.cascadeRejectForUser(row.userId, 'User creation rejected', row.platform);
       } catch (err: any) {
         logger.error(
           { userId: row.userId, error: err.message },
@@ -305,7 +313,7 @@ export class UserCreationService {
       return normalizeInviteLink(updated);
     }
 
-    // APPROVED branch
+    // APPROVED branch — mark APPROVED, then run the platform invite.
     await prisma.userCreationRequest.update({
       where: { id: row.id },
       data: {
@@ -319,6 +327,23 @@ export class UserCreationService {
       },
     });
 
+    return this._executeInvite(row, reviewer, note);
+  }
+
+  /**
+   * Run the platform invite for an already-APPROVED row and finalize it: COMPLETED
+   * when the account is ready immediately (an existing Redash user, or a freshly
+   * created AWS Identity Center user), or AWAITING_SETUP when the adapter returns a
+   * one-time setup link the user must visit. On failure the row is left APPROVED with
+   * inviteError set and the error is rethrown. Shared by reviewRequest (first
+   * approval) and resendInvite (retry of a previously failed invite), so a transient
+   * failure on any platform — including AWS — always has a recovery path.
+   */
+  private async _executeInvite(
+    row: { id: string; userId: string; userName: string; userEmail: string; platform: string },
+    reviewer: ReviewerIdentity,
+    note?: string,
+  ) {
     try {
       // Route the account creation through the platform's adapter (Redash invites,
       // AWS Identity Center CreateUser, …). The adapter may return a one-time setup
@@ -342,6 +367,7 @@ export class UserCreationService {
             externalUserId,
             inviteSentAt: new Date(),
             inviteLink: null,
+            inviteError: null,
             completedAt: new Date(),
           },
         });
@@ -389,6 +415,7 @@ export class UserCreationService {
           externalUserId,
           inviteSentAt: new Date(),
           inviteLink,
+          inviteError: null,
         },
       });
 
@@ -430,10 +457,15 @@ export class UserCreationService {
   }
 
   /**
-   * Re-trigger the Redash invite. Always re-issues a fresh invite link via
-   * POST /api/users/<id>/invite rather than reusing whatever was stored — old
-   * links can be stale (different host/port) if REDASH_BASE_URL changed.
-   * Only meaningful in APPROVED (retry after failure) or AWAITING_SETUP (user wants a fresh email).
+   * Re-trigger the platform invite.
+   *
+   * - Redash: always re-issues a fresh invite link via POST /api/users/<id>/invite
+   *   rather than reusing whatever was stored — old links can be stale (different
+   *   host/port) if REDASH_BASE_URL changed. Valid in APPROVED (retry after failure)
+   *   or AWAITING_SETUP (user wants a fresh email).
+   * - Other platforms (AWS Identity Center): there is no regenerable setup link, but a
+   *   FAILED invite (APPROVED + inviteError) is still retried by re-running the
+   *   adapter's account creation, so a transient failure isn't a dead end.
    */
   async resendInvite(userId: string, platform: string = 'redash') {
     const row = await prisma.userCreationRequest.findUnique({
@@ -441,9 +473,22 @@ export class UserCreationService {
     });
     if (!row) throw new NotFoundError('User-creation request not found');
 
-    // Re-issuing a setup link is a Redash concept. AWS Identity Center sends its
-    // own SSO sign-in setup email, so there is nothing for Hermes to regenerate.
+    // Non-Redash platforms don't issue a regenerable setup link (AWS Identity Center
+    // emails its own SSO sign-in link). But a FAILED invite (APPROVED + inviteError)
+    // must stay retryable, otherwise a transient failure strands the account with no
+    // recovery path — re-run the platform invite in that case. Otherwise there is
+    // genuinely nothing to resend.
     if (row.platform !== 'redash') {
+      if (row.status === UserCreationStatus.APPROVED && row.inviteError) {
+        if (row.inviteSentAt && Date.now() - row.inviteSentAt.getTime() < RESEND_COOLDOWN_MS) {
+          throw new ConflictError('Please wait a minute before retrying.');
+        }
+        return this._executeInvite(
+          row,
+          { id: row.reviewerId ?? 'system', username: row.reviewerName ?? 'System' },
+          row.reviewNote ?? undefined,
+        );
+      }
       throw new ValidationError(`Resend is not supported for ${row.platform} accounts`);
     }
 

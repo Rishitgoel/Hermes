@@ -269,16 +269,30 @@ export class NotificationService {
     await slackService.sendPing(slackMsg);
   }
 
-  // Group request approved but the requester hasn't finished Redash setup yet — queued.
+  /** Human-friendly platform name for user-facing copy. */
+  private platformLabel(platform?: string): string {
+    switch ((platform || 'redash').toLowerCase()) {
+      case 'aws':
+        return 'AWS';
+      case 'redash':
+        return 'Redash';
+      default:
+        return (platform || 'platform').replace(/\b\w/g, (c) => c.toUpperCase());
+    }
+  }
+
+  // Group request approved but the requester hasn't finished platform setup yet — queued.
   async notifyAccessQueuedForSetup(
     requesterId: string,
     groupName: string,
     reviewerName: string,
+    platform?: string,
   ): Promise<void> {
+    const label = this.platformLabel(platform);
     await this.createNotification(
       requesterId,
       'Access queued',
-      `${reviewerName} approved your request to ${groupName}. It will activate once you finish setting up your Redash account.`,
+      `${reviewerName} approved your request to ${groupName}. It will activate once you finish setting up your ${label} account.`,
       '/my-requests',
     );
   }
@@ -289,8 +303,10 @@ export class NotificationService {
     userName: string,
     userEmail: string,
     justification: string | null,
+    platform?: string,
   ): Promise<void> {
-    const slackMsg = `🆕 *Hermes — New User Creation Request*\n--------------------------\n*${escapeSlackText(userName)}* (${escapeSlackText(userEmail)}) wants a Hermes/Redash account.\n${justification ? `Reason: "${escapeSlackText(justification)}"\n` : ''}\n👉 Review: ${config.frontend.url}/pending-approvals`;
+    const label = this.platformLabel(platform);
+    const slackMsg = `🆕 *Hermes — New User Creation Request*\n--------------------------\n*${escapeSlackText(userName)}* (${escapeSlackText(userEmail)}) wants a ${label} account.\n${justification ? `Reason: "${escapeSlackText(justification)}"\n` : ''}\n👉 Review: ${config.frontend.url}/pending-approvals`;
     await slackService.sendPing(slackMsg);
 
     try {
@@ -305,7 +321,7 @@ export class NotificationService {
       ]);
 
       const emailContent = templates.adminNewAccountRequest({ userName, userEmail, justification });
-      const dm = `🆕 *${escapeSlackText(userName)}* (${escapeSlackText(userEmail)}) requested a Hermes account.\n${justification ? `Reason: "${escapeSlackText(justification)}"\n` : ''}👉 ${config.frontend.url}/pending-approvals`;
+      const dm = `🆕 *${escapeSlackText(userName)}* (${escapeSlackText(userEmail)}) requested a ${label} account.\n${justification ? `Reason: "${escapeSlackText(justification)}"\n` : ''}👉 ${config.frontend.url}/pending-approvals`;
 
       const recipients: AdminRecipient[] = [
         ...superAdmins.map((a) => ({ userId: a.id, email: a.email })),
@@ -317,7 +333,7 @@ export class NotificationService {
         recipients,
         {
           title: 'Pending user approval',
-          message: `${userName} requested a Hermes account.`,
+          message: `${userName} requested a ${label} account.`,
           link: '/pending-approvals',
         },
         emailContent,

@@ -67,8 +67,8 @@ export function registerEventListeners(): void {
   // Group access request approved but waiting for the user to finish Redash setup.
   eventBus.on('access.queued-for-setup', async (event) => {
     try {
-      const { requesterId, groupName, reviewerName } = event.payload as any;
-      await notificationService.notifyAccessQueuedForSetup(requesterId, groupName, reviewerName);
+      const { requesterId, groupName, reviewerName, platform } = event.payload as any;
+      await notificationService.notifyAccessQueuedForSetup(requesterId, groupName, reviewerName, platform);
     } catch (err: any) {
       logger.error('Failed to notify access.queued-for-setup event:', err.message);
     }
@@ -77,8 +77,8 @@ export function registerEventListeners(): void {
   // User-creation lifecycle
   eventBus.on('user-creation.submitted', async (event) => {
     try {
-      const { requestId, userName, userEmail, justification } = event.payload as any;
-      await notificationService.notifyUserCreationSubmitted(requestId, userName, userEmail, justification);
+      const { requestId, userName, userEmail, justification, platform } = event.payload as any;
+      await notificationService.notifyUserCreationSubmitted(requestId, userName, userEmail, justification, platform);
     } catch (err: any) {
       logger.error('Failed to notify user-creation.submitted event:', err.message);
     }

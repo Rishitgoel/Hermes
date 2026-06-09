@@ -7,12 +7,9 @@ import {
   syncUserCreationStatusNow,
 } from '../../services/api/userCreation';
 import { queryKeys } from '../../lib/queryKeys';
+import { platformDisplayName } from '../../lib/platforms';
 import UserCreationFormModal from './UserCreationFormModal';
 import * as Icons from 'lucide-react';
-
-const PLATFORM_LABELS: Record<string, string> = { redash: 'Redash', aws: 'AWS', jira: 'Jira' };
-const platformLabel = (p: string): string =>
-  PLATFORM_LABELS[p] ?? p.charAt(0).toUpperCase() + p.slice(1);
 
 /**
  * Account-creation lifecycle panel — now PER PLATFORM. Renders one status card for
@@ -49,7 +46,7 @@ const PlatformAccountCard: React.FC<{ uc: UserCreationInfo }> = ({ uc }) => {
   const [busy, setBusy] = useState<null | 'retry' | 'sync'>(null);
   const [message, setMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
 
-  const label = platformLabel(uc.platform);
+  const label = platformDisplayName(uc.platform);
 
   const refresh = async () => {
     queryClient.invalidateQueries({ queryKey: queryKeys.userCreations() });

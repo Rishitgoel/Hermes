@@ -10,6 +10,7 @@ import PlatformInviteModal from '../components/access/PlatformInviteModal';
 import { getMyUserCreation } from '../services/api/userCreation';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../lib/queryKeys';
+import { platformDisplayName } from '../lib/platforms';
 
 interface GroupAdmin {
   userId: string;
@@ -50,13 +51,7 @@ interface GroupDetailData {
 
 // Friendly display names per platform id. Falls back to a capitalised id so a
 // newly-added platform (e.g. "aws") still renders sensibly before it's listed.
-const PLATFORM_LABELS: Record<string, string> = {
-  redash: 'Redash',
-  aws: 'AWS',
-  jira: 'Jira',
-};
-const platformDisplayName = (platform: string): string =>
-  PLATFORM_LABELS[platform] ?? platform.charAt(0).toUpperCase() + platform.slice(1);
+// platformDisplayName now lives in ../lib/platforms (shared).
 
 export const GroupDetail: React.FC = () => {
   const { slug } = useParams<{ slug: string }>();

@@ -255,21 +255,38 @@ export const ChangeLevelModal: React.FC<ChangeLevelModalProps> = ({
             </span>
           </div>
 
-          <div className="form-group">
-            <label className="form-label">Access Duration</label>
-            <select
-              className="form-select"
-              value={duration}
-              onChange={(e) => setDuration(e.target.value)}
-              disabled={isSubmitting}
+          {/* Duration only applies to a promotion (a new grant going through approval).
+              A demotion keeps the current grant's duration server-side, so we don't
+              offer (or send) a duration for it — picking one here would be ignored. */}
+          {isDemotion ? (
+            <div
+              style={{
+                fontSize: '12px',
+                background: 'var(--status-approved-bg)',
+                color: 'var(--status-approved-text)',
+                padding: '10px 12px',
+                borderRadius: 'var(--radius-sm)',
+              }}
             >
-              <option value="PERMANENT">Permanent Access</option>
-              <option value="ONE_DAY">1 Day (Temp Access)</option>
-              <option value="ONE_WEEK">1 Week</option>
-              <option value="ONE_MONTH">1 Month</option>
-              <option value="THREE_MONTHS">3 Months</option>
-            </select>
-          </div>
+              Your current access duration is kept — a demotion only changes your level, not when your access expires.
+            </div>
+          ) : (
+            <div className="form-group">
+              <label className="form-label">Access Duration</label>
+              <select
+                className="form-select"
+                value={duration}
+                onChange={(e) => setDuration(e.target.value)}
+                disabled={isSubmitting}
+              >
+                <option value="PERMANENT">Permanent Access</option>
+                <option value="ONE_DAY">1 Day (Temp Access)</option>
+                <option value="ONE_WEEK">1 Week</option>
+                <option value="ONE_MONTH">1 Month</option>
+                <option value="THREE_MONTHS">3 Months</option>
+              </select>
+            </div>
+          )}
         </form>
       )}
     </Modal>

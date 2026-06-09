@@ -7,6 +7,7 @@ import LoadingSpinner from '../components/common/LoadingSpinner';
 import PlatformInviteModal from '../components/access/PlatformInviteModal';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../lib/queryKeys';
+import { PLATFORMS, type PlatformMetadata } from '../lib/platforms';
 
 interface GroupLevelOption {
   id: string;
@@ -30,90 +31,7 @@ interface GroupData {
   levels: GroupLevelOption[];
 }
 
-interface PlatformMetadata {
-  id: string;
-  name: string;
-  fullName: string;
-  description: string;
-  iconName: string;
-  color: string;
-  status: 'ACTIVE' | 'COMING_SOON';
-}
-
-const PLATFORMS: PlatformMetadata[] = [
-  {
-    id: 'redash',
-    name: 'Redash',
-    fullName: 'Redash Analytics Platform',
-    description: 'Data querying, dashboards, database visualization, and schema access management.',
-    iconName: 'Database',
-    color: '#E0402C',
-    status: 'ACTIVE',
-  },
-  {
-    id: 'aws',
-    name: 'AWS',
-    fullName: 'Amazon Web Services',
-    description: 'IAM Identity Center groups, SSO access, and permission-set memberships.',
-    iconName: 'Cloud',
-    color: '#FF9900',
-    status: 'ACTIVE',
-  },
-  {
-    id: 'jira',
-    name: 'Jira',
-    fullName: 'Jira Software',
-    description: 'Project tracking, issue management, and board administrator credentials.',
-    iconName: 'Trello',
-    color: '#0052CC',
-    status: 'COMING_SOON',
-  },
-  {
-    id: 'grafana',
-    name: 'Grafana',
-    fullName: 'Grafana Dashboards',
-    description: 'Metrics monitoring, alert channels, and log visualization permissions.',
-    iconName: 'Activity',
-    color: '#FADE2A',
-    status: 'COMING_SOON',
-  },
-  {
-    id: 'azure',
-    name: 'Azure',
-    fullName: 'Microsoft Azure Cloud',
-    description: 'Subscription management, active directory controls, and cloud resources.',
-    iconName: 'Server',
-    color: '#0078D4',
-    status: 'COMING_SOON',
-  },
-  {
-    id: 'github',
-    name: 'GitHub',
-    fullName: 'GitHub Repositories',
-    description: 'Source code repositories, organization roles, and branch protection bypasses.',
-    iconName: 'Github',
-    color: '#24292E',
-    status: 'COMING_SOON',
-  },
-  {
-    id: 'gcp',
-    name: 'GCP',
-    fullName: 'Google Cloud Platform',
-    description: 'GCP projects, service accounts, and BigQuery database roles.',
-    iconName: 'Globe',
-    color: '#4285F4',
-    status: 'COMING_SOON',
-  },
-  {
-    id: 'apollo',
-    name: 'Apollo',
-    fullName: 'Apollo GraphQL Studio',
-    description: 'GraphQL schemas, federated graphs, and schema registry write access.',
-    iconName: 'Radio',
-    color: '#112340',
-    status: 'COMING_SOON',
-  },
-];
+// PlatformMetadata + PLATFORMS now live in ../lib/platforms (shared across pages).
 
 export const Groups: React.FC = () => {
   const navigate = useNavigate();
