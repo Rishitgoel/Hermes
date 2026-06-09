@@ -9,6 +9,8 @@
  * implement this interface and register it; no workflow/sync/scheduler changes.
  */
 
+import type { EmailContent } from '../utils/email-templates';
+
 /** Inputs needed to grant a user access to a single group on the target platform. */
 export interface ProvisionContext {
   email: string;
@@ -34,6 +36,20 @@ export interface ProvisionResult {
    * neither, and the request completes right away.
    */
   metadata?: Record<string, unknown>;
+}
+
+/**
+ * Onboarding nudge shown to a user once their account on a platform is COMPLETED.
+ * Each adapter owns its own copy (Redash: "you're set up"; AWS: "set your password
+ * via the access portal") so the notification layer stays platform-agnostic.
+ */
+export interface OnboardingMessage {
+  /** In-app notification. */
+  notification: { title: string; message: string; link?: string };
+  /** Rendered email to send the user. */
+  email: EmailContent;
+  /** Slack/DM text. */
+  dm: string;
 }
 
 /** Inputs needed to revoke a user's access to a single group on the platform. */
@@ -106,6 +122,14 @@ export interface PlatformAdapter {
 
   /** Liveness probe surfaced on the `/health` endpoint. */
   healthCheck(): Promise<{ healthy: boolean; message?: string }>;
+
+  /**
+   * Optional: the onboarding nudge shown to a user once their account on this
+   * platform is COMPLETED. Adapters that need platform-specific first-sign-in copy
+   * (Redash setup-done, AWS set-your-password) implement it; the notification
+   * service falls back to a generic message for adapters that don't.
+   */
+  getOnboardingMessage?(): OnboardingMessage;
 }
 
 // Keep backward-compat alias

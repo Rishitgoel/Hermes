@@ -1,10 +1,11 @@
-// Single source of truth for platform display metadata used across the UI
-// (Groups grid, group detail, account-status panel). Adding/flipping a platform
-// here updates every surface at once instead of editing several files in lockstep.
+// Single source of truth for platform *presentation* (name, description, icon,
+// colour) used across the UI — Groups grid, group detail, account-status panel.
 //
-// NOTE: `status` (ACTIVE vs COMING_SOON) is still hardcoded here. The deeper fix is a
-// backend endpoint that derives it from the provisioning registry; until then this
-// module is at least the single place to change it.
+// Whether a platform is live (ACTIVE) vs COMING_SOON is NOT stored here: it's
+// derived from the backend provisioning registry via GET /api/platforms
+// (see services/api/platforms.ts). Registering a new adapter on the backend flips
+// its card to ACTIVE with no change to this file. Entries below that aren't yet
+// registered simply render as "Coming Soon".
 
 export interface PlatformMetadata {
   id: string;
@@ -13,7 +14,6 @@ export interface PlatformMetadata {
   description: string;
   iconName: string;
   color: string;
-  status: 'ACTIVE' | 'COMING_SOON';
 }
 
 export const PLATFORMS: PlatformMetadata[] = [
@@ -24,7 +24,6 @@ export const PLATFORMS: PlatformMetadata[] = [
     description: 'Data querying, dashboards, database visualization, and schema access management.',
     iconName: 'Database',
     color: '#E0402C',
-    status: 'ACTIVE',
   },
   {
     id: 'aws',
@@ -33,7 +32,6 @@ export const PLATFORMS: PlatformMetadata[] = [
     description: 'IAM Identity Center groups, SSO access, and permission-set memberships.',
     iconName: 'Cloud',
     color: '#FF9900',
-    status: 'ACTIVE',
   },
   {
     id: 'jira',
@@ -42,7 +40,6 @@ export const PLATFORMS: PlatformMetadata[] = [
     description: 'Project tracking, issue management, and board administrator credentials.',
     iconName: 'Trello',
     color: '#0052CC',
-    status: 'COMING_SOON',
   },
   {
     id: 'grafana',
@@ -51,7 +48,6 @@ export const PLATFORMS: PlatformMetadata[] = [
     description: 'Metrics monitoring, alert channels, and log visualization permissions.',
     iconName: 'Activity',
     color: '#FADE2A',
-    status: 'COMING_SOON',
   },
   {
     id: 'azure',
@@ -60,7 +56,6 @@ export const PLATFORMS: PlatformMetadata[] = [
     description: 'Subscription management, active directory controls, and cloud resources.',
     iconName: 'Server',
     color: '#0078D4',
-    status: 'COMING_SOON',
   },
   {
     id: 'github',
@@ -69,7 +64,6 @@ export const PLATFORMS: PlatformMetadata[] = [
     description: 'Source code repositories, organization roles, and branch protection bypasses.',
     iconName: 'Github',
     color: '#24292E',
-    status: 'COMING_SOON',
   },
   {
     id: 'gcp',
@@ -78,7 +72,6 @@ export const PLATFORMS: PlatformMetadata[] = [
     description: 'GCP projects, service accounts, and BigQuery database roles.',
     iconName: 'Globe',
     color: '#4285F4',
-    status: 'COMING_SOON',
   },
   {
     id: 'apollo',
@@ -87,7 +80,6 @@ export const PLATFORMS: PlatformMetadata[] = [
     description: 'GraphQL schemas, federated graphs, and schema registry write access.',
     iconName: 'Radio',
     color: '#112340',
-    status: 'COMING_SOON',
   },
 ];
 

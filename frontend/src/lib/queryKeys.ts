@@ -15,6 +15,8 @@ export const queryKeys = {
   // Per-platform account-creation status for the current user.
   userCreation: (platform: string) => ['user-creation', platform] as const,
   userCreations: () => ['user-creation', 'all'] as const,
+  // Platform keys with a live provisioning adapter (from the backend registry).
+  platforms: () => ['platforms'] as const,
 
   // Admin Management
   adminPlatforms: () => ['admin', 'platforms'] as const,

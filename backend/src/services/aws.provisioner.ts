@@ -4,10 +4,13 @@ import {
   ProvisionResult,
   DeprovisionContext,
   PlatformUserStatus,
+  OnboardingMessage,
 } from './provisioner.interface';
 import awsIdentityCenterService, { IdcUser } from './aws-identity-center.service';
 import prisma from '../config/prisma';
 import logger from '../utils/logger';
+import config from '../config/config';
+import * as templates from '../utils/email-templates';
 
 /**
  * Platform key this adapter is registered under. The provisioning registry, the
@@ -104,6 +107,26 @@ export class AwsProvisioner implements PlatformAdapter {
 
   async healthCheck(): Promise<{ healthy: boolean; message?: string }> {
     return awsIdentityCenterService.healthCheck();
+  }
+
+  /**
+   * Onboarding nudge once an AWS Identity Center user is created. AWS sends no
+   * activation email for API-created users, so this is how they learn to set their
+   * password via the access portal on first sign-in.
+   */
+  getOnboardingMessage(): OnboardingMessage {
+    const portalUrl = config.aws.accessPortalUrl || '';
+    return {
+      notification: {
+        title: 'AWS account created',
+        message: 'Your AWS access is set up. Check your email for sign-in instructions — open the AWS access portal and use "Forgot password" to set your password.',
+        link: '/my-requests',
+      },
+      email: templates.userAwsAccountReady({ portalUrl }),
+      dm:
+        `🎉 Your AWS access is set up! On first sign-in, open the AWS access portal and use "Forgot password" to set your password` +
+        (portalUrl ? `:\n👉 ${portalUrl}` : '.'),
+    };
   }
 
   // ── Sync (cache refresh) ──────────────────────────────────────────────────

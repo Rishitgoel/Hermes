@@ -3,6 +3,7 @@ import slackService from './slack.service';
 import emailService from './email.service';
 import logger from '../utils/logger';
 import config from '../config/config';
+import provisioningRegistry from './provisioning.registry';
 import keycloakSetupService from '../config/keycloak-setup';
 import * as templates from '../utils/email-templates';
 import type { EmailContent } from '../utils/email-templates';
@@ -386,32 +387,37 @@ export class NotificationService {
     userEmail: string,
     platform: string = 'redash',
   ): Promise<void> {
-    // AWS Identity Center sends no activation email for API-created users, so this
-    // is their onboarding nudge: set a password via the access portal on first sign-in.
-    if (platform === 'aws') {
-      const portalUrl = config.aws.accessPortalUrl || '';
+    // Onboarding copy is platform-specific (Redash: "you're set up"; AWS: "set your
+    // password via the access portal"). Each adapter owns its own message via
+    // getOnboardingMessage(), so this stays platform-agnostic — a new platform just
+    // supplies that method and needs no change here.
+    const adapter = provisioningRegistry.has(platform) ? provisioningRegistry.get(platform) : null;
+    const onboarding = adapter?.getOnboardingMessage?.();
+
+    if (onboarding) {
       await this.createNotification(
         requesterId,
-        'AWS account created',
-        'Your AWS access is set up. Check your email for sign-in instructions — open the AWS access portal and use "Forgot password" to set your password.',
-        '/my-requests',
+        onboarding.notification.title,
+        onboarding.notification.message,
+        onboarding.notification.link ?? '/my-requests',
       );
-      const dm =
-        `🎉 Your AWS access is set up! On first sign-in, open the AWS access portal and use "Forgot password" to set your password` +
-        (portalUrl ? `:\n👉 ${portalUrl}` : '.');
-      await this.emailAndDm(userEmail, templates.userAwsAccountReady({ portalUrl }), dm);
+      await this.emailAndDm(userEmail, onboarding.email, onboarding.dm);
       return;
     }
 
+    // Generic fallback for an adapter that doesn't customise onboarding.
+    const label = this.platformLabel(platform);
     await this.createNotification(
       requesterId,
       'Account setup complete',
-      'You are now fully set up on Redash. Any group requests already approved by admin have been provisioned.',
+      `Your ${label} account is fully set up. Any group requests already approved by an admin have been provisioned.`,
       '/',
     );
-
-    const dm = `🎉 You've finished Redash setup — your Hermes account is fully active and any approved group memberships have been provisioned.\n👉 ${config.frontend.url}/`;
-    await this.emailAndDm(userEmail, templates.userAccountSetupComplete(), dm);
+    await this.emailAndDm(
+      userEmail,
+      templates.userAccountSetupComplete(),
+      `🎉 Your ${label} account is fully set up — any approved group memberships have been provisioned.\n👉 ${config.frontend.url}/`,
+    );
   }
 }
 

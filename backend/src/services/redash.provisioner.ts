@@ -4,10 +4,13 @@ import {
   ProvisionResult,
   DeprovisionContext,
   PlatformUserStatus,
+  OnboardingMessage,
 } from './provisioner.interface';
 import redashService from './redash.service';
 import prisma from '../config/prisma';
 import logger from '../utils/logger';
+import config from '../config/config';
+import * as templates from '../utils/email-templates';
 
 /**
  * Platform key this adapter is registered under. The provisioning registry,
@@ -117,6 +120,19 @@ export class RedashProvisioner implements PlatformAdapter {
     } catch (err: any) {
       return { healthy: false, message: err.message };
     }
+  }
+
+  /** Onboarding nudge shown once a user's Redash account is fully set up. */
+  getOnboardingMessage(): OnboardingMessage {
+    return {
+      notification: {
+        title: 'Account setup complete',
+        message: 'You are now fully set up on Redash. Any group requests already approved by admin have been provisioned.',
+        link: '/',
+      },
+      email: templates.userAccountSetupComplete(),
+      dm: `🎉 You've finished Redash setup — your Hermes account is fully active and any approved group memberships have been provisioned.\n👉 ${config.frontend.url}/`,
+    };
   }
 
   // ── Sync (cache refresh) ──────────────────────────────────────────────────

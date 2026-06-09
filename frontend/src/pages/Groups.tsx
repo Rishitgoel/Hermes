@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import apiClient from '../services/apiClient';
 import { getMyUserCreation } from '../services/api/userCreation';
+import { fetchLivePlatforms } from '../services/api/platforms';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import PlatformInviteModal from '../components/access/PlatformInviteModal';
 import * as Icons from 'lucide-react';
@@ -64,6 +65,15 @@ export const Groups: React.FC = () => {
     queryFn: () => apiClient.get('/api/groups').then((r) => r.data),
   });
 
+  // Which platforms have a live provisioning adapter (from the backend registry).
+  // Drives each card's ACTIVE vs COMING_SOON status, so registering an adapter on
+  // the backend flips the card with no change here.
+  const livePlatformsQuery = useQuery({
+    queryKey: queryKeys.platforms(),
+    queryFn: fetchLivePlatforms,
+  });
+  const livePlatforms = new Set(livePlatformsQuery.data ?? []);
+
   // Gate group requests by the user's account-creation status FOR THE PLATFORM
   // being viewed (per-platform): viewing AWS groups checks the AWS account, Redash
   // checks Redash. The user can queue requests once they've submitted an account
@@ -124,12 +134,14 @@ export const Groups: React.FC = () => {
   });
 
   const groups = groupsQuery.data ?? [];
-  const isLoading = groupsQuery.isLoading;
+  // Wait for the live-platform set too, so cards never flash "Coming Soon" before
+  // their real (registry-derived) status loads.
+  const isLoading = groupsQuery.isLoading || livePlatformsQuery.isLoading;
   // Submission is allowed unless the user explicitly needs to act on their account first.
   const isPlatformUser = !activePlatform || !needsAccountAction;
 
   const handleSelectPlatform = (platform: PlatformMetadata | null) => {
-    if (platform && platform.status === 'ACTIVE') {
+    if (platform && livePlatforms.has(platform.id)) {
       setSearchParams({ platform: platform.id });
       setInfoMessage(null);
     } else if (platform) {
@@ -304,7 +316,7 @@ export const Groups: React.FC = () => {
         {/* Platform Grid */}
         <div className="cards-grid">
           {PLATFORMS.map((platform) => {
-            const isActive = platform.status === 'ACTIVE';
+            const isActive = livePlatforms.has(platform.id);
             // Count only the groups that belong to this platform, so each card
             // reflects its own platform once AWS / Jira groups exist alongside Redash.
             const platformGroups = groups.filter((g) => g.platform === platform.id);
