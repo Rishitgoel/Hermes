@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import BaseController from './base.controller';
+import config from '../config/config';
 import userCreationService from '../services/user-creation.service';
 import {
   submitUserCreationSchema,
@@ -10,7 +11,7 @@ export class UserCreationController extends BaseController {
   /** Resolve the target platform from query/body, defaulting to the login-default. */
   private platformParam(): string {
     const raw = (this.req.query.platform ?? this.req.body?.platform) as string | undefined;
-    return (raw && raw.trim() ? raw : 'redash').toLowerCase();
+    return (raw && raw.trim() ? raw : config.platform.default).toLowerCase();
   }
 
   // POST /api/user-creation-requests — DRAFT → PENDING (creates the row for
@@ -23,7 +24,7 @@ export class UserCreationController extends BaseController {
       const userId = this.getUserId();
       if (!userId) return;
 
-      const platform = (validated.data.platform || 'redash').toLowerCase();
+      const platform = (validated.data.platform || config.platform.default).toLowerCase();
       const requester = { id: userId, username: this.user!.username, email: this.user!.email };
       const updated = await userCreationService.submitRequest(requester, validated.data.justification, platform);
       this.sendResponse(updated, 'User-creation request submitted', 201);

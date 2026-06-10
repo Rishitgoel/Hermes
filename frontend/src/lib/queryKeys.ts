@@ -24,6 +24,9 @@ export const queryKeys = {
   adminGroups: (platform: string) => ['admin', 'groups', platform] as const,
   adminPlatformAdmins: (platform: string) => ['admin', 'platform-admins', platform] as const,
   adminGroupAdmins: (platform: string) => ['admin', 'group-admins', platform] as const,
+  // Group admins scoped to a single group (used by the group detail drawer). Shares
+  // the ['admin','group-admins'] prefix so a prefix-invalidate refreshes both.
+  adminGroupAdminsForGroup: (groupId: string) => ['admin', 'group-admins', 'group', groupId] as const,
   adminGroupMembers: (groupId: string) => ['admin', 'group-members', groupId] as const,
   adminGroupLevels: (groupId: string) => ['admin', 'group-levels', groupId] as const,
 };

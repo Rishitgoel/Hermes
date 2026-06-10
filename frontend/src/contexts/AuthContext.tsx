@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import Keycloak from 'keycloak-js';
 import apiClient from '../services/apiClient';
+import { DEFAULT_PLATFORM } from '../lib/platforms';
 
 // Mirror of UserCreationStatus enum in the backend.
 export type UserCreationStatus =
@@ -130,14 +131,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           id: 'platform-admin-uuid-4444',
           username: 'Neha_Sharma',
           email: 'neha.sharma@bachatt.app',
-          roles: ['hermes_platform_admin', 'hermes_platform_admin_redash', 'hermes_user'],
+          roles: ['hermes_platform_admin', `hermes_platform_admin_${DEFAULT_PLATFORM}`, 'hermes_user'],
         };
       } else if (mockRole === 'group_admin') {
         fallbackUser = {
           id: 'group-admin-uuid-2222',
           username: 'Yogesh_Verma',
           email: 'yogesh.verma@bachatt.app',
-          roles: ['hermes_group_admin', 'hermes_group_admin_redash_growth', 'hermes_user'],
+          roles: ['hermes_group_admin', `hermes_group_admin_${DEFAULT_PLATFORM}_growth`, 'hermes_user'],
         };
       } else {
         fallbackUser = {

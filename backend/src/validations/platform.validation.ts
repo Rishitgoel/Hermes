@@ -1,11 +1,18 @@
 import { z } from 'zod';
+import provisioningRegistry from '../services/provisioning.registry';
 
-// User-facing allowlist for nice 400s on group creation. The runtime source of
-// truth for what can actually be provisioned is the provisioning registry —
-// this enum is just a friendly guard at the API boundary.
-// TODO(aws): add 'aws' here when the AwsProvisioner adapter is registered.
-export const PlatformEnum = z.enum(['redash'], {
-  errorMap: () => ({ message: 'Unsupported platform. Currently supported: redash' }),
-});
+// Platform validation, derived from the provisioning registry — the single runtime
+// source of truth for what Hermes can actually provision. There is no hardcoded
+// enum here, so registering a new adapter makes its key valid automatically (and
+// the 400 message lists whatever is currently registered). Lowercases the input
+// to match the registry's case-insensitive keys.
+export const PlatformSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .transform((p) => p.toLowerCase())
+  .refine((p) => provisioningRegistry.has(p), (p) => ({
+    message: `Unsupported platform "${p}". Supported: ${provisioningRegistry.listPlatforms().join(', ')}`,
+  }));
 
-export type Platform = z.infer<typeof PlatformEnum>;
+export type Platform = z.infer<typeof PlatformSchema>;

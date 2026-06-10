@@ -3,12 +3,12 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import apiClient from '../services/apiClient';
 import { getMyUserCreation } from '../services/api/userCreation';
-import { fetchLivePlatforms } from '../services/api/platforms';
+import { fetchPlatforms } from '../services/api/platforms';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import PlatformInviteModal from '../components/access/PlatformInviteModal';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../lib/queryKeys';
-import { PLATFORMS, type PlatformMetadata } from '../lib/platforms';
+import { PLATFORMS, DEFAULT_PLATFORM, type PlatformMetadata } from '../lib/platforms';
 
 interface GroupLevelOption {
   id: string;
@@ -70,9 +70,9 @@ export const Groups: React.FC = () => {
   // the backend flips the card with no change here.
   const livePlatformsQuery = useQuery({
     queryKey: queryKeys.platforms(),
-    queryFn: fetchLivePlatforms,
+    queryFn: fetchPlatforms,
   });
-  const livePlatforms = new Set(livePlatformsQuery.data ?? []);
+  const livePlatforms = new Set((livePlatformsQuery.data ?? []).map((p) => p.key));
 
   // Gate group requests by the user's account-creation status FOR THE PLATFORM
   // being viewed (per-platform): viewing AWS groups checks the AWS account, Redash
@@ -80,8 +80,8 @@ export const Groups: React.FC = () => {
   // request (PENDING/APPROVED/AWAITING_SETUP) — those auto-provision once setup
   // completes. DRAFT/REJECTED, or no row yet, must act first. COMPLETED is normal.
   const accountQuery = useQuery({
-    queryKey: queryKeys.userCreation(activePlatform ?? 'redash'),
-    queryFn: () => getMyUserCreation(activePlatform ?? 'redash'),
+    queryKey: queryKeys.userCreation(activePlatform ?? DEFAULT_PLATFORM),
+    queryFn: () => getMyUserCreation(activePlatform ?? DEFAULT_PLATFORM),
     enabled: !!activePlatform,
   });
   const account = accountQuery.data ?? null;

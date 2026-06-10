@@ -7,6 +7,13 @@
 // its card to ACTIVE with no change to this file. Entries below that aren't yet
 // registered simply render as "Coming Soon".
 
+/**
+ * The platform a brand-new user is onboarded to by default (mirrors the backend's
+ * DEFAULT_PLATFORM). Used as the fallback when a caller has no specific platform in
+ * hand. Single source of truth on the frontend — don't sprinkle the literal around.
+ */
+export const DEFAULT_PLATFORM = (import.meta.env.VITE_DEFAULT_PLATFORM || 'redash').toLowerCase();
+
 export interface PlatformMetadata {
   id: string;
   name: string;

@@ -5,7 +5,7 @@ import accessWorkflowService from '../services/access-workflow.service';
 import provisioningRegistry from '../services/provisioning.registry';
 import { AuthorizationError, NotFoundError } from '../utils/errors';
 import { isGroupAdminOf } from '../utils/authz';
-import { PlatformEnum } from '../validations/platform.validation';
+import { PlatformSchema } from '../validations/platform.validation';
 
 export class UserAccessController extends BaseController {
   // GET /api/user-access/me
@@ -86,7 +86,7 @@ export class UserAccessController extends BaseController {
   // GET /api/user-access/platform-status/:platform
   async getPlatformStatus(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const platformResult = this.validateWithZod(PlatformEnum, this.req.params.platform, 'Invalid platform');
+      const platformResult = this.validateWithZod(PlatformSchema, this.req.params.platform, 'Invalid platform');
       if (!platformResult.success) return;
       const platform = platformResult.data;
 

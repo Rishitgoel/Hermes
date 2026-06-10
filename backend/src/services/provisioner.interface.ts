@@ -86,6 +86,13 @@ export interface PlatformAdapter {
   /** Stable key matching `Group.platform` and the registry key (e.g. "redash"). */
   readonly platform: string;
 
+  /**
+   * Human-friendly platform name for user-facing copy (e.g. "Redash", "AWS").
+   * The notification layer reads this instead of branching on the platform key,
+   * so a new adapter's name flows into emails/DMs/notifications automatically.
+   */
+  readonly displayName: string;
+
   /** Add an existing user to a group on the platform. */
   provision(ctx: ProvisionContext): Promise<ProvisionResult>;
   /** Remove a user from a group on the platform. */
@@ -95,6 +102,16 @@ export interface PlatformAdapter {
   checkUserStatus(email: string): Promise<PlatformUserStatus>;
   /** Create the user's account on the platform (typically sends an invite). */
   inviteUser(email: string, name: string): Promise<ProvisionResult>;
+
+  /**
+   * Optional: re-issue a one-time setup link for a user whose account already
+   * exists but hasn't finished setup (the "resend invite" button). Only platforms
+   * whose invite IS a regenerable link (Redash) implement this; the user-creation
+   * flow detects its absence and, for link-less platforms (AWS), falls back to
+   * retrying a failed `inviteUser` instead. Returns the (possibly unchanged)
+   * external id plus a fresh `inviteLink` in `metadata`.
+   */
+  regenerateInvite?(email: string, name: string): Promise<ProvisionResult>;
 
   /** Optional: refresh the cached user list for this platform. */
   syncUsers?(): Promise<{ count: number }>;
@@ -122,6 +139,14 @@ export interface PlatformAdapter {
 
   /** Liveness probe surfaced on the `/health` endpoint. */
   healthCheck(): Promise<{ healthy: boolean; message?: string }>;
+
+  /**
+   * Optional: the URL a user opens to actually use this platform (Redash base
+   * URL, AWS SSO access portal, …). Surfaced by `GET /api/platforms` so the UI can
+   * render a per-grant "open" link without knowing platform specifics. Return null
+   * when no launch URL is configured (the UI then omits the link).
+   */
+  getLaunchUrl?(): string | null;
 
   /**
    * Optional: the onboarding nudge shown to a user once their account on this

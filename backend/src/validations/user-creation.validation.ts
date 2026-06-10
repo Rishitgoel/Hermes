@@ -5,8 +5,10 @@ export const submitUserCreationSchema = z.object({
     .string()
     .min(10, 'Justification must be at least 10 characters long')
     .max(1000, 'Justification must not exceed 1000 characters'),
-  // Which platform this account is for. Defaults to "redash" (the login-default)
-  // when omitted, so existing single-platform callers keep working.
+  // Which platform this account is for. When omitted, the controller falls back to
+  // the configured default platform (config.platform.default), so existing
+  // single-platform callers keep working. Validated against the live registry at
+  // the service boundary.
   platform: z.string().min(1).max(40).optional(),
 });
 

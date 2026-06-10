@@ -39,6 +39,16 @@ export const config = {
     get realm() { return process.env.VITE_KEYCLOAK_REALM || 'master'; },
   },
 
+  // ── Platform routing (provisioning-registry-agnostic) ──
+  platform: {
+    // The platform a brand-new user is onboarded to on first login (the row
+    // /auth/me auto-drafts) and the implicit target when an API caller omits
+    // `platform`. Must match a registered adapter key. This is the SINGLE place
+    // the "default platform" lives — change it here to re-home the default rather
+    // than editing the literal across controllers/services.
+    get default() { return (process.env.DEFAULT_PLATFORM || 'redash').toLowerCase(); },
+  },
+
   redash: {
     // Lazy getters (see keycloak note): baseUrl/apiKey may arrive from AWS Secrets
     // Manager after import. A static apiKey capture would stay the dev dummy →

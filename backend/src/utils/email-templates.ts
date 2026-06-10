@@ -78,18 +78,21 @@ export function adminNewAccountRequest(opts: {
   userName: string;
   userEmail: string;
   justification: string | null;
+  /** Human-friendly platform name (e.g. "Redash", "AWS"); falls back to "platform". */
+  platformLabel?: string;
 }): EmailContent {
   const href = url('/pending-approvals');
+  const label = opts.platformLabel || 'platform';
   const reason = opts.justification ? `<p style="margin:12px 0 0;"><strong>Reason:</strong> ${esc(opts.justification)}</p>` : '';
   return {
     subject: `[Hermes] New account request from ${opts.userName}`,
     html: layout({
       heading: 'New account request',
-      bodyHtml: `<p style="margin:0;"><strong>${esc(opts.userName)}</strong> (${esc(opts.userEmail)}) has requested a Hermes/Redash account.</p>${reason}<p style="margin:12px 0 0;">Review and approve it in Hermes.</p>`,
+      bodyHtml: `<p style="margin:0;"><strong>${esc(opts.userName)}</strong> (${esc(opts.userEmail)}) has requested a <strong>${esc(label)}</strong> account.</p>${reason}<p style="margin:12px 0 0;">Review and approve it in Hermes.</p>`,
       ctaLabel: 'Review request',
       ctaHref: href,
     }),
-    text: `${opts.userName} (${opts.userEmail}) requested a Hermes account.${opts.justification ? ` Reason: ${opts.justification}.` : ''} Review: ${href}`,
+    text: `${opts.userName} (${opts.userEmail}) requested a ${label} account.${opts.justification ? ` Reason: ${opts.justification}.` : ''} Review: ${href}`,
   };
 }
 
@@ -115,31 +118,33 @@ export function adminNewGroupRequest(opts: {
 
 // ── User-facing ───────────────────────────────────────────────
 
-export function userAccountApproved(opts: { reviewerName: string }): EmailContent {
+export function userAccountApproved(opts: { reviewerName: string; platformLabel?: string }): EmailContent {
   const href = url('/my-requests');
+  const label = opts.platformLabel || 'the platform';
   return {
     subject: '[Hermes] Your account has been approved',
     html: layout({
       heading: 'Your account is approved 🎉',
-      bodyHtml: `<p style="margin:0;">${esc(opts.reviewerName)} approved your Hermes account.</p><p style="margin:12px 0 0;">Check your inbox for a separate email from Redash with a link to set your password and finish setup.</p>`,
+      bodyHtml: `<p style="margin:0;">${esc(opts.reviewerName)} approved your Hermes account.</p><p style="margin:12px 0 0;">Check your inbox for a separate email from ${esc(label)} with a link to set your password and finish setup.</p>`,
       ctaLabel: 'View account status',
       ctaHref: href,
     }),
-    text: `${opts.reviewerName} approved your Hermes account. Check your inbox for the Redash setup email. ${href}`,
+    text: `${opts.reviewerName} approved your Hermes account. Check your inbox for the ${label} setup email. ${href}`,
   };
 }
 
-export function userAccountSetupComplete(): EmailContent {
+export function userAccountSetupComplete(opts: { platformLabel: string }): EmailContent {
   const href = url('/');
+  const label = opts.platformLabel;
   return {
     subject: '[Hermes] Your account is fully set up',
     html: layout({
       heading: 'You’re all set 🎉',
-      bodyHtml: `<p style="margin:0;">You’ve finished Redash setup — your Hermes account is fully active, and any group memberships already approved by an admin have been provisioned.</p>`,
+      bodyHtml: `<p style="margin:0;">You’ve finished ${esc(label)} setup — your Hermes account is fully active, and any group memberships already approved by an admin have been provisioned.</p>`,
       ctaLabel: 'Open Hermes',
       ctaHref: href,
     }),
-    text: `You've finished Redash setup — your Hermes account is fully active and any approved group memberships have been provisioned. ${href}`,
+    text: `You've finished ${label} setup — your Hermes account is fully active and any approved group memberships have been provisioned. ${href}`,
   };
 }
 

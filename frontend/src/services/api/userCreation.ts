@@ -1,5 +1,6 @@
 import apiClient from '../apiClient';
 import type { UserCreationInfo } from '../../contexts/AuthContext';
+import { DEFAULT_PLATFORM } from '../../lib/platforms';
 
 /**
  * Backend rows for the admin "User Approvals" table. Server-side shape from
@@ -23,14 +24,14 @@ const enc = encodeURIComponent;
 /** User submits their account request for a platform (DRAFT → PENDING, or creates PENDING). */
 export async function submitUserCreationRequest(
   justification: string,
-  platform: string = 'redash',
+  platform: string = DEFAULT_PLATFORM,
 ): Promise<UserCreationInfo> {
   const res = await apiClient.post('/api/user-creation-requests', { justification, platform });
   return res.data as UserCreationInfo;
 }
 
 /** Current user's account request for one platform (null if none yet). */
-export async function getMyUserCreation(platform: string = 'redash'): Promise<UserCreationInfo | null> {
+export async function getMyUserCreation(platform: string = DEFAULT_PLATFORM): Promise<UserCreationInfo | null> {
   const res = await apiClient.get(`/api/user-creation-requests/me?platform=${enc(platform)}`);
   return (res.data as UserCreationInfo | null) ?? null;
 }
@@ -57,15 +58,15 @@ export async function reviewUserCreation(
   return res.data as UserCreationInfo;
 }
 
-/** User: re-trigger the setup invite for a platform (Redash only — AWS emails its own). */
-export async function resendInvite(platform: string = 'redash'): Promise<UserCreationInfo> {
+/** User: re-trigger the setup invite for a platform (only platforms that issue a regenerable setup link support this; others emit their own). */
+export async function resendInvite(platform: string = DEFAULT_PLATFORM): Promise<UserCreationInfo> {
   const res = await apiClient.post(`/api/user-creation-requests/me/resend?platform=${enc(platform)}`);
   return res.data as UserCreationInfo;
 }
 
 /** User: ask the server to re-sync from the platform and re-check whether their account exists. */
 export async function syncUserCreationStatusNow(
-  platform: string = 'redash',
+  platform: string = DEFAULT_PLATFORM,
 ): Promise<UserCreationInfo | null> {
   const res = await apiClient.post(`/api/user-creation-requests/me/sync-now?platform=${enc(platform)}`);
   return (res.data as UserCreationInfo | null) ?? null;

@@ -4,14 +4,27 @@ import provisioningRegistry from '../services/provisioning.registry';
 
 export class PlatformController extends BaseController {
   // GET /api/platforms
-  // Platform keys that have a live provisioning adapter registered (e.g.
-  // ["redash", "aws"]). The frontend derives each platform card's ACTIVE vs
-  // COMING_SOON status from this instead of hardcoding it, so registering a new
-  // adapter in the provisioning registry flips its card to ACTIVE with no frontend
-  // change.
+  // Live provisioning adapters, straight from the registry. Returns both:
+  //  - `live`: the platform keys (e.g. ["redash", "aws"]) — the frontend derives
+  //    each card's ACTIVE vs COMING_SOON status from this, so registering an
+  //    adapter flips its card with no frontend change.
+  //  - `platforms`: per-platform { key, displayName, launchUrl } — adapter-owned,
+  //    so the UI can label and link a grant to its platform without branching on
+  //    the key. `launchUrl` is null when the adapter has none configured.
   async list(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      this.sendResponse({ live: provisioningRegistry.listPlatforms() }, 'Platforms retrieved');
+      const platforms = provisioningRegistry.listPlatforms().map((key) => {
+        const adapter = provisioningRegistry.get(key);
+        return {
+          key,
+          displayName: adapter.displayName,
+          launchUrl: adapter.getLaunchUrl?.() ?? null,
+        };
+      });
+      this.sendResponse(
+        { live: platforms.map((p) => p.key), platforms },
+        'Platforms retrieved',
+      );
     } catch (error) {
       this.handleError(error, 'Failed to retrieve platforms');
     }

@@ -38,10 +38,56 @@ export interface ManageableGroup {
   name: string;
   slug: string;
   platform: string;
+  description: string;
   color: string | null;
   icon: string | null;
+  tables: string[];
+  externalGroupId: string | null;
+  isActive: boolean;
   memberCount: number;
   adminCount: number;
+}
+
+/** The raw Group row returned by create/update (no member/admin counts). */
+export interface GroupRecord {
+  id: string;
+  name: string;
+  slug: string;
+  description: string;
+  platform: string;
+  icon: string | null;
+  color: string | null;
+  externalGroupId: string | null;
+  tables: string[];
+  isActive: boolean;
+}
+
+export interface CreateGroupInput {
+  name: string;
+  slug: string;
+  description: string;
+  platform: string;
+  icon?: string;
+  color?: string;
+  tables?: string[];
+  externalGroupId?: string;
+}
+
+/** Editable subset — slug/platform/externalGroupId are immutable after creation. */
+export interface UpdateGroupInput {
+  name?: string;
+  description?: string;
+  icon?: string | null;
+  color?: string | null;
+  tables?: string[];
+  isActive?: boolean;
+}
+
+export interface DeleteGroupResult {
+  id: string;
+  deleted: boolean; // true = hard-deleted; false = archived (group had history)
+  requestCount?: number;
+  accessCount?: number;
 }
 
 export interface GroupMember {
@@ -76,6 +122,23 @@ export async function searchUsers(search: string): Promise<AdminUser[]> {
 export async function listManageableGroups(platform?: string): Promise<ManageableGroup[]> {
   const res = await apiClient.get('/api/admin/groups', { params: platform ? { platform } : {} });
   return res.data as ManageableGroup[];
+}
+
+// ── Group CRUD (super or platform admin of the group's platform) ──────────────
+
+export async function createGroup(body: CreateGroupInput): Promise<GroupRecord> {
+  const res = await apiClient.post('/api/admin/groups', body);
+  return res.data as GroupRecord;
+}
+
+export async function updateGroup(groupId: string, body: UpdateGroupInput): Promise<GroupRecord> {
+  const res = await apiClient.put(`/api/admin/groups/${groupId}`, body);
+  return res.data as GroupRecord;
+}
+
+export async function deleteGroup(groupId: string): Promise<DeleteGroupResult> {
+  const res = await apiClient.delete(`/api/admin/groups/${groupId}`);
+  return res.data as DeleteGroupResult;
 }
 
 // ── Platform admins ──────────────────────────────────────────────────────────

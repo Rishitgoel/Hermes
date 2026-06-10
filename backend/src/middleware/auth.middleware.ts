@@ -85,14 +85,14 @@ const checkJwtSimulated = (req: Request, res: Response, next: NextFunction) => {
       id: 'group-admin-uuid-2222',
       username: 'Yogesh_Verma',
       email: 'yogesh.verma@bachatt.app',
-      roles: ['hermes_group_admin', 'hermes_group_admin_redash_growth', 'hermes_user'],
+      roles: ['hermes_group_admin', `hermes_group_admin_${config.platform.default}_growth`, 'hermes_user'],
     };
   } else if (token === 'platform_admin') {
     req.user = {
       id: 'platform-admin-uuid-4444',
       username: 'Neha_Sharma',
       email: 'neha.sharma@bachatt.app',
-      roles: ['hermes_platform_admin', 'hermes_platform_admin_redash', 'hermes_user'],
+      roles: ['hermes_platform_admin', `hermes_platform_admin_${config.platform.default}`, 'hermes_user'],
     };
   } else if (token === 'user') {
     req.user = {

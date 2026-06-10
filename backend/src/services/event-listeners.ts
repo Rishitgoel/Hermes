@@ -86,8 +86,8 @@ export function registerEventListeners(): void {
 
   eventBus.on('user-creation.invited', async (event) => {
     try {
-      const { userId, userEmail, reviewerName } = event.payload as any;
-      await notificationService.notifyUserCreationApproved(userId, userEmail, reviewerName);
+      const { userId, userEmail, reviewerName, platform } = event.payload as any;
+      await notificationService.notifyUserCreationApproved(userId, userEmail, reviewerName, platform);
     } catch (err: any) {
       logger.error('Failed to notify user-creation.invited event:', err.message);
     }

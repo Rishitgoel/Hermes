@@ -34,6 +34,7 @@ const PLATFORM = 'redash';
  */
 export class RedashProvisioner implements PlatformAdapter {
   readonly platform = PLATFORM;
+  readonly displayName = 'Redash';
 
   // ── Provisioning lifecycle ────────────────────────────────────────────────
 
@@ -113,6 +114,22 @@ export class RedashProvisioner implements PlatformAdapter {
     return { externalUserId: externalId, metadata: { inviteLink, alreadyExists: !inviteLink } };
   }
 
+  /**
+   * Re-issue a fresh Redash invite link for the "resend invite" button. Looks the
+   * user up (creating them if somehow absent) and regenerates the one-time link so
+   * the stored token always points at the configured Redash instance.
+   */
+  async regenerateInvite(email: string, name: string): Promise<ProvisionResult> {
+    const { id: redashUserId } = await redashService.findOrInviteUser(email, name);
+    const inviteLink = await redashService.regenerateInviteLink(redashUserId);
+    return { externalUserId: redashUserId.toString(), metadata: { inviteLink } };
+  }
+
+  /** The Redash UI users open to run queries / view dashboards. */
+  getLaunchUrl(): string | null {
+    return config.redash.baseUrl || null;
+  }
+
   async healthCheck(): Promise<{ healthy: boolean; message?: string }> {
     try {
       await redashService.syncGroups(); // lightweight probe against the Redash API
@@ -130,8 +147,8 @@ export class RedashProvisioner implements PlatformAdapter {
         message: 'You are now fully set up on Redash. Any group requests already approved by admin have been provisioned.',
         link: '/',
       },
-      email: templates.userAccountSetupComplete(),
-      dm: `🎉 You've finished Redash setup — your Hermes account is fully active and any approved group memberships have been provisioned.\n👉 ${config.frontend.url}/`,
+      email: templates.userAccountSetupComplete({ platformLabel: this.displayName }),
+      dm: `🎉 You've finished ${this.displayName} setup — your Hermes account is fully active and any approved group memberships have been provisioned.\n👉 ${config.frontend.url}/`,
     };
   }
 

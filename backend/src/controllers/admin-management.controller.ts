@@ -14,6 +14,7 @@ import {
 import { AuthorizationError, NotFoundError, ValidationError, ConflictError } from '../utils/errors';
 import { assignPlatformAdminSchema, assignGroupAdminSchema, setMemberLevelSchema } from '../validations/admin.validation';
 import { createGroupLevelSchema, updateGroupLevelSchema } from '../validations/group-level.validation';
+import { createGroupSchema, updateGroupSchema } from '../validations/group.validation';
 import logger from '../utils/logger';
 import { RequestStatus } from '@prisma/client';
 
@@ -96,6 +97,11 @@ export class AdminManagementController extends BaseController {
       }
 
       const search = String(req.query.search ?? '').trim();
+      // Candidates are every user Hermes has seen, on any platform — admin roles are
+      // platform/group-scoped when assigned, not when searching. A user holds one
+      // UserCreationRequest row per platform they've been provisioned on, so dedupe by
+      // userId (distinct); otherwise someone with both a Redash and an AWS account would
+      // be listed once per platform.
       const rows = await prisma.userCreationRequest.findMany({
         where: search
           ? {
@@ -106,6 +112,7 @@ export class AdminManagementController extends BaseController {
             }
           : undefined,
         select: { userId: true, userName: true, userEmail: true, status: true },
+        distinct: ['userId'],
         orderBy: { userName: 'asc' },
         take: 20,
       });
@@ -275,8 +282,12 @@ export class AdminManagementController extends BaseController {
             name: g.name,
             slug: g.slug,
             platform: g.platform,
+            description: g.description,
             color: g.color,
             icon: g.icon,
+            tables: g.tables,
+            externalGroupId: g.externalGroupId,
+            isActive: g.isActive,
             memberCount,
             adminCount: g.admins.length,
           };
@@ -285,6 +296,229 @@ export class AdminManagementController extends BaseController {
       );
     } catch (error) {
       this.handleError(error, 'Failed to retrieve manageable groups');
+    }
+  }
+
+  // ── Group CRUD (super, or platform admin of the group's platform) ─────────
+  // Managing a group's existence + its backing platform group is platform config,
+  // so it mirrors level CRUD's tier: super admin or platform admin of the platform.
+
+  /** Shared gate for editing/deleting an existing group: coarse precheck → load → platform-tier check. */
+  private async authorizeGroupManagement(groupId: string) {
+    if (!(await isAnyAdmin(this.user!))) {
+      throw new AuthorizationError('You cannot manage this group');
+    }
+    const group = await prisma.group.findUnique({ where: { id: groupId } });
+    if (!group) throw new NotFoundError('Group not found');
+    if (!(await isPlatformAdminOf(this.user!, group.platform))) {
+      throw new AuthorizationError("You cannot manage groups for this group's platform");
+    }
+    return group;
+  }
+
+  // POST /api/admin/groups
+  async createGroup(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!this.getUserId()) return;
+      // Coarse precheck before reading the body (avoids leaking via validation errors).
+      if (!(await isAnyAdmin(this.user!))) {
+        throw new AuthorizationError('You cannot create groups');
+      }
+
+      const validated = this.validateWithZod(createGroupSchema, this.req.body);
+      if (!validated.success) return;
+      const data = validated.data;
+      const platform = data.platform; // lowercased by the schema
+
+      if (!provisioningRegistry.has(platform)) {
+        throw new ValidationError(`Unknown platform "${platform}" — no provisioner is registered for it.`);
+      }
+      // Must be super, or platform admin of THIS platform.
+      if (!(await isPlatformAdminOf(this.user!, platform))) {
+        throw new AuthorizationError('You cannot create groups for this platform');
+      }
+
+      // Resolve the backing platform group, same as createGroupLevel:
+      //  - if the admin pasted an externalGroupId, link it as-is;
+      //  - otherwise auto-create one via the adapter (named after the group) and
+      //    roll it back if the Hermes insert then fails.
+      const adapter = provisioningRegistry.get(platform);
+      let externalGroupId = data.externalGroupId ?? null;
+      let autoCreatedExternalGroupId: string | null = null;
+      if (!externalGroupId && adapter.createExternalGroup) {
+        const created = await adapter.createExternalGroup(data.name);
+        externalGroupId = created.externalGroupId;
+        autoCreatedExternalGroupId = created.externalGroupId;
+      }
+
+      let group;
+      try {
+        group = await prisma.group.create({
+          data: {
+            name: data.name,
+            slug: data.slug,
+            description: data.description,
+            platform,
+            icon: data.icon ?? null,
+            color: data.color ?? null,
+            tables: data.tables ?? [],
+            externalGroupId,
+          },
+        });
+      } catch (err: any) {
+        if (autoCreatedExternalGroupId && adapter.deleteExternalGroup) {
+          try {
+            await adapter.deleteExternalGroup(autoCreatedExternalGroupId);
+          } catch (cleanupErr: any) {
+            logger.warn(
+              { externalGroupId: autoCreatedExternalGroupId, error: cleanupErr.message },
+              'Failed to roll back auto-created platform group after group insert failure',
+            );
+          }
+        }
+        if (err?.code === 'P2002') {
+          throw new ConflictError('A group with this name or slug already exists.');
+        }
+        throw err;
+      }
+
+      await prisma.auditEntry.create({
+        data: {
+          action: 'GROUP_CREATED',
+          performerId: this.user!.id,
+          performerName: this.user!.username,
+          groupId: group.id,
+          details: {
+            name: group.name,
+            slug: group.slug,
+            platform,
+            externalGroupId: group.externalGroupId,
+            autoCreated: !!autoCreatedExternalGroupId,
+          },
+        },
+      });
+
+      this.sendResponse(group, 'Group created successfully', 201);
+    } catch (error) {
+      this.handleError(error, 'Failed to create group');
+    }
+  }
+
+  // PUT /api/admin/groups/:groupId — edit presentational fields + archive/restore.
+  async updateGroup(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!this.getUserId()) return;
+      const groupId = String(req.params.groupId);
+      await this.authorizeGroupManagement(groupId);
+
+      const validated = this.validateWithZod(updateGroupSchema, this.req.body);
+      if (!validated.success) return;
+      const data = validated.data;
+
+      let group;
+      try {
+        group = await prisma.group.update({
+          where: { id: groupId },
+          data: {
+            ...(data.name !== undefined ? { name: data.name } : {}),
+            ...(data.description !== undefined ? { description: data.description } : {}),
+            ...(data.icon !== undefined ? { icon: data.icon } : {}),
+            ...(data.color !== undefined ? { color: data.color } : {}),
+            ...(data.tables !== undefined ? { tables: data.tables } : {}),
+            ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
+          },
+        });
+      } catch (err: any) {
+        if (err?.code === 'P2002') {
+          throw new ConflictError('A group with this name already exists.');
+        }
+        throw err;
+      }
+
+      await prisma.auditEntry.create({
+        data: {
+          action: 'GROUP_UPDATED',
+          performerId: this.user!.id,
+          performerName: this.user!.username,
+          groupId,
+          details: { slug: group.slug, platform: group.platform, changed: Object.keys(data) },
+        },
+      });
+
+      this.sendResponse(group, 'Group updated successfully');
+    } catch (error) {
+      this.handleError(error, 'Failed to update group');
+    }
+  }
+
+  // DELETE /api/admin/groups/:groupId
+  // Hard-deletes a group only when it's pristine — never referenced by any access
+  // request or user access (those FKs are ON DELETE Restrict, so even a historical
+  // row blocks the delete). Levels and group-admins ON DELETE Cascade away. Anything
+  // with history archives instead (isActive:false): it leaves the request flow
+  // (getGroups filters isActive) while existing members keep access until expiry/revoke.
+  async deleteGroup(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!this.getUserId()) return;
+      const groupId = String(req.params.groupId);
+      const group = await this.authorizeGroupManagement(groupId);
+
+      const [requestCount, accessCount] = await Promise.all([
+        prisma.accessRequest.count({ where: { groupId } }),
+        prisma.userAccess.count({ where: { groupId } }),
+      ]);
+
+      if (requestCount === 0 && accessCount === 0) {
+        await prisma.group.delete({ where: { id: groupId } });
+
+        // Best-effort removal of the backing platform group — no one is affected
+        // (the group had no members or requests). Don't fail the delete on cleanup error.
+        if (group.externalGroupId) {
+          const adapter = provisioningRegistry.has(group.platform)
+            ? provisioningRegistry.get(group.platform)
+            : null;
+          if (adapter?.deleteExternalGroup) {
+            try {
+              await adapter.deleteExternalGroup(group.externalGroupId);
+            } catch (cleanupErr: any) {
+              logger.warn(
+                { externalGroupId: group.externalGroupId, error: cleanupErr.message },
+                'Group deleted but failed to remove its backing platform group',
+              );
+            }
+          }
+        }
+
+        await prisma.auditEntry.create({
+          data: {
+            action: 'GROUP_DELETED',
+            performerId: this.user!.id,
+            performerName: this.user!.username,
+            groupId,
+            details: { name: group.name, slug: group.slug, platform: group.platform, externalGroupId: group.externalGroupId },
+          },
+        });
+        this.sendResponse({ id: groupId, deleted: true }, 'Group deleted');
+        return;
+      }
+
+      // Has history → archive instead of delete.
+      const archived = await prisma.group.update({ where: { id: groupId }, data: { isActive: false } });
+      await prisma.auditEntry.create({
+        data: {
+          action: 'GROUP_ARCHIVED',
+          performerId: this.user!.id,
+          performerName: this.user!.username,
+          groupId,
+          details: { name: archived.name, slug: archived.slug, platform: archived.platform, requestCount, accessCount },
+        },
+      });
+      this.sendResponse(
+        { id: groupId, deleted: false, requestCount, accessCount },
+        `Group has history (${accessCount} access record(s), ${requestCount} request(s)), so it was archived instead of deleted — it's hidden from new requests and existing members keep access until expiry/revoke.`,
+      );
+    } catch (error) {
+      this.handleError(error, 'Failed to delete group');
     }
   }
 

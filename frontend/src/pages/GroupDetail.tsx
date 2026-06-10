@@ -10,7 +10,7 @@ import PlatformInviteModal from '../components/access/PlatformInviteModal';
 import { getMyUserCreation } from '../services/api/userCreation';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../lib/queryKeys';
-import { platformDisplayName } from '../lib/platforms';
+import { platformDisplayName, DEFAULT_PLATFORM } from '../lib/platforms';
 
 interface GroupAdmin {
   userId: string;
@@ -76,8 +76,8 @@ export const GroupDetail: React.FC = () => {
   // logic): DRAFT/REJECTED — or no account request yet for this platform — must act
   // first; everyone else can queue, auto-provisioning once their account is set up.
   const accountQuery = useQuery({
-    queryKey: queryKeys.userCreation(group?.platform ?? 'redash'),
-    queryFn: () => getMyUserCreation(group?.platform ?? 'redash'),
+    queryKey: queryKeys.userCreation(group?.platform ?? DEFAULT_PLATFORM),
+    queryFn: () => getMyUserCreation(group?.platform ?? DEFAULT_PLATFORM),
     enabled: !!group?.platform,
   });
   const account = accountQuery.data ?? null;

@@ -272,14 +272,12 @@ export class NotificationService {
 
   /** Human-friendly platform name for user-facing copy. */
   private platformLabel(platform?: string): string {
-    switch ((platform || 'redash').toLowerCase()) {
-      case 'aws':
-        return 'AWS';
-      case 'redash':
-        return 'Redash';
-      default:
-        return (platform || 'platform').replace(/\b\w/g, (c) => c.toUpperCase());
-    }
+    const key = (platform || config.platform.default).toLowerCase();
+    // Display name is adapter-owned (PlatformAdapter.displayName) — no per-platform
+    // branching here, so a new adapter's name flows through automatically. Fall back
+    // to a title-cased key for an unregistered platform.
+    if (provisioningRegistry.has(key)) return provisioningRegistry.get(key).displayName;
+    return key.replace(/\b\w/g, (c) => c.toUpperCase());
   }
 
   // Group request approved but the requester hasn't finished platform setup yet — queued.
@@ -321,7 +319,7 @@ export class NotificationService {
         prisma.groupAdmin.findMany({ distinct: ['userId'] }),
       ]);
 
-      const emailContent = templates.adminNewAccountRequest({ userName, userEmail, justification });
+      const emailContent = templates.adminNewAccountRequest({ userName, userEmail, justification, platformLabel: label });
       const dm = `🆕 *${escapeSlackText(userName)}* (${escapeSlackText(userEmail)}) requested a ${label} account.\n${justification ? `Reason: "${escapeSlackText(justification)}"\n` : ''}👉 ${config.frontend.url}/pending-approvals`;
 
       const recipients: AdminRecipient[] = [
@@ -348,21 +346,24 @@ export class NotificationService {
     }
   }
 
-  // Admin approved a user-creation request → tell the user (Redash will email them separately).
+  // Admin approved a user-creation request that needs the user to finish setup via a
+  // platform-issued link → tell the user (the platform emails the link separately).
   async notifyUserCreationApproved(
     requesterId: string,
     userEmail: string,
     reviewerName: string,
+    platform?: string,
   ): Promise<void> {
+    const label = this.platformLabel(platform);
     await this.createNotification(
       requesterId,
       'Your account is approved',
-      `${reviewerName} approved your Hermes account. Check your email — Redash has sent you a link to set your password.`,
+      `${reviewerName} approved your Hermes account. Check your email — ${label} has sent you a link to set your password.`,
       '/my-requests',
     );
 
-    const dm = `✅ Your Hermes account is approved by ${escapeSlackText(reviewerName)}! Check your inbox for the Redash setup email.\n👉 ${config.frontend.url}/my-requests`;
-    await this.emailAndDm(userEmail, templates.userAccountApproved({ reviewerName }), dm);
+    const dm = `✅ Your Hermes account is approved by ${escapeSlackText(reviewerName)}! Check your inbox for the ${escapeSlackText(label)} setup email.\n👉 ${config.frontend.url}/my-requests`;
+    await this.emailAndDm(userEmail, templates.userAccountApproved({ reviewerName, platformLabel: label }), dm);
   }
 
   async notifyUserCreationRejected(
@@ -385,7 +386,7 @@ export class NotificationService {
   async notifyUserCreationCompleted(
     requesterId: string,
     userEmail: string,
-    platform: string = 'redash',
+    platform: string = config.platform.default,
   ): Promise<void> {
     // Onboarding copy is platform-specific (Redash: "you're set up"; AWS: "set your
     // password via the access portal"). Each adapter owns its own message via
@@ -415,7 +416,7 @@ export class NotificationService {
     );
     await this.emailAndDm(
       userEmail,
-      templates.userAccountSetupComplete(),
+      templates.userAccountSetupComplete({ platformLabel: label }),
       `🎉 Your ${label} account is fully set up — any approved group memberships have been provisioned.\n👉 ${config.frontend.url}/`,
     );
   }

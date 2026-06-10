@@ -1,4 +1,5 @@
 import provisioningRegistry from './provisioning.registry';
+import config from '../config/config';
 import logger from '../utils/logger';
 
 /**
@@ -57,7 +58,7 @@ export class SyncService {
    * `syncSingleUser` hook. Returns false if the platform's adapter doesn't support
    * it or the user isn't there yet.
    */
-  async syncSingleUser(email: string, platform: string = 'redash'): Promise<boolean> {
+  async syncSingleUser(email: string, platform: string = config.platform.default): Promise<boolean> {
     logger.info({ email, platform }, '🔄 SyncService: Fast-path single-user sync...');
     try {
       const adapter = provisioningRegistry.get(platform);

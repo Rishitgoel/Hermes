@@ -13,7 +13,7 @@ generator client {
 
 model Group {
   id               String           @id @default(uuid())
-  name             String           @unique            // "Growth", "Retention"
+  name             String                           // "Growth", "Retention"
   slug             String           @unique            // "growth", "retention"
   description      String                              // What tables/data this gives access to
   icon             String?                              // Lucide icon name
@@ -36,6 +36,7 @@ model Group {
   userAccesses     UserAccess[]
   levels           GroupLevel[]
 
+  @@unique([platform, name])
   @@map("groups")
 }
 

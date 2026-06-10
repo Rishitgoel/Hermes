@@ -46,6 +46,7 @@ const PRUNE_GRACE_MS = 10 * 60 * 1000; // 10 minutes
  */
 export class AwsProvisioner implements PlatformAdapter {
   readonly platform = PLATFORM;
+  readonly displayName = 'AWS';
 
   // ── Provisioning lifecycle ────────────────────────────────────────────────
 
@@ -107,6 +108,11 @@ export class AwsProvisioner implements PlatformAdapter {
 
   async healthCheck(): Promise<{ healthy: boolean; message?: string }> {
     return awsIdentityCenterService.healthCheck();
+  }
+
+  /** The AWS SSO access portal users sign in through (null when unconfigured). */
+  getLaunchUrl(): string | null {
+    return config.aws.accessPortalUrl || null;
   }
 
   /**

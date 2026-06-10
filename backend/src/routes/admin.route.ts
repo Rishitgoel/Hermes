@@ -41,6 +41,11 @@ router.get('/group-admins', authenticateToken, adminMgmt('listGroupAdmins'));
 router.post('/group-admins', authenticateToken, adminMgmt('assignGroupAdmin'));
 router.delete('/group-admins/:id', authenticateToken, adminMgmt('removeGroupAdmin'));
 
+// Group CRUD (super or platform admin of the group's platform — enforced in controller)
+router.post('/groups', authenticateToken, adminMgmt('createGroup'));
+router.put('/groups/:groupId', authenticateToken, adminMgmt('updateGroup'));
+router.delete('/groups/:groupId', authenticateToken, adminMgmt('deleteGroup'));
+
 // Members
 router.get('/groups/:groupId/members', authenticateToken, adminMgmt('listGroupMembers'));
 router.put('/groups/:groupId/members/:userAccessId/level', authenticateToken, adminMgmt('setGroupMemberLevel'));

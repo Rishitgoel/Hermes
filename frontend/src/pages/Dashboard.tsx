@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import apiClient from '../services/apiClient';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import { queryKeys } from '../lib/queryKeys';
+import { fetchPlatforms } from '../services/api/platforms';
 import * as Icons from 'lucide-react';
 
 interface GroupData {
@@ -32,6 +33,7 @@ interface ActiveAccessData {
     description: string;
     color: string | null;
     icon: string | null;
+    platform: string;
   };
 }
 
@@ -59,9 +61,17 @@ export const Dashboard: React.FC = () => {
     enabled: !!isAdmin,
   });
 
+  // Live platforms (adapter-owned displayName + launchUrl) so each grant links to
+  // its own platform instead of a single hardcoded one.
+  const platformsQuery = useQuery({
+    queryKey: queryKeys.platforms(),
+    queryFn: fetchPlatforms,
+  });
+
   const accesses = accessesQuery.data ?? [];
   const groups = groupsQuery.data ?? [];
   const pendingReviewCount = pendingQuery.data?.length ?? 0;
+  const platformsByKey = new Map((platformsQuery.data ?? []).map((p) => [p.key, p]));
 
   const isLoading =
     accessesQuery.isLoading ||
@@ -89,10 +99,6 @@ export const Dashboard: React.FC = () => {
   const renderIcon = (iconName: string | null, color: string | null, size = 24) => {
     const LucideIcon = (Icons as any)[iconName || 'ShieldCheck'] || Icons.ShieldCheck;
     return <LucideIcon size={size} style={{ color: color || 'var(--primary)' }} />;
-  };
-
-  const getRedashUrl = () => {
-    return import.meta.env.VITE_REDASH_URL || 'https://redash.bachatt.app';
   };
 
   return (
@@ -237,15 +243,20 @@ export const Dashboard: React.FC = () => {
                       >
                         Details
                       </button>
-                      <a 
-                        href={getRedashUrl()} 
-                        target="_blank" 
-                        rel="noreferrer" 
-                        className="btn btn-primary"
-                        style={{ padding: '4px 10px', fontSize: '11px', gap: '4px', height: '30px', display: 'inline-flex', alignItems: 'center' }}
-                      >
-                        Redash <Icons.ExternalLink size={11} />
-                      </a>
+                      {(() => {
+                        const plat = platformsByKey.get(access.group.platform);
+                        return plat?.launchUrl ? (
+                          <a
+                            href={plat.launchUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="btn btn-primary"
+                            style={{ padding: '4px 10px', fontSize: '11px', gap: '4px', height: '30px', display: 'inline-flex', alignItems: 'center' }}
+                          >
+                            {plat.displayName} <Icons.ExternalLink size={11} />
+                          </a>
+                        ) : null;
+                      })()}
                     </div>
                   </td>
                 </tr>

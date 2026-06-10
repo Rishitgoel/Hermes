@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../contexts/AuthContext';
 import { submitUserCreationRequest } from '../../services/api/userCreation';
 import { queryKeys } from '../../lib/queryKeys';
+import { DEFAULT_PLATFORM, platformDisplayName } from '../../lib/platforms';
 import { Send, AlertCircle, Loader } from 'lucide-react';
 
 interface UserCreationFormModalProps {
@@ -19,8 +20,8 @@ export const UserCreationFormModal: React.FC<UserCreationFormModalProps> = ({
   isOpen,
   onClose,
   onSubmitted,
-  platform = 'redash',
-  platformName = 'Redash',
+  platform = DEFAULT_PLATFORM,
+  platformName = platformDisplayName(platform),
 }) => {
   const { user, refreshUserCreation } = useAuth();
   const queryClient = useQueryClient();
