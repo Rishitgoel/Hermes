@@ -626,8 +626,14 @@ const GroupLevelsSection: React.FC<GroupLevelsSectionProps> = ({ group, onBanner
 
   const deleteMutation = useMutation({
     mutationFn: (lvl: GroupLevelRow) => deleteGroupLevel(group.id, lvl.id),
-    onSuccess: () => {
-      onBanner({ type: 'success', text: 'Level removed.' });
+    onSuccess: (result) => {
+      if (result.deleted) {
+        onBanner({ type: 'success', text: 'Level removed.' });
+      } else if ((result.activeMembers ?? 0) > 0) {
+        onBanner({ type: 'success', text: `Level kept active members (${result.activeMembers}), so it was deactivated instead of removed — they keep access until expiry/revoke.` });
+      } else {
+        onBanner({ type: 'success', text: `Level has ${result.openRequests ?? 0} in-flight request(s), so it was deactivated instead of removed. Resolve those requests, then remove it.` });
+      }
       invalidate();
     },
     onError: (e: any) => onBanner({ type: 'error', text: e.message || 'Failed to remove level.' }),

@@ -173,6 +173,14 @@ export async function updateGroupLevel(
   return res.data as GroupLevelRow;
 }
 
-export async function deleteGroupLevel(groupId: string, levelId: string): Promise<void> {
-  await apiClient.delete(`/api/admin/groups/${groupId}/levels/${levelId}`);
+export interface DeleteGroupLevelResult {
+  id: string;
+  deleted: boolean;        // true = hard-deleted, false = deactivated (still has members or open requests)
+  activeMembers?: number;
+  openRequests?: number;
+}
+
+export async function deleteGroupLevel(groupId: string, levelId: string): Promise<DeleteGroupLevelResult> {
+  const res = await apiClient.delete(`/api/admin/groups/${groupId}/levels/${levelId}`);
+  return res.data as DeleteGroupLevelResult;
 }

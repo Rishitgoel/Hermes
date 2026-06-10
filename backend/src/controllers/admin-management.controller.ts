@@ -15,9 +15,24 @@ import { AuthorizationError, NotFoundError, ValidationError, ConflictError } fro
 import { assignPlatformAdminSchema, assignGroupAdminSchema, setMemberLevelSchema } from '../validations/admin.validation';
 import { createGroupLevelSchema, updateGroupLevelSchema } from '../validations/group-level.validation';
 import logger from '../utils/logger';
+import { RequestStatus } from '@prisma/client';
 
 const PLATFORM_ADMIN_MARKER = 'hermes_platform_admin';
 const GROUP_ADMIN_MARKER = 'hermes_group_admin';
+
+// Request statuses that are "done" — they can never lead to (or still hold) a live
+// grant. A level referenced ONLY by requests in these states is safe to hard-delete;
+// the FK from access_requests.level_id is ON DELETE SET NULL, so those historical
+// rows simply lose their (now-dangling) level pointer while the audit log keeps the
+// full record. Anything NOT in this set (PENDING / APPROVED / PROVISIONING /
+// PROVISIONED / WAITING_FOR_SETUP) is in-flight and blocks the delete — we
+// deactivate instead so the open request isn't orphaned.
+const TERMINAL_REQUEST_STATUSES: RequestStatus[] = [
+  RequestStatus.REJECTED,
+  RequestStatus.PROVISION_FAILED,
+  RequestStatus.EXPIRED,
+  RequestStatus.REVOKED,
+];
 
 const platformAdminRole = (platform: string) => `hermes_platform_admin_${platform.toLowerCase()}`;
 // Platform-qualified so the role is self-documenting and consistent with the
@@ -774,8 +789,11 @@ export class AdminManagementController extends BaseController {
   }
 
   // DELETE /api/admin/groups/:groupId/levels/:levelId
-  // Soft-deletes (deactivates) when the level still has active members so they keep
-  // access until expiry/revoke; hard-deletes only an empty, never-used level.
+  // Hard-deletes a level that no longer has any live attachment — no active members
+  // and no in-flight requests. Past terminal requests (rejected/expired/revoked) do
+  // NOT block the delete: their level_id is nulled by the FK and the history lives on
+  // in the audit log. Falls back to deactivation only when there's still an active
+  // member or an open request that would otherwise be orphaned.
   async deleteGroupLevel(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       if (!this.getUserId()) return;
@@ -786,7 +804,12 @@ export class AdminManagementController extends BaseController {
       const existing = await prisma.groupLevel.findUnique({
         where: { id: levelId },
         include: {
-          _count: { select: { userAccesses: { where: { isActive: true } }, accessRequests: true } },
+          _count: {
+            select: {
+              userAccesses: { where: { isActive: true } },
+              accessRequests: { where: { status: { notIn: TERMINAL_REQUEST_STATUSES } } },
+            },
+          },
         },
       });
       if (!existing || existing.groupId !== groupId) {
@@ -794,16 +817,16 @@ export class AdminManagementController extends BaseController {
       }
 
       const activeMembers = existing._count.userAccesses;
-      const everReferenced = existing._count.accessRequests > 0;
+      const openRequests = existing._count.accessRequests;
 
-      // Hard delete only if no active members AND never referenced by a request
-      // (FK from access_requests.level_id would otherwise be set null and lose history).
-      if (activeMembers === 0 && !everReferenced) {
+      // Hard delete only if nothing live is attached: no active members AND no
+      // in-flight requests. Terminal historical requests are fine to detach (SetNull).
+      if (activeMembers === 0 && openRequests === 0) {
         await prisma.groupLevel.delete({ where: { id: levelId } });
 
-        // Best-effort removal of the backing platform group. The level was never
-        // used (no members, no past requests), so no one is affected. Don't fail
-        // the delete if the platform cleanup errors — the Hermes row is already gone.
+        // Best-effort removal of the backing platform group. The level has no active
+        // members or open requests, so no one is affected. Don't fail the delete if
+        // the platform cleanup errors — the Hermes row is already gone.
         if (existing.externalGroupId) {
           const adapter = provisioningRegistry.has(group.platform)
             ? provisioningRegistry.get(group.platform)
@@ -833,8 +856,9 @@ export class AdminManagementController extends BaseController {
         return;
       }
 
-      // Otherwise deactivate — members keep access until expiry/revoke; no new
-      // requests can select it (createRequest only offers active levels).
+      // Otherwise deactivate — something live is still attached (active members or an
+      // in-flight request). Members keep access until expiry/revoke; no new requests
+      // can select it (createRequest only offers active levels).
       const level = await prisma.groupLevel.update({
         where: { id: levelId },
         data: { isActive: false },
@@ -845,14 +869,14 @@ export class AdminManagementController extends BaseController {
           performerId: this.user!.id,
           performerName: this.user!.username,
           groupId,
-          details: { levelId, slug: existing.slug, name: existing.name, platform: group.platform, activeMembers },
+          details: { levelId, slug: existing.slug, name: existing.name, platform: group.platform, activeMembers, openRequests },
         },
       });
       this.sendResponse(
-        { id: levelId, deleted: false, activeMembers },
+        { id: levelId, deleted: false, activeMembers, openRequests },
         activeMembers > 0
           ? `Level has ${activeMembers} active member(s); it was deactivated (not deleted) so they keep access until expiry/revoke.`
-          : 'Level was referenced by past requests; it was deactivated (not deleted) to preserve history.',
+          : `Level has ${openRequests} in-flight request(s); it was deactivated (not deleted) so they aren't orphaned. Resolve those requests, then remove it.`,
       );
     } catch (error) {
       this.handleError(error, 'Failed to delete level');
