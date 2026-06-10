@@ -105,6 +105,8 @@ export interface GroupMember {
   levelId: string | null;
   levelName: string | null;
   levelPermission: string | null;
+  // True if this member also holds the group-admin role (independent of the grant).
+  isAdmin: boolean;
 }
 
 // ── Lookups ─────────────────────────────────────────────────────────────────

@@ -4,7 +4,7 @@ import prisma from '../config/prisma';
 import accessWorkflowService from '../services/access-workflow.service';
 import { createRequestSchema, reviewRequestSchema, changeLevelSchema } from '../validations/access-request.validation';
 import { RequestStatus, Prisma } from '@prisma/client';
-import { ValidationError, AuthorizationError, NotFoundError } from '../utils/errors';
+import { AuthorizationError, NotFoundError } from '../utils/errors';
 import { isGroupAdminOf, computeAdminScopes } from '../utils/authz';
 
 export class AccessRequestController extends BaseController {
@@ -25,11 +25,9 @@ export class AccessRequestController extends BaseController {
 
       const { groupId, levelId, justification, duration } = validated.data;
 
-      // Prevent self-requesting if the caller already administers this group.
-      if (await isGroupAdminOf(this.user!, groupId)) {
-        throw new ValidationError('You are an admin of this group and already have active access by default.');
-      }
-
+      // Admins (group/platform/super) are NOT blocked from requesting: the admin
+      // role grants approval rights only, no data access — if an admin needs the
+      // group's data they go through the same request → approval flow as anyone.
       const request = await accessWorkflowService.createRequest(
         requester,
         groupId,
@@ -65,12 +63,8 @@ export class AccessRequestController extends BaseController {
 
       const { groupId, levelId, justification, duration } = validated.data;
 
-      // Group admins hold a cosmetic ACTIVE badge but no real grant, so there is no
-      // level to change. Mirror the createRequest self-request guard.
-      if (await isGroupAdminOf(this.user!, groupId)) {
-        throw new ValidationError('You administer this group; level changes apply to members, not admins.');
-      }
-
+      // No admin guard here: an admin holding a real grant changes levels like any
+      // member (the service itself rejects callers with no active grant).
       const result = await accessWorkflowService.changeLevel(
         requester,
         groupId,

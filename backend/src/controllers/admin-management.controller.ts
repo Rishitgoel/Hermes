@@ -272,11 +272,11 @@ export class AdminManagementController extends BaseController {
 
       this.sendResponse(
         groups.map((g) => {
-          // Single-status model: an admin holds an auto-enrolled access grant, but
-          // is counted as an admin, not a member. Exclude admins from memberCount so
-          // the same person is never tallied in both columns.
-          const adminIds = new Set(g.admins.map((a) => a.userId));
-          const memberCount = g.userAccesses.filter((u) => !adminIds.has(u.userId)).length;
+          // memberCount = everyone holding a real active grant. Admins are NOT
+          // auto-enrolled, so any grant an admin holds is a genuine membership —
+          // a person with both the admin role and a grant counts in both columns
+          // (approval rights and data access are independent).
+          const memberCount = g.userAccesses.length;
           return {
             id: g.id,
             name: g.name,
@@ -701,10 +701,10 @@ export class AdminManagementController extends BaseController {
         throw new AuthorizationError('You do not administer this group');
       }
 
-      // Single-status model: a group admin always holds an (auto-enrolled) active
-      // grant for data access, but is surfaced only under "Group Admins" — never
-      // also as a plain member. Exclude current admins from the members list so the
-      // same person never appears in both sections.
+      // Every active grant is a real membership — admins are NOT auto-enrolled, so
+      // an admin appears here too when they hold a grant (requested through the
+      // normal flow). The `isAdmin` flag lets the UI badge them; their grant is
+      // revocable like any member's (approval rights come from the role, not the grant).
       const [members, admins] = await Promise.all([
         prisma.userAccess.findMany({
           where: { groupId, isActive: true },
@@ -714,10 +714,9 @@ export class AdminManagementController extends BaseController {
         prisma.groupAdmin.findMany({ where: { groupId }, select: { userId: true } }),
       ]);
       const adminUserIds = new Set(admins.map((a) => a.userId));
-      const nonAdminMembers = members.filter((m) => !adminUserIds.has(m.userId));
 
       this.sendResponse(
-        nonAdminMembers.map((m) => ({
+        members.map((m) => ({
           id: m.id,
           userId: m.userId,
           userName: m.userName,
@@ -732,6 +731,8 @@ export class AdminManagementController extends BaseController {
           levelId: m.levelId,
           levelName: m.level?.name ?? null,
           levelPermission: m.level?.permission ?? null,
+          // True if this member also holds the group-admin role (badge in the UI).
+          isAdmin: adminUserIds.has(m.userId),
         })),
         'Group members retrieved successfully',
       );

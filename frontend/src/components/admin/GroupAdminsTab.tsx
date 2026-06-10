@@ -25,16 +25,22 @@ export const GroupAdminsTab: React.FC<GroupAdminsTabProps> = ({ group, onBanner 
   });
 
   // Prefix-invalidate so the platform-wide group-admins list and this group's list
-  // both refresh, plus the groups list (its adminCount changes).
+  // both refresh, plus the groups list (its adminCount changes). Also refresh the
+  // Members list: each member row carries an isAdmin badge, so promoting/removing
+  // an admin changes how their (independent) membership renders there.
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ['admin', 'group-admins'] });
     queryClient.invalidateQueries({ queryKey: queryKeys.adminGroups(group.platform) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.adminGroupMembers(group.id) });
   };
 
   const removeMutation = useMutation({
     mutationFn: (id: string) => removeGroupAdmin(id),
     onSuccess: () => {
-      onBanner({ type: 'success', text: "Admin role removed — they're now a regular member (group access kept)." });
+      onBanner({
+        type: 'success',
+        text: 'Admin role removed. This only revokes their approval rights — any group access they requested separately is unaffected.',
+      });
       setConfirmRemove(null);
       refresh();
     },
@@ -103,7 +109,7 @@ export const GroupAdminsTab: React.FC<GroupAdminsTabProps> = ({ group, onBanner 
         loading={removeMutation.isPending}
         message={
           confirmRemove
-            ? `Remove ${cleanName(confirmRemove.userName)} as an admin of ${group.name}? Their group membership (if any) is kept.`
+            ? `Remove ${cleanName(confirmRemove.userName)} as an admin of ${group.name}? This only revokes their approval rights; any access they requested separately is unaffected.`
             : ''
         }
         onConfirm={() => confirmRemove && removeMutation.mutate(confirmRemove.id)}

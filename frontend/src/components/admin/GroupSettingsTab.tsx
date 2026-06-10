@@ -19,7 +19,7 @@ interface GroupSettingsTabProps {
 const Row: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
   <div style={{ display: 'flex', gap: '12px', padding: '6px 0', borderBottom: '1px solid var(--border)' }}>
     <div style={{ width: '140px', flexShrink: 0, fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)' }}>{label}</div>
-    <div style={{ fontSize: '13px', color: 'var(--text)', wordBreak: 'break-word' }}>{children}</div>
+    <div style={{ fontSize: '13px', color: 'var(--text-main)', wordBreak: 'break-word' }}>{children}</div>
   </div>
 );
 

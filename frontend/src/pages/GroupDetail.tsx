@@ -124,16 +124,15 @@ export const GroupDetail: React.FC = () => {
   const isSuperAdmin = user?.roles.includes('hermes_super_admin') || false;
   const isGroupAdminOfThisGroup = group.admins.some((adm) => adm.userId === user?.id);
   const canManage = isSuperAdmin || isGroupAdminOfThisGroup;
-  // A real member of a leveled group (not an admin holding a cosmetic ACTIVE badge:
-  // those have currentLevelId === null) can switch levels, provided there's another
-  // level to move to. Promote vs demote is decided server-side on submit.
+  // Anyone holding a real leveled grant can switch levels (admins included — their
+  // grant comes from the normal request flow, same as everyone else's), provided
+  // there's another level to move to. Promote vs demote is decided server-side.
   const canChangeLevel =
-    !canManage &&
     group.accessStatus === 'ACTIVE' &&
     group.levels.length > 1 &&
     !!group.currentLevelId;
-  // Members who are also group admins: badge them and suppress Revoke (an admin's
-  // access is auto-granted by their role — demote them first to remove it).
+  // Members who are also group admins get an ADMIN badge. Their grant is a real,
+  // revocable membership — revoking it leaves their approval rights intact.
   const adminUserIds = new Set(group.admins.map((a) => a.userId));
 
   const renderIcon = (iconName: string | null, color: string | null) => {
@@ -422,10 +421,6 @@ export const GroupDetail: React.FC = () => {
                           {member.userId === user?.id ? (
                             <span style={{ fontSize: '12px', color: 'var(--text-light)', fontStyle: 'italic' }}>
                               Self Access
-                            </span>
-                          ) : memberIsAdmin ? (
-                            <span style={{ fontSize: '12px', color: 'var(--text-light)', fontStyle: 'italic' }}>
-                              Admin · demote to remove
                             </span>
                           ) : (
                             <button

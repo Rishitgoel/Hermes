@@ -176,8 +176,15 @@ export class AccessWorkflowService {
     duration: AccessDuration;
     reviewNote: string;
     auditDetails: Record<string, unknown>;
+    /**
+     * When set (null = permanent), use this exact expiry instead of recomputing a
+     * fresh window from `duration`. Self-service demotion passes the current
+     * grant's expiresAt so demoting can't reset (extend) the remaining time.
+     */
+    expiresAtOverride?: Date | null;
   }): Promise<AccessRequestWithGroup> {
-    const expiresAt = this.calculateExpiry(opts.duration);
+    const expiresAt =
+      opts.expiresAtOverride !== undefined ? opts.expiresAtOverride : this.calculateExpiry(opts.duration);
     const created = await prisma.accessRequest.create({
       data: {
         groupId: opts.groupId,
@@ -294,11 +301,12 @@ export class AccessWorkflowService {
       return { kind: 'request', request };
     }
 
-    // Demotion → provision immediately. Carry the CURRENT grant's duration over
-    // rather than honouring the client-supplied value: a demotion is self-service
-    // precisely because lowering your level carries no escalation risk, but letting
-    // the user also reset their own expiry (e.g. a 1-day grant → PERMANENT) with no
-    // review would be a duration escalation. Mirrors adminSetMemberLevel.
+    // Demotion → provision immediately. Carry the CURRENT grant's duration label
+    // AND its exact expiresAt over, ignoring the client-supplied duration: a
+    // demotion is self-service precisely because lowering your level carries no
+    // escalation risk, but recomputing a fresh window from `duration` would let a
+    // user extend their own remaining time (e.g. a 3-month grant expiring tomorrow
+    // → demote → fresh 3 months) with no review. The expiry must not move at all.
     let demotionDuration: AccessDuration = AccessDuration.PERMANENT;
     if (currentAccess.accessRequestId) {
       const orig = await prisma.accessRequest.findUnique({
@@ -315,6 +323,7 @@ export class AccessWorkflowService {
       level: targetLevel,
       justification,
       duration: demotionDuration,
+      expiresAtOverride: currentAccess.expiresAt,
       reviewNote: 'Self-service demotion (applied immediately)',
       auditDetails: {
         selfDemotion: true,
@@ -322,7 +331,12 @@ export class AccessWorkflowService {
         fromLevelName: currentAccess.level?.name ?? null,
       },
     });
-    const provisioned = await this._provision(fullRequest, { id: requester.id, name: requester.username });
+    const provisioned = await this._provision(
+      fullRequest,
+      { id: requester.id, name: requester.username },
+      undefined,
+      { expiresAtOverride: currentAccess.expiresAt },
+    );
     return { kind: 'instant', request: provisioned };
   }
 
@@ -548,6 +562,15 @@ export class AccessWorkflowService {
     request: AccessRequestWithGroup,
     performer: { id: string; name: string },
     note?: string,
+    opts?: {
+      /**
+       * When set (null = permanent), grant exactly this expiry instead of
+       * recomputing a fresh window from the request's duration. Used by the
+       * self-service demotion path, which must preserve the current grant's
+       * remaining time (recomputing would let a user extend their own expiry).
+       */
+      expiresAtOverride?: Date | null;
+    },
   ) {
     logger.info(`Starting provisioning for request ${request.id}...`);
 
@@ -582,9 +605,11 @@ export class AccessWorkflowService {
 
       // Recompute expiry at provision time using the request's duration. Using the
       // value stored on AccessRequest (computed at request-create time) means a
-      // 1-day request approved 3 days later would expire immediately.
+      // 1-day request approved 3 days later would expire immediately. The demotion
+      // path overrides this: it carries the current grant's expiry over unchanged.
       const grantedAt = new Date();
-      const expiresAt = this.calculateExpiry(request.duration);
+      const expiresAt =
+        opts?.expiresAtOverride !== undefined ? opts.expiresAtOverride : this.calculateExpiry(request.duration);
 
       // A pre-existing active grant on a DIFFERENT level means this is a level
       // change → swap it (atomically deactivate the old grant + create the new one,

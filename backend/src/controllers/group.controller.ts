@@ -2,9 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import BaseController from './base.controller';
 import prisma from '../config/prisma';
 import { RequestStatus } from '@prisma/client';
-import { checkIsGroupAdmin } from '../middleware/auth.middleware';
 import { groupSlugSchema } from '../validations/group.validation';
-import { getManageablePlatforms, isSuperAdmin as isSuperAdminUser } from '../utils/authz';
 
 export class GroupController extends BaseController {
   // GET /api/groups
@@ -44,14 +42,10 @@ export class GroupController extends BaseController {
         })
       ]);
 
-      const isSuperAdmin = this.user ? isSuperAdminUser(this.user) : false;
-      // Platforms this user administers (lower-cased). Super admins implicitly
-      // manage every registered platform; platform admins their own; everyone else
-      // gets []. A platform admin reads as ACTIVE on every group of their platform —
-      // the same cosmetic short-circuit super admins already get. Platform admins
-      // are not automatically provisioned into every Redash group.
-      const managedPlatforms = this.user ? await getManageablePlatforms(this.user) : [];
-
+      // accessStatus reflects the user's REAL grant/request state only. Admins get
+      // no cosmetic ACTIVE short-circuit: the admin role grants approval rights, not
+      // data access — an admin with no grant sees NONE and can request access like
+      // anyone else (the `admins` array below is what the UI badges admins from).
       const enrichedGroups = groups.map(g => {
         let accessStatus = 'NONE';
 
@@ -63,13 +57,8 @@ export class GroupController extends BaseController {
         const hasPending = openRequests.some(
           r => r.groupId === g.id && r.status === RequestStatus.PENDING,
         );
-        const isKeycloakAdmin = this.user?.roles ? checkIsGroupAdmin(this.user.roles, g.slug, g.platform) : false;
-        const isPlatformAdminOfGroup = managedPlatforms.includes(g.platform.toLowerCase());
-        const isAdminOfGroup = isPlatformAdminOfGroup || g.admins.some(adm => adm.userId === userId) || isKeycloakAdmin;
 
-        if (isSuperAdmin || isAdminOfGroup) {
-          accessStatus = 'ACTIVE';
-        } else if (hasActive) {
+        if (hasActive) {
           accessStatus = 'ACTIVE';
         } else if (hasWaitingForSetup) {
           accessStatus = 'AWAITING_SETUP';
@@ -164,15 +153,11 @@ export class GroupController extends BaseController {
         },
       });
 
-      const isSuperAdmin = this.user ? isSuperAdminUser(this.user) : false;
-      const managedPlatforms = this.user ? await getManageablePlatforms(this.user) : [];
-      const isKeycloakAdmin = this.user?.roles ? checkIsGroupAdmin(this.user.roles, group.slug, group.platform) : false;
-      const isPlatformAdminOfGroup = managedPlatforms.includes(group.platform.toLowerCase());
-      const isAdminOfGroup = isPlatformAdminOfGroup || group.admins.some(adm => adm.userId === userId) || isKeycloakAdmin;
+      // accessStatus reflects the user's REAL grant/request state only — no cosmetic
+      // admin short-circuit (admin role = approval rights, not data access). An admin
+      // with no grant sees NONE and requests access through the normal flow.
       let accessStatus = 'NONE';
-      if (isSuperAdmin || isAdminOfGroup) {
-        accessStatus = 'ACTIVE';
-      } else if (activeAccess) {
+      if (activeAccess) {
         accessStatus = 'ACTIVE';
       } else if (openRequest?.status === RequestStatus.WAITING_FOR_SETUP) {
         accessStatus = 'AWAITING_SETUP';
@@ -180,11 +165,11 @@ export class GroupController extends BaseController {
         accessStatus = 'PENDING';
       }
 
-      // The roster shows everyone with active access — including admins, who hold an
-      // auto-enrolled grant. The frontend cross-references `admins` to badge them and
-      // suppress the Revoke action (an admin's access can't be revoked directly; they
-      // must be demoted first). This differs from the Admin Management page, whose
-      // "Members" bucket deliberately excludes admins (they live in their own section).
+      // The roster shows everyone with active access. An admin appears here only if
+      // they hold a REAL grant (requested through the normal flow) — admins are not
+      // auto-enrolled. The frontend cross-references `admins` to badge them; their
+      // grant is revocable like any member's (revoking it leaves approval rights
+      // intact, since those come from the admin role, not the grant).
       //
       // Visibility: the roster is returned to every authenticated user, so it always
       // matches the public member count shown on the group list. Mutating actions

@@ -82,6 +82,24 @@ export const GroupMembersTab: React.FC<GroupMembersTabProps> = ({ group, onBanne
                 <Icons.User size={16} style={{ color: 'var(--text-light)' }} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <span style={{ fontWeight: 600, fontSize: '13.5px' }}>{cleanName(m.userName)}</span>
+                  {m.isAdmin && (
+                    <span
+                      title="Also a group admin — removing their membership keeps their approval rights"
+                      style={{
+                        marginLeft: '8px',
+                        fontSize: '10px',
+                        fontWeight: 800,
+                        letterSpacing: '0.04em',
+                        padding: '1px 7px',
+                        borderRadius: 999,
+                        background: 'var(--primary-light)',
+                        color: 'var(--primary)',
+                        border: '1px solid var(--primary)',
+                      }}
+                    >
+                      ADMIN
+                    </span>
+                  )}
                   <span style={{ color: 'var(--text-muted)', fontSize: '12px', marginLeft: '8px' }}>{m.userEmail}</span>
                 </div>
 
@@ -140,7 +158,9 @@ export const GroupMembersTab: React.FC<GroupMembersTabProps> = ({ group, onBanne
         loading={removeMutation.isPending}
         message={
           confirmRemove
-            ? `Remove ${cleanName(confirmRemove.userName)} from ${group.name}? This revokes their access on the platform.`
+            ? `Remove ${cleanName(confirmRemove.userName)} from ${group.name}? This revokes their access on the platform.${
+                confirmRemove.isAdmin ? ' They keep their group-admin (approval) rights.' : ''
+              }`
             : ''
         }
         onConfirm={() => confirmRemove && removeMutation.mutate(confirmRemove.id)}

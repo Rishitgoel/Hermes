@@ -194,9 +194,9 @@ export const requireRole = (requiredRoles: string[]) => {
 // authorization helpers in utils/authz.ts no longer consult JWT scoped roles — a
 // user is a platform/group admin iff a mirror row exists. The role-parsing helpers
 // below (getAdminGroupSlugsFromRoles, checkIsGroupAdmin, checkIsPlatformAdmin,
-// getPlatformAdminPlatformsFromRoles) are retained for back-compat and the cosmetic
-// group-list "admin" badge (group.controller) only — do NOT reintroduce them into
-// authorization decisions.
+// getPlatformAdminPlatformsFromRoles) currently have no callers; they are retained
+// only as back-compat reference for the role-name formats — do NOT reintroduce
+// them into authorization decisions.
 //
 // Parsing edge: a legacy slug-only role whose slug itself begins with a known
 // platform-key token (e.g. slug "redash-foo" → role hermes_group_admin_redash_foo)

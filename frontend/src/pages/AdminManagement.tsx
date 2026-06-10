@@ -314,7 +314,15 @@ export const AdminManagement: React.FC = () => {
           onSaved={(msg, record) => {
             setBanner({ type: 'success', text: msg });
             setShowCreate(false);
-            // Jump straight into the new group's drawer.
+            // The new group may live on a platform other than the active one — switch to
+            // it so the (platform-keyed) list shows it. Seed the list cache so the drawer
+            // opens immediately, before the invalidated query refetches with real counts.
+            setActivePlatform(record.platform);
+            queryClient.setQueryData<ManageableGroup[]>(queryKeys.adminGroups(record.platform), (old) => {
+              if ((old ?? []).some((g) => g.id === record.id)) return old;
+              const seeded: ManageableGroup = { ...record, memberCount: 0, adminCount: 0 };
+              return [...(old ?? []), seeded].sort((a, b) => a.name.localeCompare(b.name));
+            });
             setSelectedGroupId(record.id);
           }}
           onError={(msg) => setBanner({ type: 'error', text: msg })}
