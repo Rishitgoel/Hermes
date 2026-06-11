@@ -30,6 +30,40 @@ export const isSuperAdmin = (user: AuthenticatedUser): boolean =>
   user.roles.includes(SUPER_ADMIN_ROLE);
 
 /**
+ * Per-request memo of the user's mirror rows. Keyed on the request's user OBJECT
+ * (a fresh object is built per request in auth.middleware, both live and
+ * simulated), so the cache lives exactly as long as one request: handlers that
+ * call several authz helpers (isAnyAdmin → isPlatformAdminOf → ...) share two
+ * queries instead of issuing one per check. Safe because every handler
+ * authorizes BEFORE mutating admin rows — within a single request the snapshot
+ * never needs to observe its own writes.
+ */
+interface AuthzSnapshot {
+  /** Lower-cased platform keys from the user's PlatformAdmin rows. */
+  platformAdminPlatforms: Promise<Set<string>>;
+  /** groupIds from the user's GroupAdmin rows. */
+  groupAdminGroupIds: Promise<Set<string>>;
+}
+
+const snapshotCache = new WeakMap<AuthenticatedUser, AuthzSnapshot>();
+
+function getSnapshot(user: AuthenticatedUser): AuthzSnapshot {
+  let snap = snapshotCache.get(user);
+  if (!snap) {
+    snap = {
+      platformAdminPlatforms: prisma.platformAdmin
+        .findMany({ where: { userId: user.id }, select: { platform: true } })
+        .then((rows) => new Set(rows.map((r) => r.platform.toLowerCase()))),
+      groupAdminGroupIds: prisma.groupAdmin
+        .findMany({ where: { userId: user.id }, select: { groupId: true } })
+        .then((rows) => new Set(rows.map((r) => r.groupId))),
+    };
+    snapshotCache.set(user, snap);
+  }
+  return snap;
+}
+
+/**
  * True if the user can administer the given platform: super admin, or a
  * PlatformAdmin mirror row exists for (user, platform).
  */
@@ -38,12 +72,8 @@ export async function isPlatformAdminOf(
   platform: string,
 ): Promise<boolean> {
   if (isSuperAdmin(user)) return true;
-
-  const p = platform.toLowerCase();
-  const row = await prisma.platformAdmin.findUnique({
-    where: { userId_platform: { userId: user.id, platform: p } },
-  });
-  return !!row;
+  const platforms = await getSnapshot(user).platformAdminPlatforms;
+  return platforms.has(platform.toLowerCase());
 }
 
 /**
@@ -60,11 +90,9 @@ export async function isGroupAdminOf(
 ): Promise<boolean> {
   if (isSuperAdmin(user)) return true;
 
-  // Direct DB group-admin row.
-  const dbAdmin = await prisma.groupAdmin.findUnique({
-    where: { groupId_userId: { groupId, userId: user.id } },
-  });
-  if (dbAdmin) return true;
+  // Direct group-admin assignment.
+  const groupIds = await getSnapshot(user).groupAdminGroupIds;
+  if (groupIds.has(groupId)) return true;
 
   // Platform admin of the group's platform manages all its groups.
   const group = await prisma.group.findUnique({
@@ -83,11 +111,12 @@ export async function isGroupAdminOf(
  */
 export async function isAnyAdmin(user: AuthenticatedUser): Promise<boolean> {
   if (isSuperAdmin(user)) return true;
-  const [pa, ga] = await Promise.all([
-    prisma.platformAdmin.findFirst({ where: { userId: user.id }, select: { id: true } }),
-    prisma.groupAdmin.findFirst({ where: { userId: user.id }, select: { id: true } }),
+  const snap = getSnapshot(user);
+  const [platforms, groupIds] = await Promise.all([
+    snap.platformAdminPlatforms,
+    snap.groupAdminGroupIds,
   ]);
-  return !!pa || !!ga;
+  return platforms.size > 0 || groupIds.size > 0;
 }
 
 /**
@@ -98,12 +127,8 @@ export async function getManageablePlatforms(user: AuthenticatedUser): Promise<s
   if (isSuperAdmin(user)) {
     return provisioningRegistry.listPlatforms();
   }
-
-  const rows = await prisma.platformAdmin.findMany({
-    where: { userId: user.id },
-    select: { platform: true },
-  });
-  return Array.from(new Set(rows.map((r) => r.platform.toLowerCase())));
+  const platforms = await getSnapshot(user).platformAdminPlatforms;
+  return Array.from(platforms);
 }
 
 export interface AdminScopes {

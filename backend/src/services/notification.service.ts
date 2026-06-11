@@ -101,13 +101,21 @@ export class NotificationService {
     dm: string,
   ): Promise<number> {
     const seen = new Set<string>();
-    for (const r of recipients) {
-      if (seen.has(r.userId)) continue;
+    const unique = recipients.filter((r) => {
+      if (seen.has(r.userId)) return false;
       seen.add(r.userId);
-      await this.createNotification(r.userId, inApp.title, inApp.message, inApp.link);
-      await this.emailAndDm(r.email, email, dm);
-    }
-    return seen.size;
+      return true;
+    });
+    // Notify recipients concurrently — each channel already fails silently inside
+    // its own service, and allSettled guarantees one admin's failure can never
+    // skip another's notification (serial delivery made many-admin fan-outs drag).
+    await Promise.allSettled(
+      unique.map(async (r) => {
+        await this.createNotification(r.userId, inApp.title, inApp.message, inApp.link);
+        await this.emailAndDm(r.email, email, dm);
+      }),
+    );
+    return unique.length;
   }
 
   // User requests access -> notify Group + Platform admins (in-app + email + Slack DM) + team channel ping

@@ -143,6 +143,10 @@ model AccessRequest {
   level            GroupLevel?      @relation(fields: [levelId], references: [id])
   auditEntries     AuditEntry[]
 
+  // NOTE: a partial unique index (requester_id, group_id) WHERE status IN
+  // ('PENDING','WAITING_FOR_SETUP') enforces one OPEN request per (user, group);
+  // partial indexes can't be declared in Prisma, so it lives in the migration
+  // 20260611090000_add_open_request_unique (same pattern as user_accesses).
   @@index([requesterId])
   @@index([status])
   @@index([groupId, status])

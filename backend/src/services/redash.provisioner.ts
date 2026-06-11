@@ -20,6 +20,15 @@ import * as templates from '../utils/email-templates';
 const PLATFORM = 'redash';
 
 /**
+ * Don't prune a cache row that was written within this window. A user invited
+ * moments ago (whose row `inviteUser` just seeded) may not appear in a full
+ * Redash fetch that started before the invite landed — pruning the row would
+ * erase the externalUserId the account-creation flow depends on. Same guard
+ * the AWS adapter uses.
+ */
+const PRUNE_GRACE_MS = 10 * 60 * 1000; // 10 minutes
+
+/**
  * Redash implementation of {@link PlatformAdapter}.
  *
  * Fulfills the platform-agnostic adapter contract against Redash's HTTP API
@@ -163,21 +172,32 @@ export class RedashProvisioner implements PlatformAdapter {
     const redashGroups = await redashService.syncGroups();
     logger.info(`🔄 RedashProvisioner: Fetched ${redashGroups.length} groups from Redash.`);
 
-    for (const group of redashGroups) {
+    // Batch the upserts into chunked transactions instead of one serial
+    // round-trip per group (same pattern as the AWS adapter).
+    const upserts = redashGroups.map((group) => {
       const externalId = group.id.toString();
-      await prisma.platformExternalGroup.upsert({
+      return prisma.platformExternalGroup.upsert({
         where: { platform_externalId: { platform: PLATFORM, externalId } },
         update: { name: group.name, type: group.type, lastSyncedAt: now },
         create: { platform: PLATFORM, externalId, name: group.name, type: group.type, lastSyncedAt: now },
       });
+    });
+    for (let i = 0; i < upserts.length; i += 100) {
+      await prisma.$transaction(upserts.slice(i, i + 100));
     }
 
-    // Drop groups that no longer exist on Redash. Skip on an empty list: `notIn: []`
-    // matches every row, so a transient empty fetch would wipe the whole cache.
+    // Drop groups that no longer exist on Redash — but never one written within
+    // the grace window (a group created moments ago may miss this fetch). Skip on
+    // an empty list: `notIn: []` matches every row, so a transient empty fetch
+    // would wipe the whole cache.
     const activeIds = redashGroups.map(g => g.id.toString());
     if (activeIds.length > 0) {
       await prisma.platformExternalGroup.deleteMany({
-        where: { platform: PLATFORM, externalId: { notIn: activeIds } },
+        where: {
+          platform: PLATFORM,
+          externalId: { notIn: activeIds },
+          lastSyncedAt: { lt: new Date(now.getTime() - PRUNE_GRACE_MS) },
+        },
       });
     }
 
@@ -194,16 +214,26 @@ export class RedashProvisioner implements PlatformAdapter {
     const redashUsers = await redashService.syncUsers();
     logger.info(`🔄 RedashProvisioner: Fetched ${redashUsers.length} users from Redash.`);
 
-    for (const user of redashUsers) {
-      await this.upsertUserRow(user, now);
+    // Batch the upserts into chunked transactions instead of awaiting one per
+    // user sequentially (O(users) serial DB round-trips on every sync cycle).
+    const upserts = redashUsers.map((user) => this.buildUserUpsert(user, now));
+    for (let i = 0; i < upserts.length; i += 100) {
+      await prisma.$transaction(upserts.slice(i, i + 100));
     }
 
-    // Remove users that no longer exist on Redash. Skip on an empty list: `notIn: []`
-    // matches every row, so a transient empty fetch would wipe the whole cache.
+    // Remove users that no longer exist on Redash — guarded by the grace window
+    // AND isPending, so a freshly-invited user whose seeded cache row hasn't
+    // surfaced in a full fetch yet is never erased. Skip on an empty list:
+    // `notIn: []` matches every row, so a transient empty fetch would wipe the cache.
     const activeIds = redashUsers.map(u => u.id.toString());
     if (activeIds.length > 0) {
       await prisma.platformExternalUser.deleteMany({
-        where: { platform: PLATFORM, externalId: { notIn: activeIds } },
+        where: {
+          platform: PLATFORM,
+          externalId: { notIn: activeIds },
+          isPending: false,
+          lastSyncedAt: { lt: new Date(now.getTime() - PRUNE_GRACE_MS) },
+        },
       });
     }
 
@@ -233,11 +263,11 @@ export class RedashProvisioner implements PlatformAdapter {
 
   // ── Internal helpers ──────────────────────────────────────────────────────
 
-  /** Upsert one Redash user into the generic cache. */
-  private async upsertUserRow(
+  /** Build the upsert for one Redash user (not awaited — batched by callers). */
+  private buildUserUpsert(
     user: { id: number; name: string; email: string; is_disabled: boolean; is_invitation_pending: boolean; groups: number[] },
     now: Date,
-  ): Promise<void> {
+  ) {
     const externalId = user.id.toString();
     const row = {
       name: user.name,
@@ -248,27 +278,42 @@ export class RedashProvisioner implements PlatformAdapter {
       metadata: { groupIds: user.groups }, // keep the original int IDs for Redash-specific callers
       lastSyncedAt: now,
     };
-    await prisma.platformExternalUser.upsert({
+    return prisma.platformExternalUser.upsert({
       where: { platform_externalId: { platform: PLATFORM, externalId } },
       update: row,
       create: { platform: PLATFORM, externalId, ...row },
     });
   }
 
+  /** Upsert one Redash user into the generic cache (single-user fast path). */
+  private async upsertUserRow(
+    user: { id: number; name: string; email: string; is_disabled: boolean; is_invitation_pending: boolean; groups: number[] },
+    now: Date,
+  ): Promise<void> {
+    await this.buildUserUpsert(user, now);
+  }
+
   /** Recompute and persist member counts for every cached Redash group. */
   private async recomputeGroupMemberCounts(): Promise<void> {
     const [groups, users] = await Promise.all([
-      prisma.platformExternalGroup.findMany({ where: { platform: PLATFORM } }),
-      prisma.platformExternalUser.findMany({ where: { platform: PLATFORM } }),
+      prisma.platformExternalGroup.findMany({ where: { platform: PLATFORM }, select: { id: true, externalId: true } }),
+      prisma.platformExternalUser.findMany({ where: { platform: PLATFORM }, select: { externalGroupIds: true } }),
     ]);
-    const updates = groups.map(group => {
-      const count = users.filter(u => u.externalGroupIds.includes(group.externalId)).length;
-      return prisma.platformExternalGroup.update({
+    // Tally members per group in a single pass over users instead of an
+    // O(groups × users) nested scan (same pattern as the AWS adapter).
+    const counts = new Map<string, number>();
+    for (const u of users) {
+      for (const gid of u.externalGroupIds) {
+        counts.set(gid, (counts.get(gid) ?? 0) + 1);
+      }
+    }
+    const updates = groups.map(group =>
+      prisma.platformExternalGroup.update({
         where: { id: group.id },
-        data: { memberCount: count },
-      });
-    });
-    await prisma.$transaction(updates);
+        data: { memberCount: counts.get(group.externalId) ?? 0 },
+      }),
+    );
+    if (updates.length) await prisma.$transaction(updates);
   }
 
   /**
@@ -281,9 +326,20 @@ export class RedashProvisioner implements PlatformAdapter {
   private async notifyUserCreationWorkflow(
     users: Array<{ id: number; email: string; name: string; is_disabled?: boolean; is_invitation_pending: boolean }>,
   ): Promise<void> {
+    // Only users with a tracked account-creation request for this platform can be
+    // advanced. Prefetch those emails once so we don't issue a findUnique per
+    // synced user (an O(users) DB storm on every sync — same guard as AWS).
+    const tracked = await prisma.userCreationRequest.findMany({
+      where: { platform: PLATFORM },
+      select: { userEmail: true },
+    });
+    if (tracked.length === 0) return;
+    const trackedEmails = new Set(tracked.map((r) => r.userEmail.toLowerCase()));
+
     const { default: userCreationService } = await import('./user-creation.service');
     for (const u of users) {
       if (u.is_disabled) continue;
+      if (!trackedEmails.has(u.email.toLowerCase())) continue;
       try {
         await userCreationService.handlePlatformUserDetected(PLATFORM, {
           externalId: u.id.toString(),

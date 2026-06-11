@@ -6,6 +6,11 @@ import adminReconciliationService from './admin-reconciliation.service';
 import config from '../config/config';
 import logger from '../utils/logger';
 
+// How many expirations to process concurrently per batch. Each one makes a
+// platform API call (Redash / Identity Store deprovision) — unbounded fan-out
+// over a large backlog would hammer the platform and trip its rate limits.
+const EXPIRY_CONCURRENCY = 5;
+
 export class SchedulerService {
   private expiryJob: ScheduledTask | null = null;
   private platformSyncJob: ScheduledTask | null = null;
@@ -103,19 +108,24 @@ export class SchedulerService {
 
       logger.info(`⏰ Scheduler Service: Found ${expiredGrants.length} expired access grants. Starting revocation...`);
 
-      // Revoke concurrently — one slow platform call shouldn't hold up the rest.
-      // allSettled so a single failure is logged without aborting the batch.
-      const results = await Promise.allSettled(
-        expiredGrants.map(grant => accessWorkflowService.expireAccess(grant.id)),
-      );
-      results.forEach((result, i) => {
-        if (result.status === 'rejected') {
-          logger.error(
-            `⏰ Scheduler Service: Error expiring grant ${expiredGrants[i].id}:`,
-            result.reason?.message ?? result.reason,
-          );
-        }
-      });
+      // Revoke concurrently in bounded batches — one slow platform call shouldn't
+      // hold up the rest, but a big backlog must not fan out into hundreds of
+      // simultaneous platform calls either. allSettled so a single failure is
+      // logged without aborting the batch.
+      for (let i = 0; i < expiredGrants.length; i += EXPIRY_CONCURRENCY) {
+        const batch = expiredGrants.slice(i, i + EXPIRY_CONCURRENCY);
+        const results = await Promise.allSettled(
+          batch.map(grant => accessWorkflowService.expireAccess(grant.id)),
+        );
+        results.forEach((result, j) => {
+          if (result.status === 'rejected') {
+            logger.error(
+              `⏰ Scheduler Service: Error expiring grant ${batch[j].id}:`,
+              result.reason?.message ?? result.reason,
+            );
+          }
+        });
+      }
 
       logger.info('⏰ Scheduler Service: Completed processing expired access grants.');
     } catch (error: any) {

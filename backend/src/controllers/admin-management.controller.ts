@@ -463,14 +463,33 @@ export class AdminManagementController extends BaseController {
       const groupId = String(req.params.groupId);
       const group = await this.authorizeGroupManagement(groupId);
 
-      const [requestCount, accessCount] = await Promise.all([
+      let [requestCount, accessCount] = await Promise.all([
         prisma.accessRequest.count({ where: { groupId } }),
         prisma.userAccess.count({ where: { groupId } }),
       ]);
 
+      // The counts can go stale between the check and the delete (a request
+      // created in that window hits the FK Restrict as P2003) — treat that the
+      // same as "has history" and fall through to the archive path below.
+      let raced = false;
       if (requestCount === 0 && accessCount === 0) {
-        await prisma.group.delete({ where: { id: groupId } });
+        try {
+          await prisma.group.delete({ where: { id: groupId } });
+        } catch (err: any) {
+          if (err?.code !== 'P2003') throw err;
+          raced = true;
+          [requestCount, accessCount] = await Promise.all([
+            prisma.accessRequest.count({ where: { groupId } }),
+            prisma.userAccess.count({ where: { groupId } }),
+          ]);
+          logger.info(
+            { groupId, requestCount, accessCount },
+            'Group delete raced with a new reference — archiving instead',
+          );
+        }
+      }
 
+      if (requestCount === 0 && accessCount === 0 && !raced) {
         // Best-effort removal of the backing platform group — no one is affected
         // (the group had no members or requests). Don't fail the delete on cleanup error.
         if (group.externalGroupId) {

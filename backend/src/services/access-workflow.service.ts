@@ -17,6 +17,19 @@ type AccessRequestWithGroup = AccessRequest & { group: GroupRow; level?: LevelRo
 const MAX_EXPIRY_ATTEMPTS = 3;
 
 export class AccessWorkflowService {
+  /**
+   * Add months to now, clamping to the last day of the target month so a grant
+   * never silently overshoots (Jan 31 + 1 month = Feb 28/29, not Mar 3 — the
+   * default setMonth rolls the overflow into the next month).
+   */
+  private addMonthsClamped(months: number): Date {
+    const d = new Date();
+    const day = d.getDate();
+    d.setMonth(d.getMonth() + months);
+    if (d.getDate() !== day) d.setDate(0); // overflowed into the next month → clamp back
+    return d;
+  }
+
   private calculateExpiry(duration: AccessDuration): Date | null {
     switch (duration) {
       case AccessDuration.ONE_DAY:
@@ -24,17 +37,9 @@ export class AccessWorkflowService {
       case AccessDuration.ONE_WEEK:
         return new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
       case AccessDuration.ONE_MONTH:
-        {
-          const d = new Date();
-          d.setMonth(d.getMonth() + 1);
-          return d;
-        }
+        return this.addMonthsClamped(1);
       case AccessDuration.THREE_MONTHS:
-        {
-          const d = new Date();
-          d.setMonth(d.getMonth() + 3);
-          return d;
-        }
+        return this.addMonthsClamped(3);
       case AccessDuration.PERMANENT:
       default:
         return null;
@@ -115,19 +120,31 @@ export class AccessWorkflowService {
   ): Promise<AccessRequest> {
     const expiresAt = this.calculateExpiry(duration);
 
-    const request = await prisma.accessRequest.create({
-      data: {
-        groupId: group.id,
-        levelId: level?.id ?? null,
-        requesterId: requester.id,
-        requesterName: requester.username,
-        requesterEmail: requester.email,
-        justification,
-        duration,
-        expiresAt,
-        status: RequestStatus.PENDING,
-      },
-    });
+    let request: AccessRequest;
+    try {
+      request = await prisma.accessRequest.create({
+        data: {
+          groupId: group.id,
+          levelId: level?.id ?? null,
+          requesterId: requester.id,
+          requesterName: requester.username,
+          requesterEmail: requester.email,
+          justification,
+          duration,
+          expiresAt,
+          status: RequestStatus.PENDING,
+        },
+      });
+    } catch (err: any) {
+      // Partial unique index (requester_id, group_id) WHERE status IN
+      // (PENDING, WAITING_FOR_SETUP) fired: a concurrent submit (double-click,
+      // second tab) slipped past the check-then-create above. Surface it the same
+      // way the precheck would have.
+      if (err?.code === 'P2002') {
+        throw new ConflictError('You already have a pending request for this group.');
+      }
+      throw err;
+    }
 
     // Create Audit Log
     await prisma.auditEntry.create({
@@ -480,7 +497,7 @@ export class AccessWorkflowService {
 
     if (!isApprovedOrLater) {
       throw new UserNotApprovedError(
-        `Cannot approve this request — the requester is not yet an approved Hermes user on ${platform}. Approve their ${platform} account request first.`,
+        `Cannot approve this request — the requester is not yet an approved Hermes user on ${platform}. A super admin must approve their ${platform} account request first.`,
         { userCreationStatus: userCreation?.status ?? 'MISSING', platform },
       );
     }
@@ -574,6 +591,12 @@ export class AccessWorkflowService {
   ) {
     logger.info(`Starting provisioning for request ${request.id}...`);
 
+    // Set once the platform-side provision call has succeeded. If a LATER step
+    // fails (e.g. the level-swap transaction aborts on a concurrent revoke), the
+    // user has already been added to the external group with no Hermes grant
+    // backing it — flag that in the failure audit so it can be cleaned up manually.
+    let platformProvisioned: { externalUserId: string; externalGroupId: string } | null = null;
+
     try {
       // Platform routing happens here: the registry hands back the adapter
       // registered under this group's platform key (Redash today, AWS next).
@@ -602,6 +625,7 @@ export class AccessWorkflowService {
         metadata: { groupSlug: request.group.slug, levelSlug: request.level?.slug ?? null },
       });
       const externalUserId = result.externalUserId;
+      platformProvisioned = { externalUserId, externalGroupId };
 
       // Recompute expiry at provision time using the request's duration. Using the
       // value stored on AccessRequest (computed at request-create time) means a
@@ -730,7 +754,21 @@ export class AccessWorkflowService {
           targetUserName: request.requesterName,
           groupId: request.groupId,
           accessRequestId: request.id,
-          details: { error: err.message },
+          details: {
+            error: err.message,
+            // The platform call succeeded before a later step failed: the user may
+            // sit in the external group with no Hermes grant. Surfaced here (not
+            // auto-rolled-back: blindly deprovisioning could remove a membership a
+            // still-active grant legitimately points at, e.g. when a level shares
+            // the base group's external group).
+            ...(platformProvisioned
+              ? {
+                  orphanedPlatformMembership: true,
+                  ...platformProvisioned,
+                  note: 'Platform provision succeeded before the failure — the user may remain in the external group; manual cleanup may be required.',
+                }
+              : {}),
+          },
         },
       });
 
@@ -1004,6 +1042,10 @@ export class AccessWorkflowService {
         where: { id: { in: toReject.map((r) => r.id) } },
         data: {
           status: RequestStatus.REJECTED,
+          // Stamp the system as reviewer so rejected rows don't show an empty
+          // "reviewed by" in the UI (the audit entry below carries the same).
+          reviewerId: 'system_cascade',
+          reviewerName: 'System (cascade reject)',
           reviewNote: note,
           reviewedAt: now,
         },

@@ -30,6 +30,10 @@ export class GroupController extends BaseController {
         }),
         prisma.userAccess.findMany({
           where: { userId, isActive: true },
+          // Level included via the relation so the user's current level renders
+          // even when that level has since been deactivated (the public `levels`
+          // list below only carries active ones).
+          include: { level: { select: { name: true } } },
         }),
         // PENDING = awaiting admin review; WAITING_FOR_SETUP = approved but parked
         // until the requester finishes their platform-account setup. Both mean the
@@ -88,11 +92,10 @@ export class GroupController extends BaseController {
             permission: l.permission,
             rank: l.rank,
           })),
-          // The level the current user is actively granted on, if any.
+          // The level the current user is actively granted on, if any (resolved
+          // via the relation so a deactivated level still shows its name).
           currentLevelId: myAccess?.levelId ?? null,
-          currentLevelName: myAccess?.levelId
-            ? g.levels.find(l => l.id === myAccess.levelId)?.name ?? null
-            : null,
+          currentLevelName: myAccess?.level?.name ?? null,
           admins: g.admins.map(adm => ({
             userId: adm.userId,
             userName: adm.userName,
