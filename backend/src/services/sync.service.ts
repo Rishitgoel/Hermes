@@ -87,7 +87,11 @@ export class SyncService {
    *    backing group is deleted when the level reclaims it.
    *  - a platform group not yet represented in Hermes → auto-create an active
    *    Hermes group for it (unless the adapter marks it reserved — e.g. AWS's
-   *    API-TESTING permission group or Redash's built-in default/admin groups);
+   *    API-TESTING permission group or Redash's built-in default/admin groups).
+   *    A name parsing as "<existing group> — <level>" becomes a LEVEL of that
+   *    group instead of a standalone group, and a stray standalone group a
+   *    previous sync created from such a name is folded back into its parent
+   *    as a level (when still pristine);
    *  - an active Hermes group whose backing platform group vanished (or is
    *    reserved) → archive it (`isActive: false`) — never hard-delete, history
    *    and grants stay intact;
@@ -264,13 +268,97 @@ export class SyncService {
       relinkedGroups++;
     }
 
-    // ── 3. Create Hermes groups for platform groups Hermes doesn't know yet ──
+    // Lookup of (non-deleted) Hermes groups by normalized name — the parent
+    // resolver for the "<Group> — <Level>" naming convention below.
+    const parentByName = new Map<string, (typeof hermesGroups)[number]>();
+    for (const g of hermesGroups) {
+      if (!deletedGroupIds.has(g.id)) parentByName.set(this.normalizeName(g.name), g);
+    }
+
+    /** Attach a live platform group as a level of `parent`, reactivating the parent if needed. */
+    const attachLevel = async (
+      parent: (typeof hermesGroups)[number],
+      levelName: string,
+      externalGroupId: string,
+    ): Promise<void> => {
+      const slug = this.uniqueLevelSlug(levelName, parent.levels);
+      const rank = parent.levels.reduce((m, l) => Math.max(m, l.rank), -1) + 1;
+      const level = await prisma.groupLevel.create({
+        data: { groupId: parent.id, name: levelName, slug, externalGroupId, rank },
+      });
+      parent.levels.push(level);
+      referencedIds.add(externalGroupId);
+      await prisma.auditEntry.create({
+        data: {
+          action: 'GROUP_LEVEL_CREATED',
+          performerId: 'system',
+          performerName: 'Platform Sync',
+          groupId: parent.id,
+          details: { source: 'platform-sync', platform, levelId: level.id, name: levelName, slug, externalGroupId, autoCreated: true },
+        },
+      });
+      if (!parent.isActive) {
+        await prisma.group.update({ where: { id: parent.id }, data: { isActive: true } });
+        parent.isActive = true;
+        await prisma.auditEntry.create({
+          data: {
+            action: 'GROUP_UPDATED',
+            performerId: 'system',
+            performerName: 'Platform Sync',
+            groupId: parent.id,
+            details: { source: 'platform-sync', platform, slug: parent.slug, reactivated: true, reason: 'live level attached' },
+          },
+        });
+      }
+    };
+
+    // ── 3. Convert stray sync-created groups that are really levels ──
+    // A previous sync may have imported a level-backing platform group
+    // ("Credit Card — Admin") as a standalone Hermes group because the level
+    // structure was missing. If such a group is still pristine, its platform
+    // group is alive, and its name parses as "<existing group> — <level>",
+    // fold it back into the parent as a level.
+    let convertedToLevels = 0, levelsCreated = 0;
+    for (const [extId, stray] of [...pristineSyncGroupByExtId]) {
+      if (deletedGroupIds.has(stray.id)) continue;
+      if (!cachedIds.has(extId) || reservedIds.has(extId)) continue; // dead/reserved → archive pass handles it
+      const split = this.splitLevelName(stray.name, parentByName);
+      if (!split || split.parent.id === stray.id) continue;
+      await attachLevel(split.parent, split.levelName, extId);
+      await prisma.group.delete({ where: { id: stray.id } });
+      deletedGroupIds.add(stray.id);
+      pristineSyncGroupByExtId.delete(extId);
+      parentByName.delete(this.normalizeName(stray.name));
+      await prisma.auditEntry.create({
+        data: {
+          action: 'GROUP_DELETED',
+          performerId: 'system',
+          performerName: 'Platform Sync',
+          details: { source: 'platform-sync', platform, slug: stray.slug, externalGroupId: extId, reason: `converted into level "${split.levelName}" of "${split.parent.name}"` },
+        },
+      });
+      convertedToLevels++;
+    }
+
+    // ── 4. Create Hermes groups/levels for platform groups Hermes doesn't know yet ──
+    // Plain names first, so "Credit Card" exists before "Credit Card — Admin"
+    // tries to resolve it as its parent.
     const existingSlugs = new Set((await prisma.group.findMany({ select: { slug: true } })).map(g => g.slug));
     const existingNames = new Set(
       hermesGroups.filter(g => !deletedGroupIds.has(g.id)).map(g => this.normalizeName(g.name)),
     );
-    for (const ext of cached) {
-      if (reservedIds.has(ext.externalId) || referencedIds.has(ext.externalId)) continue;
+    const createCandidates = cached
+      .filter(ext => !reservedIds.has(ext.externalId) && !referencedIds.has(ext.externalId))
+      .sort((a, b) => Number(/[—–-]/.test(a.name)) - Number(/[—–-]/.test(b.name)));
+    for (const ext of createCandidates) {
+      if (referencedIds.has(ext.externalId)) continue; // claimed by a level created earlier in this loop
+      // "<Group> — <Level>" with a known parent → it's a level, not a group.
+      const split = this.splitLevelName(ext.name, parentByName);
+      if (split) {
+        await attachLevel(split.parent, split.levelName, ext.externalId);
+        levelsCreated++;
+        continue;
+      }
       if (existingNames.has(this.normalizeName(ext.name))) {
         // A group with this name already exists on this platform but maps to a
         // different (or no) external group — ambiguous, leave it to the admin.
@@ -289,6 +377,8 @@ export class SyncService {
       });
       existingSlugs.add(slug);
       existingNames.add(this.normalizeName(ext.name));
+      referencedIds.add(ext.externalId);
+      parentByName.set(this.normalizeName(group.name), { ...group, levels: [], _count: { accessRequests: 0, userAccesses: 0 } });
       await prisma.auditEntry.create({
         data: {
           action: 'GROUP_CREATED',
@@ -301,7 +391,7 @@ export class SyncService {
       created++;
     }
 
-    // ── 4. Deactivate levels whose backing platform group vanished ──
+    // ── 5. Deactivate levels whose backing platform group vanished ──
     for (const g of hermesGroups) {
       if (deletedGroupIds.has(g.id)) continue;
       for (const level of g.levels) {
@@ -323,7 +413,7 @@ export class SyncService {
       }
     }
 
-    // ── 5. Archive active Hermes groups whose backing platform group vanished ──
+    // ── 6. Archive active Hermes groups whose backing platform group vanished ──
     for (const g of hermesGroups) {
       if (deletedGroupIds.has(g.id)) continue;
       if (!g.isActive || !g.externalGroupId) continue;
@@ -346,9 +436,9 @@ export class SyncService {
       archived++;
     }
 
-    if (created || archived || levelsDeactivated || relinkedGroups || relinkedLevels || duplicatesDeleted) {
+    if (created || levelsCreated || archived || levelsDeactivated || relinkedGroups || relinkedLevels || duplicatesDeleted || convertedToLevels) {
       logger.info(
-        { platform, created, archived, levelsDeactivated, relinkedGroups, relinkedLevels, duplicatesDeleted },
+        { platform, created, levelsCreated, archived, levelsDeactivated, relinkedGroups, relinkedLevels, duplicatesDeleted, convertedToLevels },
         '🔄 SyncService: Hermes groups reconciled with platform',
       );
     }
@@ -361,6 +451,40 @@ export class SyncService {
    */
   private normalizeName(name: string): string {
     return name.toLowerCase().replace(/\s*[—–-]+\s*/g, ' — ').replace(/\s+/g, ' ').trim();
+  }
+
+  /**
+   * Try to parse a platform group name as "<Parent> — <Level>" against the known
+   * Hermes groups of the platform. Tries every dash position (so a hyphen inside
+   * the parent's own name can't break the match) and returns the first split
+   * whose prefix is an existing group. Null when the name isn't a level of any
+   * known group.
+   */
+  private splitLevelName<T>(
+    rawName: string,
+    parentByName: Map<string, T>,
+  ): { parent: T; levelName: string } | null {
+    const sep = /\s*[—–-]+\s*/g;
+    let m: RegExpExecArray | null;
+    while ((m = sep.exec(rawName)) !== null) {
+      const prefix = rawName.slice(0, m.index);
+      const levelName = rawName.slice(m.index + m[0].length);
+      if (!prefix || !levelName) continue;
+      const parent = parentByName.get(this.normalizeName(prefix));
+      if (parent) return { parent, levelName };
+    }
+    return null;
+  }
+
+  /** Derive a level slug from its name, unique within the parent's levels. */
+  private uniqueLevelSlug(name: string, siblings: Array<{ slug: string }>): string {
+    const taken = new Set(siblings.map(l => l.slug));
+    const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'level';
+    if (!taken.has(base)) return base;
+    for (let i = 2; ; i++) {
+      const candidate = `${base}-${i}`;
+      if (!taken.has(candidate)) return candidate;
+    }
   }
 
   /** Derive a URL-safe slug from a platform group name, unique across all groups. */

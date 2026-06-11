@@ -272,6 +272,78 @@ describe('SyncService.reconcileHermesGroups', () => {
     expect(afterLevel!.isActive).toBe(false);
   });
 
+  it('imports "<Group> — <Level>" platform groups as levels, not standalone groups', async () => {
+    await seedCache([
+      cacheRow('ext-cc', 'Credit Card'),
+      cacheRow('ext-cc-admin', 'Credit Card — Admin'),
+      cacheRow('ext-cc-senior', 'Credit Card — Senior Dev'),
+    ]);
+
+    await syncService.reconcileHermesGroups('aws', liveAdapter);
+
+    const groups = await prisma.group.findMany({ include: { levels: { orderBy: { rank: 'asc' } } } });
+    expect(groups).toHaveLength(1); // ONE group...
+    expect(groups[0].name).toBe('Credit Card');
+    expect(groups[0].externalGroupId).toBe('ext-cc');
+    // ...with the dashed names as its levels.
+    expect(groups[0].levels.map(l => ({ name: l.name, ext: l.externalGroupId, active: l.isActive }))).toEqual([
+      { name: 'Admin', ext: 'ext-cc-admin', active: true },
+      { name: 'Senior Dev', ext: 'ext-cc-senior', active: true },
+    ]);
+  });
+
+  it('attaches a new "<Group> — <Level>" platform group as a level of an existing Hermes group', async () => {
+    const g = await seedGroup({ name: 'Credit Card', slug: 'credit-card', externalGroupId: 'ext-cc' });
+    await seedCache([cacheRow('ext-cc', 'Credit Card'), cacheRow('ext-cc-admin', 'Credit Card — Admin')]);
+
+    await syncService.reconcileHermesGroups('aws', liveAdapter);
+
+    expect(await prisma.group.count()).toBe(1);
+    const levels = await prisma.groupLevel.findMany({ where: { groupId: g.id } });
+    expect(levels).toHaveLength(1);
+    expect(levels[0].name).toBe('Admin');
+    expect(levels[0].externalGroupId).toBe('ext-cc-admin');
+  });
+
+  it('converts a stray sync-created "<Group> — <Level>" group back into a level of its parent', async () => {
+    // The exact mess the old sync left behind: parent group + dashed standalone groups.
+    const parent = await seedGroup({ name: 'Credit Card', slug: 'redash-credit-card', externalGroupId: '8' });
+    const strayAdmin = await seedGroup({ name: 'Credit Card — Admin', slug: 'credit-card-admin', externalGroupId: '9' });
+    const straySenior = await seedGroup({ name: 'Credit Card — Senior Dev', slug: 'credit-card-senior-dev', externalGroupId: '10' });
+    for (const stray of [strayAdmin, straySenior]) {
+      await prisma.auditEntry.create({
+        data: { action: 'GROUP_CREATED', performerId: 'system', performerName: 'Platform Sync', groupId: stray.id },
+      });
+    }
+    await seedCache([
+      cacheRow('8', 'Credit Card'),
+      cacheRow('9', 'Credit Card — Admin'),
+      cacheRow('10', 'Credit Card — Senior Dev'),
+    ]);
+
+    await syncService.reconcileHermesGroups('aws', liveAdapter);
+
+    expect(await prisma.group.count()).toBe(1); // strays gone
+    const levels = await prisma.groupLevel.findMany({ where: { groupId: parent.id }, orderBy: { rank: 'asc' } });
+    expect(levels.map(l => ({ name: l.name, ext: l.externalGroupId, active: l.isActive }))).toEqual([
+      { name: 'Admin', ext: '9', active: true },
+      { name: 'Senior Dev', ext: '10', active: true },
+    ]);
+    expect(await prisma.auditEntry.count({ where: { action: 'GROUP_DELETED' } })).toBe(2);
+  });
+
+  it('does NOT convert an admin-created dashed group into a level', async () => {
+    await seedGroup({ name: 'Credit Card', slug: 'credit-card', externalGroupId: '8' });
+    // Dashed name, but created by an admin (no system GROUP_CREATED audit) — leave it alone.
+    const adminGroup = await seedGroup({ name: 'Credit Card — Admin', slug: 'credit-card-admin', externalGroupId: '9' });
+    await seedCache([cacheRow('8', 'Credit Card'), cacheRow('9', 'Credit Card — Admin')]);
+
+    await syncService.reconcileHermesGroups('aws', liveAdapter);
+
+    expect(await prisma.group.findUnique({ where: { id: adminGroup.id } })).not.toBeNull();
+    expect(await prisma.groupLevel.count()).toBe(0);
+  });
+
   it('does not reactivate an archived group whose backing group still exists (admin intent wins)', async () => {
     const g = await seedGroup({ isActive: false });
     await seedCache([cacheRow('ext-growth', 'Growth')]);
