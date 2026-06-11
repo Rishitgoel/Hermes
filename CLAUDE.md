@@ -267,9 +267,18 @@ A `Group` can carry **levels** (`GroupLevel`, table `group_levels`) — e.g. Cre
 ## Verification commands (run after non-trivial changes)
 
 ```powershell
-# Always
+# Always (typecheck)
 cd "D:\Bachatt\Hermes 2\backend"; npx tsc --noEmit
 cd "D:\Bachatt\Hermes 2\frontend"; npx tsc --noEmit
+
+# Run all tests (requires Docker/Postgres running for Testcontainers)
+npm test
+
+# Run backend tests only
+cd "D:\Bachatt\Hermes 2\backend"; npm run test:run
+
+# Run frontend tests only
+cd "D:\Bachatt\Hermes 2\frontend"; npm run test:run
 
 # If you changed Prisma schema
 cd "D:\Bachatt\Hermes 2\backend"; npx prisma validate --schema=prisma/hermes/schema.prisma
@@ -277,7 +286,7 @@ cd "D:\Bachatt\Hermes 2\backend"; npx prisma validate --schema=prisma/hermes/sch
 # If you changed frontend
 cd "D:\Bachatt\Hermes 2\frontend"; npm run lint
 
-# Frontend lint exists (eslint flat config). Tests don't exist yet (P2-1). Backend lint doesn't exist yet (P2-3). CI doesn't exist yet (P2-4).
+# Frontend lint exists. Tests exist (P2-1). Backend lint doesn't exist yet (P2-3). CI doesn't exist yet (P2-4).
 ```
 
 Tell the user what passed/failed before reporting "done."
@@ -302,7 +311,7 @@ Tell the user what passed/failed before reporting "done."
 - ✅ Onboarding copy is adapter-owned (`getOnboardingMessage()`); platform notification copy is platform-aware (no hardcoded "Redash")
 - ✅ Platform ACTIVE/COMING_SOON derived from the registry via `GET /api/platforms` — `frontend/src/lib/platforms.ts` is presentation-only
 - ✅ Frontend ESLint wired (`cd frontend; npm run lint`)
-- ❌ No tests
+- ✅ Vitest test suite implemented (P2-1)
 - ❌ No CI
 - ❌ No backend linter (frontend has one)
 
