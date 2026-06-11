@@ -186,6 +186,92 @@ describe('SyncService.reconcileHermesGroups', () => {
     expect(await prisma.group.count()).toBe(1); // no duplicate "Growth"
   });
 
+  it('re-links a group whose backing group was recreated under a new id, instead of archiving it', async () => {
+    const g = await seedGroup({ isActive: false }); // archived by a previous run; ext-growth is dead
+    await seedCache([cacheRow('ext-growth-NEW', 'Growth')]);
+
+    await syncService.reconcileHermesGroups('aws', liveAdapter);
+
+    const after = await prisma.group.findUnique({ where: { id: g.id } });
+    expect(after!.externalGroupId).toBe('ext-growth-NEW');
+    expect(after!.isActive).toBe(true);
+    expect(await prisma.group.count()).toBe(1); // no duplicate created
+    const audit = await prisma.auditEntry.findFirst({ where: { action: 'GROUP_UPDATED', groupId: g.id } });
+    expect((audit!.details as any).relinkedTo).toBe('ext-growth-NEW');
+  });
+
+  it('re-links a level by the "<Group> — <Level>" convention and reactivates it and its parent', async () => {
+    const g = await seedGroup({ name: 'Credit Card', slug: 'credit-card', externalGroupId: null, isActive: false });
+    const level = await prisma.groupLevel.create({
+      data: { groupId: g.id, name: 'Admin', slug: 'admin', externalGroupId: 'ext-dead', rank: 3, isActive: false, createdAt: OLD },
+    });
+    await seedCache([cacheRow('ext-cc-admin-NEW', 'Credit Card — Admin')]);
+
+    await syncService.reconcileHermesGroups('aws', liveAdapter);
+
+    const afterLevel = await prisma.groupLevel.findUnique({ where: { id: level.id } });
+    expect(afterLevel!.externalGroupId).toBe('ext-cc-admin-NEW');
+    expect(afterLevel!.isActive).toBe(true);
+    expect((await prisma.group.findUnique({ where: { id: g.id } }))!.isActive).toBe(true);
+    expect(await prisma.group.count()).toBe(1); // the level's backing group did NOT become a standalone group
+  });
+
+  it('level matching is dash- and case-insensitive ("Credit Card - admin" matches level Admin of Credit Card)', async () => {
+    const g = await seedGroup({ name: 'Credit Card', slug: 'credit-card', externalGroupId: null });
+    const level = await prisma.groupLevel.create({
+      data: { groupId: g.id, name: 'Admin', slug: 'admin', externalGroupId: 'ext-dead', rank: 3, createdAt: OLD },
+    });
+    await seedCache([cacheRow('ext-new', 'credit card - ADMIN')]);
+
+    await syncService.reconcileHermesGroups('aws', liveAdapter);
+
+    expect((await prisma.groupLevel.findUnique({ where: { id: level.id } }))!.externalGroupId).toBe('ext-new');
+    expect(await prisma.group.count()).toBe(1);
+  });
+
+  it('deletes the pristine duplicate a previous sync auto-created when a level reclaims its backing group', async () => {
+    // Parent group with a level pointing at a dead id...
+    const g = await seedGroup({ name: 'Credit Card', slug: 'credit-card', externalGroupId: null, isActive: false });
+    const level = await prisma.groupLevel.create({
+      data: { groupId: g.id, name: 'Admin', slug: 'admin', externalGroupId: 'ext-dead', rank: 3, isActive: false, createdAt: OLD },
+    });
+    // ...and the stray standalone group a previous (buggy) sync created for the
+    // level's recreated backing group, marked by its system GROUP_CREATED audit.
+    const stray = await seedGroup({ name: 'Credit Card — Admin', slug: 'credit-card-admin', externalGroupId: 'ext-cc-admin-NEW' });
+    await prisma.auditEntry.create({
+      data: { action: 'GROUP_CREATED', performerId: 'system', performerName: 'Platform Sync', groupId: stray.id },
+    });
+    await seedCache([cacheRow('ext-cc-admin-NEW', 'Credit Card — Admin')]);
+
+    await syncService.reconcileHermesGroups('aws', liveAdapter);
+
+    expect(await prisma.group.findUnique({ where: { id: stray.id } })).toBeNull(); // duplicate gone
+    const afterLevel = await prisma.groupLevel.findUnique({ where: { id: level.id } });
+    expect(afterLevel!.externalGroupId).toBe('ext-cc-admin-NEW');
+    expect(afterLevel!.isActive).toBe(true);
+    expect((await prisma.group.findUnique({ where: { id: g.id } }))!.isActive).toBe(true);
+    const delAudit = await prisma.auditEntry.findFirst({ where: { action: 'GROUP_DELETED' } });
+    expect(delAudit).not.toBeNull();
+  });
+
+  it('does NOT delete an admin-created group to heal a level (only sync-created pristine duplicates)', async () => {
+    const g = await seedGroup({ name: 'Credit Card', slug: 'credit-card', externalGroupId: null });
+    const level = await prisma.groupLevel.create({
+      data: { groupId: g.id, name: 'Admin', slug: 'admin', externalGroupId: 'ext-dead', rank: 3, createdAt: OLD },
+    });
+    // Same name + claims the candidate id, but created by an admin (no system audit).
+    const adminGroup = await seedGroup({ name: 'Credit Card — Admin', slug: 'credit-card-admin', externalGroupId: 'ext-cc-admin-NEW' });
+    await seedCache([cacheRow('ext-cc-admin-NEW', 'Credit Card — Admin')]);
+
+    await syncService.reconcileHermesGroups('aws', liveAdapter);
+
+    expect(await prisma.group.findUnique({ where: { id: adminGroup.id } })).not.toBeNull();
+    // Level stays broken (and gets deactivated) rather than stealing an admin-owned mapping.
+    const afterLevel = await prisma.groupLevel.findUnique({ where: { id: level.id } });
+    expect(afterLevel!.externalGroupId).toBe('ext-dead');
+    expect(afterLevel!.isActive).toBe(false);
+  });
+
   it('does not reactivate an archived group whose backing group still exists (admin intent wins)', async () => {
     const g = await seedGroup({ isActive: false });
     await seedCache([cacheRow('ext-growth', 'Growth')]);
