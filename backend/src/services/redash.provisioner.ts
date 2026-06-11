@@ -148,6 +148,19 @@ export class RedashProvisioner implements PlatformAdapter {
     }
   }
 
+  /** Whether the adapter is returning mock data instead of hitting Redash. */
+  isSimulation(): boolean {
+    return config.redash.isSimulation;
+  }
+
+  /**
+   * Redash's built-in groups ("default" — every user, "admin" — instance admins)
+   * must never surface as requestable Hermes groups.
+   */
+  isReservedExternalGroup(group: { externalId: string; name: string; type?: string | null }): boolean {
+    return group.type === 'builtin';
+  }
+
   /** Onboarding nudge shown once a user's Redash account is fully set up. */
   getOnboardingMessage(): OnboardingMessage {
     return {

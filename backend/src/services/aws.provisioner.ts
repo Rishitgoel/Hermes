@@ -28,6 +28,14 @@ const PLATFORM = 'aws';
 const PRUNE_GRACE_MS = 10 * 60 * 1000; // 10 minutes
 
 /**
+ * Identity Center groups that must never surface as requestable Hermes groups.
+ * API-TESTING holds the service user's own create/delete/add-member permissions
+ * — exposing it would let any approved request grant those admin rights.
+ * Compared case-insensitively against the group's display name.
+ */
+const RESERVED_GROUP_NAMES = ['API-TESTING'];
+
+/**
  * AWS IAM Identity Center implementation of {@link PlatformAdapter}.
  *
  * Translates the platform-agnostic adapter contract into Identity Store calls via
@@ -108,6 +116,16 @@ export class AwsProvisioner implements PlatformAdapter {
 
   async healthCheck(): Promise<{ healthy: boolean; message?: string }> {
     return awsIdentityCenterService.healthCheck();
+  }
+
+  /** Whether the adapter is running against the in-process mock store. */
+  isSimulation(): boolean {
+    return config.aws.isSimulation;
+  }
+
+  /** Hide the service user's own permission group from the request flow. */
+  isReservedExternalGroup(group: { externalId: string; name: string; type?: string | null }): boolean {
+    return RESERVED_GROUP_NAMES.some(n => n.toLowerCase() === group.name.toLowerCase());
   }
 
   /** The AWS SSO access portal users sign in through (null when unconfigured). */

@@ -137,6 +137,24 @@ export interface PlatformAdapter {
   /** Optional: delete a backing group on the platform by its external id. */
   deleteExternalGroup?(externalGroupId: string): Promise<void>;
 
+  /**
+   * Optional: whether this adapter is currently running against a mock/simulated
+   * backend instead of the real platform. SyncService uses this to skip the
+   * Hermes-group reconciliation in simulation mode (so local dev seed data isn't
+   * archived/replaced to match the in-process mock store) — same live-only rule
+   * the admin reconciliation follows. Adapters that omit it are treated as live.
+   */
+  isSimulation?(): boolean;
+
+  /**
+   * Optional: marks a platform group that must NEVER surface as a requestable
+   * Hermes group — e.g. AWS's API-TESTING group (it carries the service user's
+   * own admin permissions) or Redash's built-in default/admin groups. The
+   * Hermes-group reconciliation skips creating these and archives any active
+   * Hermes group that points at one. It does NOT delete anything on the platform.
+   */
+  isReservedExternalGroup?(group: { externalId: string; name: string; type?: string | null }): boolean;
+
   /** Liveness probe surfaced on the `/health` endpoint. */
   healthCheck(): Promise<{ healthy: boolean; message?: string }>;
 
