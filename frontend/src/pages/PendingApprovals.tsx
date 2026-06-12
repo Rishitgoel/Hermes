@@ -209,54 +209,22 @@ export const PendingApprovals: React.FC = () => {
         </span>
       </div>
 
-      {/* Success and Error Banners */}
+      {/* Success and Error Banners — bulk results stay inline (per-item detail), not toasts */}
       {bulkSuccess && (
-        <div style={{
-          backgroundColor: 'var(--status-approved-bg)',
-          color: 'var(--status-approved-text)',
-          padding: '16px',
-          borderRadius: 'var(--radius-md)',
-          fontSize: '14px',
-          fontWeight: 600,
-          marginBottom: '20px',
-          border: '1px solid var(--status-approved-text)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '10px'
-        }}>
+        <div className="banner banner-success">
           <Icons.CheckCircle2 size={20} />
-          <div style={{ flex: 1 }}>{bulkSuccess}</div>
-          <button 
-            type="button" 
-            onClick={() => setBulkSuccess(null)} 
-            style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
-          >
+          <div className="banner-body">{bulkSuccess}</div>
+          <button type="button" className="banner-close" onClick={() => setBulkSuccess(null)}>
             <Icons.X size={16} />
           </button>
         </div>
       )}
 
       {bulkError && (
-        <div style={{
-          backgroundColor: 'var(--status-rejected-bg)',
-          color: 'var(--status-rejected-text)',
-          padding: '16px',
-          borderRadius: 'var(--radius-md)',
-          fontSize: '14px',
-          fontWeight: 600,
-          marginBottom: '20px',
-          border: '1px solid var(--status-rejected-text)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '10px'
-        }}>
+        <div className="banner banner-error">
           <Icons.AlertTriangle size={20} />
-          <div style={{ flex: 1 }}>{bulkError}</div>
-          <button 
-            type="button" 
-            onClick={() => setBulkError(null)} 
-            style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
-          >
+          <div className="banner-body">{bulkError}</div>
+          <button type="button" className="banner-close" onClick={() => setBulkError(null)}>
             <Icons.X size={16} />
           </button>
         </div>
@@ -349,7 +317,7 @@ export const PendingApprovals: React.FC = () => {
                                 <button 
                                   type="button" 
                                   className="btn btn-outline" 
-                                  style={{ padding: '4px 8px', fontSize: '11px', borderRadius: '4px', height: 'auto' }}
+                                  style={{ padding: '4px 8px', fontSize: '12px', borderRadius: '4px', height: 'auto' }}
                                   onClick={() => handleClearNote(req.id)}
                                 >
                                   Clear
@@ -357,7 +325,7 @@ export const PendingApprovals: React.FC = () => {
                                 <button 
                                   type="button" 
                                   className="btn btn-primary"
-                                  style={{ padding: '4px 8px', fontSize: '11px', borderRadius: '4px', height: 'auto' }}
+                                  style={{ padding: '4px 8px', fontSize: '12px', borderRadius: '4px', height: 'auto' }}
                                   onClick={() => handleSaveNote(req.id)}
                                 >
                                   Save
@@ -388,16 +356,8 @@ export const PendingApprovals: React.FC = () => {
 
                         {isBlocked && (
                           <span
-                            style={{
-                              fontSize: '11px',
-                              fontWeight: 700,
-                              padding: '2px 8px',
-                              borderRadius: '999px',
-                              background: 'hsl(38, 92%, 94%)',
-                              color: 'hsl(32, 85%, 33%)',
-                              border: '1px solid hsl(32, 85%, 60%)',
-                              whiteSpace: 'nowrap',
-                            }}
+                            className="badge badge-pending badge-sm"
+                            style={{ whiteSpace: 'nowrap' }}
                             title="Approve this user in User Approvals first"
                           >
                             Approve user first
@@ -470,10 +430,9 @@ export const PendingApprovals: React.FC = () => {
                   <Icons.CheckSquare size={18} style={{ color: 'var(--primary)' }} />
                   Review {checkedRequestIds.length} Selected Request(s)
                 </div>
-                <button 
-                  type="button" 
-                  className="btn btn-outline" 
-                  style={{ padding: '6px 12px', fontSize: '12px' }}
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
                   onClick={() => {
                     setSelectedRequests({});
                     setCustomNotes({});
@@ -518,8 +477,8 @@ export const PendingApprovals: React.FC = () => {
                 <div style={{ display: 'flex', gap: '12px' }}>
                   <button
                     type="button"
-                    className="btn btn-outline"
-                    style={{ borderColor: 'var(--status-rejected-text)', color: 'var(--status-rejected-text)', gap: '6px' }}
+                    className="btn btn-outline btn-danger-outline"
+                    style={{ gap: '6px' }}
                     onClick={() => handleBulkReview('REJECTED')}
                     disabled={isSubmitting}
                   >

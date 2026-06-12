@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import apiClient from '../services/apiClient';
 import LoadingSpinner from '../components/common/LoadingSpinner';
-import { Scroll, Search, RefreshCw, ChevronLeft, ChevronRight, CheckCircle2 } from 'lucide-react';
+import { Scroll, Search, RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react';
 import { queryKeys } from '../lib/queryKeys';
 import { fetchPlatforms } from '../services/api/platforms';
 import { useToast } from '../contexts/ToastContext';
@@ -39,8 +39,6 @@ export const AuditLog: React.FC = () => {
   const [groupFilter, setGroupFilter] = useState('');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
-
-  const [syncStatus, setSyncStatus] = useState<string | null>(null);
 
   // Dropdown data for the platform / group filters.
   const { data: platforms = [] } = useQuery({
@@ -99,9 +97,8 @@ export const AuditLog: React.FC = () => {
   const syncMutation = useMutation({
     mutationFn: () => apiClient.post('/api/admin/sync').then((r) => r.data),
     onSuccess: (data: { usersSynced: number; groupsSynced: number }) => {
-      setSyncStatus(`Sync success! Imported ${data.usersSynced} users and ${data.groupsSynced} groups.`);
+      toast.success(`Sync success! Imported ${data.usersSynced} users and ${data.groupsSynced} groups.`);
       queryClient.invalidateQueries({ queryKey: ['audit'] });
-      setTimeout(() => setSyncStatus(null), 5000);
     },
     onError: (err: any) => {
       toast.error(`Sync failed: ${err.message}`);
@@ -158,24 +155,6 @@ export const AuditLog: React.FC = () => {
       <div className="section-header">
         <h1 style={{ fontSize: '28px' }}>Platform Audit Log</h1>
 
-        {/* Sync Trigger button */}
-        {syncStatus && (
-          <div style={{
-            backgroundColor: 'var(--status-approved-bg)',
-            color: 'var(--status-approved-text)',
-            padding: '8px 16px',
-            borderRadius: 'var(--radius-sm)',
-            fontSize: '13px',
-            fontWeight: 700,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px'
-          }}>
-            <CheckCircle2 size={16} />
-            {syncStatus}
-          </div>
-        )}
-
         <button
           className="btn btn-primary"
           onClick={() => syncMutation.mutate()}
@@ -189,7 +168,7 @@ export const AuditLog: React.FC = () => {
 
       {/* Filter and Search Bar */}
       <div style={{
-        backgroundColor: 'white',
+        backgroundColor: 'var(--bg-card)',
         padding: '20px',
         borderRadius: 'var(--radius-lg)',
         border: '1px solid var(--border)',
@@ -201,13 +180,12 @@ export const AuditLog: React.FC = () => {
         flexWrap: 'wrap'
       }}>
         <form onSubmit={handleSearchSubmit} style={{ display: 'flex', gap: '8px', flex: 1, minWidth: '280px' }}>
-          <div style={{ position: 'relative', flex: 1 }}>
-            <Search size={18} style={{ position: 'absolute', top: '12px', left: '16px', color: 'var(--text-light)' }} />
+          <div className="form-input-with-icon" style={{ flex: 1 }}>
+            <Search size={18} />
             <input
               type="text"
               className="form-input"
               placeholder="Search performer or target user..."
-              style={{ paddingLeft: '44px' }}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -312,8 +290,7 @@ export const AuditLog: React.FC = () => {
         {(actionFilter || platformFilter || groupFilter || fromDate || toDate || submittedSearch) && (
           <button
             type="button"
-            className="btn btn-outline"
-            style={{ padding: '8px 12px', fontSize: '12px' }}
+            className="btn btn-outline btn-sm"
             onClick={() => {
               setActionFilter('');
               setPlatformFilter('');
@@ -417,12 +394,6 @@ export const AuditLog: React.FC = () => {
         </>
       )}
 
-      <style>{`
-        @keyframes spin {
-          from { transform: rotate(0deg); }
-          to { transform: rotate(360deg); }
-        }
-      `}</style>
     </div>
   );
 };
