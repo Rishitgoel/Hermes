@@ -5,6 +5,7 @@ import apiClient from '../services/apiClient';
 import { getMyUserCreation } from '../services/api/userCreation';
 import { fetchPlatforms } from '../services/api/platforms';
 import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
 import PlatformInviteModal from '../components/access/PlatformInviteModal';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../lib/queryKeys';
@@ -305,26 +306,10 @@ export const Groups: React.FC = () => {
 
         {/* Info Banner */}
         {infoMessage && (
-          <div style={{
-            backgroundColor: 'var(--primary-light)',
-            color: 'var(--primary)',
-            padding: '16px',
-            borderRadius: 'var(--radius-md)',
-            fontSize: '14px',
-            fontWeight: 600,
-            marginBottom: '24px',
-            border: '1px solid var(--border-focus)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '10px'
-          }}>
+          <div className="banner banner-info" style={{ marginBottom: '24px' }}>
             <Icons.Info size={20} />
-            <div style={{ flex: 1 }}>{infoMessage}</div>
-            <button 
-              type="button" 
-              onClick={() => setInfoMessage(null)} 
-              style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
-            >
+            <div className="banner-body">{infoMessage}</div>
+            <button type="button" className="banner-close" onClick={() => setInfoMessage(null)}>
               <Icons.X size={16} />
             </button>
           </div>
@@ -348,10 +333,9 @@ export const Groups: React.FC = () => {
                 style={{
                   '--card-accent-color': platform.color,
                   cursor: 'pointer',
-                  opacity: isActive ? 1 : 0.8,
+                  opacity: isActive ? 1 : 0.7,
                   minHeight: '220px',
-                  background: isActive ? 'var(--bg-card)' : 'rgba(255, 255, 255, 0.45)',
-                  borderColor: isActive ? 'var(--border)' : 'dashed var(--border)',
+                  background: 'var(--bg-card)',
                   display: 'flex',
                   flexDirection: 'column',
                   justifyContent: 'space-between',
@@ -360,9 +344,9 @@ export const Groups: React.FC = () => {
               >
                 <div>
                   <div className="group-card-header" style={{ marginBottom: '12px' }}>
-                    <div className="group-icon-box" style={{ 
-                      background: isActive ? 'var(--primary-light)' : '#f3f4f6', 
-                      color: platform.color 
+                    <div className="group-icon-box" style={{
+                      background: isActive ? 'var(--primary-light)' : 'var(--bg-inset)',
+                      color: platform.color
                     }}>
                       {renderIcon(platform.iconName, platform.color, 20)}
                     </div>
@@ -384,7 +368,7 @@ export const Groups: React.FC = () => {
                       <span className="group-members-count" style={{ fontSize: '12px', fontWeight: 600 }}>
                         <Icons.Layers size={14} /> {groupCount} groups • <Icons.Users size={14} /> {memberCount} memberships
                       </span>
-                      <span className="badge badge-approved" style={{ fontSize: '10px', padding: '2px 8px' }}>
+                      <span className="badge badge-approved badge-sm">
                         Active
                       </span>
                     </>
@@ -393,7 +377,7 @@ export const Groups: React.FC = () => {
                       <span className="group-members-count" style={{ color: 'var(--text-light)', fontSize: '12px' }}>
                         <Icons.Lock size={14} /> Integration Pending
                       </span>
-                      <span className="badge badge-revoked" style={{ fontSize: '10px', padding: '2px 8px', backgroundColor: 'var(--border)' }}>
+                      <span className="badge badge-neutral badge-sm">
                         Coming Soon
                       </span>
                     </>
@@ -410,10 +394,10 @@ export const Groups: React.FC = () => {
   return (
     <div>
       {/* Back to Platforms Button */}
-      <button 
-        className="btn btn-outline" 
-        onClick={() => handleSelectPlatform(null)} 
-        style={{ marginBottom: '24px', padding: '6px 12px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+      <button
+        className="btn btn-outline btn-sm"
+        onClick={() => handleSelectPlatform(null)}
+        style={{ marginBottom: '24px' }}
       >
         <Icons.ChevronLeft size={16} /> Back to Platforms
       </button>
@@ -423,21 +407,12 @@ export const Groups: React.FC = () => {
         <h1 style={{ fontSize: '28px' }}>{activePlatformMeta?.name ?? 'Platform'} Data Groups</h1>
         
         {/* Search Bar */}
-        <div style={{ position: 'relative', width: '300px' }}>
-          <Icons.Search 
-            size={18} 
-            style={{
-              position: 'absolute',
-              top: '12px',
-              left: '16px',
-              color: 'var(--text-light)'
-            }} 
-          />
+        <div className="form-input-with-icon" style={{ width: '300px' }}>
+          <Icons.Search size={18} />
           <input
             type="text"
             className="form-input"
             placeholder="Search groups..."
-            style={{ paddingLeft: '44px' }}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
@@ -446,32 +421,16 @@ export const Groups: React.FC = () => {
 
       {/* Account Action Banner — only shown when the user needs to submit (DRAFT) or has been rejected. */}
       {!isPlatformUser && (
-        <div style={{
-          backgroundColor: 'var(--status-pending-bg)',
-          color: 'var(--status-pending-text)',
-          padding: '16px',
-          borderRadius: 'var(--radius-md)',
-          fontSize: '14px',
-          fontWeight: 600,
-          marginBottom: '24px',
-          border: '1px solid var(--status-pending-text)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: '12px'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <Icons.AlertTriangle size={20} />
-            <span>
-              {userCreationStatus === 'REJECTED'
-                ? 'Your account request was rejected. Contact an admin before requesting group access.'
-                : 'Submit a Hermes account request before you can queue group access requests.'}
-            </span>
-          </div>
+        <div className="banner banner-warning" style={{ marginBottom: '24px' }}>
+          <Icons.AlertTriangle size={20} />
+          <span className="banner-body">
+            {userCreationStatus === 'REJECTED'
+              ? 'Your account request was rejected. Contact an admin before requesting group access.'
+              : 'Submit a Hermes account request before you can queue group access requests.'}
+          </span>
           <button
             type="button"
-            className="btn btn-primary"
-            style={{ padding: '6px 14px', fontSize: '12px' }}
+            className="btn btn-primary btn-sm"
             onClick={() => setIsInviteModalOpen(true)}
           >
             {userCreationStatus === 'REJECTED' ? 'View status' : 'Request account'}
@@ -481,85 +440,41 @@ export const Groups: React.FC = () => {
 
       {/* Informational banner — they've submitted but Redash isn't ready yet. Requests are queued. */}
       {isPlatformUser && canQueueRequests && userCreationStatus !== 'COMPLETED' && (
-        <div style={{
-          backgroundColor: 'hsla(262, 60%, 48%, 0.06)',
-          color: 'var(--primary)',
-          padding: '12px 16px',
-          borderRadius: 'var(--radius-md)',
-          fontSize: '13px',
-          fontWeight: 600,
-          marginBottom: '20px',
-          border: '1px solid var(--border-focus)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '10px'
-        }}>
+        <div className="banner banner-info" style={{ marginBottom: '20px' }}>
           <Icons.Info size={18} />
-          <span style={{ flex: 1, color: 'var(--text-muted)', fontWeight: 500 }}>
+          <span className="banner-body" style={{ color: 'var(--text-muted)', fontWeight: 500 }}>
             You can request group access now — any requests admins approve will activate as soon as your {activePlatformMeta?.name ?? 'platform'} account is set up.
           </span>
         </div>
       )}
 
-      {/* Success and Error Banners */}
+      {/* Success and Error Banners — bulk results stay inline (per-item detail), not toasts */}
       {bulkSuccess && (
-        <div style={{
-          backgroundColor: 'var(--status-approved-bg)',
-          color: 'var(--status-approved-text)',
-          padding: '16px',
-          borderRadius: 'var(--radius-md)',
-          fontSize: '14px',
-          fontWeight: 600,
-          marginBottom: '20px',
-          border: '1px solid var(--status-approved-text)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '10px'
-        }}>
+        <div className="banner banner-success" style={{ marginBottom: '20px' }}>
           <Icons.CheckCircle size={20} />
-          <div style={{ flex: 1 }}>{bulkSuccess}</div>
-          <button 
-            type="button" 
-            onClick={() => setBulkSuccess(null)} 
-            style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
-          >
+          <div className="banner-body">{bulkSuccess}</div>
+          <button type="button" className="banner-close" onClick={() => setBulkSuccess(null)}>
             <Icons.X size={16} />
           </button>
         </div>
       )}
 
       {bulkError && (
-        <div style={{
-          backgroundColor: 'var(--status-rejected-bg)',
-          color: 'var(--status-rejected-text)',
-          padding: '16px',
-          borderRadius: 'var(--radius-md)',
-          fontSize: '14px',
-          fontWeight: 600,
-          marginBottom: '20px',
-          border: '1px solid var(--status-rejected-text)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '10px'
-        }}>
+        <div className="banner banner-error" style={{ marginBottom: '20px' }}>
           <Icons.AlertTriangle size={20} />
-          <div style={{ flex: 1 }}>{bulkError}</div>
-          <button 
-            type="button" 
-            onClick={() => setBulkError(null)} 
-            style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
-          >
+          <div className="banner-body">{bulkError}</div>
+          <button type="button" className="banner-close" onClick={() => setBulkError(null)}>
             <Icons.X size={16} />
           </button>
         </div>
       )}
 
       {filteredGroups.length === 0 ? (
-        <div className="empty-state">
-          <Icons.Search size={44} className="empty-state-icon" />
-          <h3 className="empty-state-title">No Groups Found</h3>
-          <p className="empty-state-desc">We couldn't find any data groups matching your search term. Try searching for other keywords.</p>
-        </div>
+        <EmptyState
+          icon={<Icons.Search size={40} />}
+          title="No Groups Found"
+          description="We couldn't find any data groups matching your search term. Try searching for other keywords."
+        />
       ) : (
         <>
           <div className="table-container">
@@ -646,7 +561,7 @@ export const Groups: React.FC = () => {
                                     <button 
                                       type="button" 
                                       className="btn btn-outline" 
-                                      style={{ padding: '4px 8px', fontSize: '11px', borderRadius: '4px', height: 'auto' }}
+                                      style={{ padding: '4px 8px', fontSize: '12px', borderRadius: '4px', height: 'auto' }}
                                       onClick={() => handleClearReason(group.id)}
                                     >
                                       Clear
@@ -654,7 +569,7 @@ export const Groups: React.FC = () => {
                                     <button 
                                       type="button" 
                                       className="btn btn-primary"
-                                      style={{ padding: '4px 8px', fontSize: '11px', borderRadius: '4px', height: 'auto' }}
+                                      style={{ padding: '4px 8px', fontSize: '12px', borderRadius: '4px', height: 'auto' }}
                                       onClick={() => handleSaveReason(group.id)}
                                       disabled={tempReason.trim().length > 0 && tempReason.trim().length < 10}
                                     >
@@ -694,19 +609,8 @@ export const Groups: React.FC = () => {
 
                         {group.levels.length > 0 && (
                           <span
-                            style={{
-                              fontSize: '10px',
-                              fontWeight: 700,
-                              letterSpacing: '0.03em',
-                              padding: '2px 8px',
-                              borderRadius: 999,
-                              background: 'var(--primary-light)',
-                              color: 'var(--primary)',
-                              border: '1px solid var(--border-focus)',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '4px',
-                            }}
+                            className="badge badge-admin badge-sm"
+                            style={{ gap: '4px' }}
                             title="This group has permission levels"
                           >
                             <Icons.Layers size={11} /> {group.levels.length} levels
@@ -754,15 +658,14 @@ export const Groups: React.FC = () => {
                         </span>
                       )}
                       {group.accessStatus === 'NONE' && (
-                        <span className="badge badge-revoked" style={{ backgroundColor: 'var(--border)', color: 'var(--text-muted)' }}>
+                        <span className="badge badge-neutral">
                           No Access
                         </span>
                       )}
                     </td>
                     <td style={{ textAlign: 'right' }}>
-                      <button 
-                        className="btn btn-outline"
-                        style={{ padding: '6px 12px', fontSize: '12px' }}
+                      <button
+                        className="btn btn-outline btn-sm"
                         onClick={() => navigate(`/groups/${group.slug}`)}
                       >
                         Details
@@ -782,10 +685,9 @@ export const Groups: React.FC = () => {
                   <Icons.FileText size={18} style={{ color: 'var(--primary)' }} />
                   Request Access for {checkedGroupIds.length} Selected Group(s)
                 </div>
-                <button 
-                  type="button" 
-                  className="btn btn-outline" 
-                  style={{ padding: '6px 12px', fontSize: '12px' }}
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
                   onClick={() => {
                     setSelectedGroups({});
                     setCustomReasons({});
