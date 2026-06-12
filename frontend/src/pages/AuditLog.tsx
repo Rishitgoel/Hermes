@@ -5,6 +5,7 @@ import LoadingSpinner from '../components/common/LoadingSpinner';
 import { Scroll, Search, RefreshCw, ChevronLeft, ChevronRight, CheckCircle2 } from 'lucide-react';
 import { queryKeys } from '../lib/queryKeys';
 import { fetchPlatforms } from '../services/api/platforms';
+import { useToast } from '../contexts/ToastContext';
 
 interface AuditLogEntry {
   id: string;
@@ -27,6 +28,7 @@ interface AuditResponse {
 
 export const AuditLog: React.FC = () => {
   const queryClient = useQueryClient();
+  const toast = useToast();
 
   const [page, setPage] = useState(1);
   const [pageSize] = useState(10);
@@ -102,7 +104,7 @@ export const AuditLog: React.FC = () => {
       setTimeout(() => setSyncStatus(null), 5000);
     },
     onError: (err: any) => {
-      alert(`Sync failed: ${err.message}`);
+      toast.error(`Sync failed: ${err.message}`);
     },
   });
 

@@ -2,6 +2,7 @@ import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
 import { NotificationProvider } from './contexts/NotificationContext';
+import { ToastProvider } from './contexts/ToastContext';
 import MainLayout from './components/layout/MainLayout';
 import ProtectedRoute from './components/common/ProtectedRoute';
 import ErrorBoundary from './components/common/ErrorBoundary';
@@ -23,6 +24,7 @@ export const App: React.FC = () => {
       <ErrorBoundary>
         <AuthProvider>
           <NotificationProvider>
+            <ToastProvider>
             <Routes>
               <Route path="/" element={<MainLayout />}>
                 <Route index element={<Dashboard />} />
@@ -73,6 +75,7 @@ export const App: React.FC = () => {
 
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
+            </ToastProvider>
           </NotificationProvider>
         </AuthProvider>
       </ErrorBoundary>

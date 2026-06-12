@@ -11,6 +11,7 @@ import { getMyUserCreation } from '../services/api/userCreation';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../lib/queryKeys';
 import { platformDisplayName, DEFAULT_PLATFORM } from '../lib/platforms';
+import { useToast } from '../contexts/ToastContext';
 
 interface GroupAdmin {
   userId: string;
@@ -58,6 +59,7 @@ export const GroupDetail: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const toast = useToast();
 
   const [isRequestModalOpen, setIsRequestModalOpen] = useState(false);
   const [isChangeLevelModalOpen, setIsChangeLevelModalOpen] = useState(false);
@@ -106,7 +108,7 @@ export const GroupDetail: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.myAccess() });
     },
     onError: (err: any) => {
-      alert(`Failed to revoke access: ${err.message}`);
+      toast.error(`Failed to revoke access: ${err.message}`);
     },
   });
   const revokingId = revokeMutation.isPending ? revokeMutation.variables?.memberAccessId : null;

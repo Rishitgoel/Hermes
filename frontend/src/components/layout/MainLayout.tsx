@@ -4,6 +4,7 @@ import Sidebar from './Sidebar';
 import TopBar from './TopBar';
 import { useAuth } from '../../contexts/AuthContext';
 import LoadingSpinner from '../common/LoadingSpinner';
+import ToastViewport from '../common/ToastViewport';
 
 export const MainLayout: React.FC = () => {
   const { isLoading, isAuthenticated } = useAuth();
@@ -20,6 +21,7 @@ export const MainLayout: React.FC = () => {
         <main className="content-pane">
           <Outlet />
         </main>
+        <ToastViewport />
       </div>
     </div>
   );
