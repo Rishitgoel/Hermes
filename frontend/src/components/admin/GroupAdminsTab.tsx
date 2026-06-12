@@ -2,21 +2,20 @@ import React, { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../../lib/queryKeys';
+import { useToast } from '../../contexts/ToastContext';
 import { cleanName } from './adminUtils';
 import { SkeletonRows } from '../common/Skeleton';
 import ConfirmModal from './ConfirmModal';
 import AssignAdminModal from './AssignAdminModal';
 import { listGroupAdmins, removeGroupAdmin, type ManageableGroup, type GroupAdminRow } from '../../services/api/admin';
 
-type Banner = { type: 'success' | 'error'; text: string };
-
 interface GroupAdminsTabProps {
   group: ManageableGroup;
-  onBanner: (b: Banner) => void;
 }
 
-export const GroupAdminsTab: React.FC<GroupAdminsTabProps> = ({ group, onBanner }) => {
+export const GroupAdminsTab: React.FC<GroupAdminsTabProps> = ({ group }) => {
   const queryClient = useQueryClient();
+  const toast = useToast();
   const [showAssign, setShowAssign] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState<GroupAdminRow | null>(null);
 
@@ -38,14 +37,14 @@ export const GroupAdminsTab: React.FC<GroupAdminsTabProps> = ({ group, onBanner 
   const removeMutation = useMutation({
     mutationFn: (id: string) => removeGroupAdmin(id),
     onSuccess: () => {
-      onBanner({
-        type: 'success',
-        text: 'Admin role removed. This only revokes their approval rights — any group access they requested separately is unaffected.',
-      });
+      toast.success(
+        'Admin role removed. This only revokes their approval rights — any group access they requested separately is unaffected.',
+        { duration: 8000 },
+      );
       setConfirmRemove(null);
       refresh();
     },
-    onError: (e: any) => onBanner({ type: 'error', text: e.message || 'Failed to remove group admin.' }),
+    onError: (e: any) => toast.error(e.message || 'Failed to remove group admin.'),
   });
 
   const admins = adminsQuery.data ?? [];
@@ -54,7 +53,7 @@ export const GroupAdminsTab: React.FC<GroupAdminsTabProps> = ({ group, onBanner 
     <div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
         <div className="admin-section-label">Group Admins</div>
-        <button type="button" className="btn btn-outline" style={{ padding: '5px 12px', fontSize: '12px' }} onClick={() => setShowAssign(true)}>
+        <button type="button" className="btn btn-outline btn-sm" onClick={() => setShowAssign(true)}>
           <Icons.UserPlus size={14} /> Add admin
         </button>
       </div>
@@ -78,8 +77,7 @@ export const GroupAdminsTab: React.FC<GroupAdminsTabProps> = ({ group, onBanner 
               </div>
               <button
                 type="button"
-                className="btn btn-outline btn-danger-outline"
-                style={{ padding: '3px 9px', fontSize: '12px' }}
+                className="btn btn-outline btn-danger-outline btn-sm"
                 onClick={() => setConfirmRemove(a)}
               >
                 Remove
@@ -94,11 +92,11 @@ export const GroupAdminsTab: React.FC<GroupAdminsTabProps> = ({ group, onBanner 
           target={{ kind: 'group', groupId: group.id, groupName: group.name }}
           onClose={() => setShowAssign(false)}
           onAssigned={(msg) => {
-            onBanner({ type: 'success', text: msg });
+            toast.success(msg, { duration: 8000 });
             refresh();
             setShowAssign(false);
           }}
-          onError={(msg) => onBanner({ type: 'error', text: msg })}
+          onError={(msg) => toast.error(msg)}
         />
       )}
 

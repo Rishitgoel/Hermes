@@ -2,16 +2,14 @@ import React, { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../../lib/queryKeys';
+import { useToast } from '../../contexts/ToastContext';
 import { prettyPlatform } from './adminUtils';
 import ConfirmModal from './ConfirmModal';
 import GroupFormModal from './GroupFormModal';
 import { updateGroup, deleteGroup, type ManageableGroup } from '../../services/api/admin';
 
-type Banner = { type: 'success' | 'error'; text: string };
-
 interface GroupSettingsTabProps {
   group: ManageableGroup;
-  onBanner: (b: Banner) => void;
   /** Called after a permanent delete so the drawer can close. */
   onDeleted: () => void;
 }
@@ -23,8 +21,9 @@ const Row: React.FC<{ label: string; children: React.ReactNode }> = ({ label, ch
   </div>
 );
 
-export const GroupSettingsTab: React.FC<GroupSettingsTabProps> = ({ group, onBanner, onDeleted }) => {
+export const GroupSettingsTab: React.FC<GroupSettingsTabProps> = ({ group, onDeleted }) => {
   const queryClient = useQueryClient();
+  const toast = useToast();
   const [showEdit, setShowEdit] = useState(false);
   const [confirmArchive, setConfirmArchive] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -38,37 +37,37 @@ export const GroupSettingsTab: React.FC<GroupSettingsTabProps> = ({ group, onBan
   const archiveMutation = useMutation({
     mutationFn: (next: boolean) => updateGroup(group.id, { isActive: next }),
     onSuccess: (_r, next) => {
-      onBanner({ type: 'success', text: next ? 'Group restored — visible in the request flow again.' : 'Group archived — hidden from new requests. Existing members keep access.' });
+      toast.success(next ? 'Group restored — visible in the request flow again.' : 'Group archived — hidden from new requests. Existing members keep access.', { duration: 8000 });
       refresh();
       setConfirmArchive(false);
     },
-    onError: (e: any) => onBanner({ type: 'error', text: e.message || 'Failed to update group.' }),
+    onError: (e: any) => toast.error(e.message || 'Failed to update group.'),
   });
 
   const deleteMutation = useMutation({
     mutationFn: () => deleteGroup(group.id),
     onSuccess: (result) => {
       if (result.deleted) {
-        onBanner({ type: 'success', text: `Group "${group.name}" permanently deleted.` });
+        toast.success(`Group "${group.name}" permanently deleted.`);
         refresh();
         onDeleted();
       } else {
-        onBanner({
-          type: 'success',
-          text: `Group has history (${result.accessCount ?? 0} access record(s), ${result.requestCount ?? 0} request(s)), so it was archived instead of deleted.`,
-        });
+        toast.success(
+          `Group has history (${result.accessCount ?? 0} access record(s), ${result.requestCount ?? 0} request(s)), so it was archived instead of deleted.`,
+          { duration: 8000 },
+        );
         refresh();
         setConfirmDelete(false);
       }
     },
-    onError: (e: any) => onBanner({ type: 'error', text: e.message || 'Failed to delete group.' }),
+    onError: (e: any) => toast.error(e.message || 'Failed to delete group.'),
   });
 
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
         <div className="admin-section-label">Group Details</div>
-        <button type="button" className="btn btn-outline" style={{ padding: '5px 12px', fontSize: '12px' }} onClick={() => setShowEdit(true)}>
+        <button type="button" className="btn btn-outline btn-sm" onClick={() => setShowEdit(true)}>
           <Icons.Pencil size={14} /> Edit details
         </button>
       </div>
@@ -101,8 +100,8 @@ export const GroupSettingsTab: React.FC<GroupSettingsTabProps> = ({ group, onBan
             </div>
             <button
               type="button"
-              className="btn btn-outline"
-              style={{ flexShrink: 0, padding: '6px 12px', fontSize: '12px' }}
+              className="btn btn-outline btn-sm"
+              style={{ flexShrink: 0 }}
               disabled={archiveMutation.isPending}
               onClick={() => (group.isActive ? setConfirmArchive(true) : archiveMutation.mutate(true))}
             >
@@ -115,8 +114,8 @@ export const GroupSettingsTab: React.FC<GroupSettingsTabProps> = ({ group, onBan
             </div>
             <button
               type="button"
-              className="btn btn-primary btn-danger"
-              style={{ flexShrink: 0, padding: '6px 12px', fontSize: '12px', background: 'var(--status-rejected-text)', borderColor: 'var(--status-rejected-text)' }}
+              className="btn btn-primary btn-danger btn-sm"
+              style={{ flexShrink: 0, background: 'var(--status-rejected-text)', borderColor: 'var(--status-rejected-text)' }}
               disabled={deleteMutation.isPending}
               onClick={() => setConfirmDelete(true)}
             >
@@ -133,10 +132,10 @@ export const GroupSettingsTab: React.FC<GroupSettingsTabProps> = ({ group, onBan
           group={group}
           onClose={() => setShowEdit(false)}
           onSaved={(msg) => {
-            onBanner({ type: 'success', text: msg });
+            toast.success(msg);
             setShowEdit(false);
           }}
-          onError={(msg) => onBanner({ type: 'error', text: msg })}
+          onError={(msg) => toast.error(msg)}
         />
       )}
 

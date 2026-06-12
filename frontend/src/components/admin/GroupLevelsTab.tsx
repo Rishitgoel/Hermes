@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../../lib/queryKeys';
+import { useToast } from '../../contexts/ToastContext';
 import { prettyPlatform, slugify } from './adminUtils';
 import { SkeletonRows } from '../common/Skeleton';
 import ConfirmModal from './ConfirmModal';
@@ -15,17 +16,15 @@ import {
   type GroupLevelInput,
 } from '../../services/api/admin';
 
-type Banner = { type: 'success' | 'error'; text: string };
-
 const emptyLevelForm: GroupLevelInput = { name: '', slug: '', permission: '', externalGroupId: '', rank: 0 };
 
 interface GroupLevelsTabProps {
   group: ManageableGroup;
-  onBanner: (b: Banner) => void;
 }
 
-export const GroupLevelsTab: React.FC<GroupLevelsTabProps> = ({ group, onBanner }) => {
+export const GroupLevelsTab: React.FC<GroupLevelsTabProps> = ({ group }) => {
   const queryClient = useQueryClient();
+  const toast = useToast();
   const [editing, setEditing] = useState<GroupLevelRow | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState<GroupLevelInput>(emptyLevelForm);
@@ -65,36 +64,42 @@ export const GroupLevelsTab: React.FC<GroupLevelsTabProps> = ({ group, onBanner 
       return editing ? updateGroupLevel(group.id, editing.id, body) : createGroupLevel(group.id, body);
     },
     onSuccess: () => {
-      onBanner({ type: 'success', text: editing ? 'Level updated.' : 'Level created.' });
+      toast.success(editing ? 'Level updated.' : 'Level created.');
       resetForm();
       invalidate();
     },
-    onError: (e: any) => onBanner({ type: 'error', text: e.message || 'Failed to save level.' }),
+    onError: (e: any) => toast.error(e.message || 'Failed to save level.'),
   });
 
   const toggleActiveMutation = useMutation({
     mutationFn: (lvl: GroupLevelRow) => updateGroupLevel(group.id, lvl.id, { isActive: !lvl.isActive }),
     onSuccess: () => {
-      onBanner({ type: 'success', text: 'Level updated.' });
+      toast.success('Level updated.');
       invalidate();
     },
-    onError: (e: any) => onBanner({ type: 'error', text: e.message || 'Failed to update level.' }),
+    onError: (e: any) => toast.error(e.message || 'Failed to update level.'),
   });
 
   const deleteMutation = useMutation({
     mutationFn: (lvl: GroupLevelRow) => deleteGroupLevel(group.id, lvl.id),
     onSuccess: (result) => {
       if (result.deleted) {
-        onBanner({ type: 'success', text: 'Level removed.' });
+        toast.success('Level removed.');
       } else if ((result.activeMembers ?? 0) > 0) {
-        onBanner({ type: 'success', text: `Level kept active members (${result.activeMembers}), so it was deactivated instead of removed — they keep access until expiry/revoke.` });
+        toast.success(
+          `Level kept active members (${result.activeMembers}), so it was deactivated instead of removed — they keep access until expiry/revoke.`,
+          { duration: 8000 },
+        );
       } else {
-        onBanner({ type: 'success', text: `Level has ${result.openRequests ?? 0} in-flight request(s), so it was deactivated instead of removed. Resolve those requests, then remove it.` });
+        toast.success(
+          `Level has ${result.openRequests ?? 0} in-flight request(s), so it was deactivated instead of removed. Resolve those requests, then remove it.`,
+          { duration: 8000 },
+        );
       }
       setConfirmDelete(null);
       invalidate();
     },
-    onError: (e: any) => onBanner({ type: 'error', text: e.message || 'Failed to remove level.' }),
+    onError: (e: any) => toast.error(e.message || 'Failed to remove level.'),
   });
 
   const startCreate = () => {
@@ -126,7 +131,7 @@ export const GroupLevelsTab: React.FC<GroupLevelsTabProps> = ({ group, onBanner 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
         <div className="admin-section-label">Permission Levels</div>
         {!showForm && (
-          <button type="button" className="btn btn-outline" style={{ padding: '4px 10px', fontSize: '12px' }} onClick={startCreate}>
+          <button type="button" className="btn btn-outline btn-sm" onClick={startCreate}>
             <Icons.Plus size={13} /> Add level
           </button>
         )}
@@ -155,19 +160,18 @@ export const GroupLevelsTab: React.FC<GroupLevelsTabProps> = ({ group, onBanner 
                       {lvl.permission}
                     </span>
                   )}
-                  {!lvl.isActive && <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-light)' }}>INACTIVE</span>}
+                  {!lvl.isActive && <span className="badge badge-neutral badge-sm">INACTIVE</span>}
                 </div>
                 <div style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
                   ext id: {lvl.externalGroupId || '—'} · rank {lvl.rank} · {lvl.memberCount} member{lvl.memberCount === 1 ? '' : 's'}
                 </div>
               </div>
-              <button type="button" className="btn btn-outline" style={{ padding: '3px 9px', fontSize: '12px' }} onClick={() => startEdit(lvl)}>
+              <button type="button" className="btn btn-outline btn-sm" onClick={() => startEdit(lvl)}>
                 Edit
               </button>
               <button
                 type="button"
-                className="btn btn-outline"
-                style={{ padding: '3px 9px', fontSize: '12px' }}
+                className="btn btn-outline btn-sm"
                 disabled={toggleActiveMutation.isPending}
                 onClick={() => toggleActiveMutation.mutate(lvl)}
               >
@@ -175,8 +179,7 @@ export const GroupLevelsTab: React.FC<GroupLevelsTabProps> = ({ group, onBanner 
               </button>
               <button
                 type="button"
-                className="btn btn-outline btn-danger-outline"
-                style={{ padding: '3px 9px', fontSize: '12px' }}
+                className="btn btn-outline btn-danger-outline btn-sm"
                 disabled={deleteMutation.isPending}
                 onClick={() => setConfirmDelete(lvl)}
               >
@@ -188,7 +191,7 @@ export const GroupLevelsTab: React.FC<GroupLevelsTabProps> = ({ group, onBanner 
       )}
 
       {showForm && (
-        <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '12px', background: 'white' }}>
+        <div style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '12px', background: 'var(--bg-card)' }}>
           <div style={{ fontWeight: 700, fontSize: '13px', marginBottom: '10px' }}>
             {editing ? `Edit level: ${editing.name}` : 'New level'}
           </div>
@@ -266,13 +269,12 @@ export const GroupLevelsTab: React.FC<GroupLevelsTabProps> = ({ group, onBanner 
             </div>
           )}
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '12px' }}>
-            <button type="button" className="btn btn-outline" style={{ padding: '6px 12px', fontSize: '12px' }} onClick={resetForm} disabled={saveMutation.isPending}>
+            <button type="button" className="btn btn-outline btn-sm" onClick={resetForm} disabled={saveMutation.isPending}>
               Cancel
             </button>
             <button
               type="button"
-              className="btn btn-primary"
-              style={{ padding: '6px 12px', fontSize: '12px' }}
+              className="btn btn-primary btn-sm"
               disabled={!canSave || saveMutation.isPending}
               onClick={() => saveMutation.mutate()}
             >

@@ -143,9 +143,6 @@ export const AccountStatusPanel: React.FC = () => {
 };
 
 const btnSm: React.CSSProperties = {
-  padding: '7px 14px',
-  fontSize: '13px',
-  gap: '6px',
   whiteSpace: 'nowrap',
 };
 
@@ -289,8 +286,8 @@ const PlatformAccountRow: React.FC<{ entry: PlatformEntry }> = ({ entry }) => {
             href={live.launchUrl}
             target="_blank"
             rel="noreferrer noopener"
-            className="btn btn-primary"
-            style={{ ...btnSm, display: 'inline-flex', alignItems: 'center' }}
+            className="btn btn-primary btn-sm"
+            style={btnSm}
           >
             Open {label} <Icons.ExternalLink size={14} />
           </a>
@@ -309,14 +306,14 @@ const PlatformAccountRow: React.FC<{ entry: PlatformEntry }> = ({ entry }) => {
                 Finish setup <Icons.ArrowRight size={14} />
               </a>
             )}
-            <button type="button" className="btn btn-outline" style={btnSm} onClick={handleSync} disabled={busy !== null}>
+            <button type="button" className="btn btn-outline btn-sm" style={btnSm} onClick={handleSync} disabled={busy !== null}>
               <Icons.RefreshCw size={14} /> {busy === 'sync' ? 'Syncing…' : "I've finished"}
             </button>
           </>
         );
       case 'APPROVED':
         return (
-          <button type="button" className="btn btn-primary" style={btnSm} onClick={handleRetry} disabled={busy !== null}>
+          <button type="button" className="btn btn-primary btn-sm" style={btnSm} onClick={handleRetry} disabled={busy !== null}>
             <Icons.RefreshCw size={14} /> {busy === 'retry' ? 'Retrying…' : 'Retry setup'}
           </button>
         );
@@ -324,13 +321,13 @@ const PlatformAccountRow: React.FC<{ entry: PlatformEntry }> = ({ entry }) => {
         return null;
       case 'REJECTED':
         return (
-          <button type="button" className="btn btn-primary" style={btnSm} onClick={() => setIsFormOpen(true)}>
+          <button type="button" className="btn btn-primary btn-sm" style={btnSm} onClick={() => setIsFormOpen(true)}>
             <Icons.Send size={14} /> Request again
           </button>
         );
       default:
         return (
-          <button type="button" className="btn btn-primary" style={btnSm} onClick={() => setIsFormOpen(true)}>
+          <button type="button" className="btn btn-primary btn-sm" style={btnSm} onClick={() => setIsFormOpen(true)}>
             <Icons.Send size={14} /> Request account
           </button>
         );
@@ -351,7 +348,7 @@ const PlatformAccountRow: React.FC<{ entry: PlatformEntry }> = ({ entry }) => {
     <>
       <div
         style={{
-          background: 'white',
+          background: 'var(--bg-card)',
           border: '1px solid var(--border)',
           borderRadius: 'var(--radius-lg)',
           padding: '16px 20px',
@@ -377,7 +374,7 @@ const PlatformAccountRow: React.FC<{ entry: PlatformEntry }> = ({ entry }) => {
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
               <span style={{ fontWeight: 700, fontSize: '15px' }}>{label}</span>
-              <span className={`badge ${pill.cls}`} style={{ gap: '5px', padding: '3px 10px', fontSize: '11px' }}>
+              <span className={`badge ${pill.cls} badge-sm`} style={{ gap: '5px' }}>
                 <pill.Icon size={12} /> {pill.label}
               </span>
             </div>

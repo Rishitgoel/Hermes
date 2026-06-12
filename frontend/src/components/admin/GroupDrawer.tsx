@@ -7,7 +7,6 @@ import GroupLevelsTab from './GroupLevelsTab';
 import GroupSettingsTab from './GroupSettingsTab';
 import { type ManageableGroup } from '../../services/api/admin';
 
-type Banner = { type: 'success' | 'error'; text: string };
 type Tab = 'admins' | 'members' | 'levels' | 'settings';
 
 const TABS: { key: Tab; label: string; icon: string }[] = [
@@ -20,7 +19,6 @@ const TABS: { key: Tab; label: string; icon: string }[] = [
 interface GroupDrawerProps {
   group: ManageableGroup;
   onClose: () => void;
-  onBanner: (b: Banner) => void;
 }
 
 /**
@@ -28,7 +26,7 @@ interface GroupDrawerProps {
  * Settings). Replaces the old inline expand-card so the group list stays a clean
  * list and one group's internals are worked on at a time.
  */
-export const GroupDrawer: React.FC<GroupDrawerProps> = ({ group, onClose, onBanner }) => {
+export const GroupDrawer: React.FC<GroupDrawerProps> = ({ group, onClose }) => {
   const [tab, setTab] = useState<Tab>('admins');
   const LucideIcon = (Icons as any)[group.icon || 'Layers'] || Icons.Layers;
 
@@ -47,7 +45,7 @@ export const GroupDrawer: React.FC<GroupDrawerProps> = ({ group, onClose, onBann
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <span style={{ fontWeight: 700, fontSize: '16px' }}>{group.name}</span>
               {!group.isActive && (
-                <span className="badge" style={{ fontSize: '10px', background: 'var(--text-light)', color: 'white' }}>
+                <span className="badge badge-archived badge-sm">
                   ARCHIVED
                 </span>
               )}
@@ -81,10 +79,10 @@ export const GroupDrawer: React.FC<GroupDrawerProps> = ({ group, onClose, onBann
 
         {/* Body */}
         <div className="admin-drawer-body">
-          {tab === 'admins' && <GroupAdminsTab group={group} onBanner={onBanner} />}
-          {tab === 'members' && <GroupMembersTab group={group} onBanner={onBanner} />}
-          {tab === 'levels' && <GroupLevelsTab group={group} onBanner={onBanner} />}
-          {tab === 'settings' && <GroupSettingsTab group={group} onBanner={onBanner} onDeleted={onClose} />}
+          {tab === 'admins' && <GroupAdminsTab group={group} />}
+          {tab === 'members' && <GroupMembersTab group={group} />}
+          {tab === 'levels' && <GroupLevelsTab group={group} />}
+          {tab === 'settings' && <GroupSettingsTab group={group} onDeleted={onClose} />}
         </div>
       </div>
     </div>

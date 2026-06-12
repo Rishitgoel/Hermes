@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { listPendingUserCreations, reviewUserCreation, PendingUserCreationRequest } from '../../services/api/userCreation';
 import { queryKeys } from '../../lib/queryKeys';
+import { useToast } from '../../contexts/ToastContext';
 import * as Icons from 'lucide-react';
 
 /**
@@ -11,10 +12,9 @@ import * as Icons from 'lucide-react';
  */
 export const UserApprovalsTable: React.FC = () => {
   const queryClient = useQueryClient();
+  const toast = useToast();
   const [activeNotes, setActiveNotes] = useState<Record<string, string>>({});
   const [openNoteId, setOpenNoteId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
 
   const { data: rows = [], isLoading } = useQuery<PendingUserCreationRequest[]>({
     queryKey: queryKeys.pendingUserCreations(),
@@ -26,8 +26,7 @@ export const UserApprovalsTable: React.FC = () => {
       reviewUserCreation(id, status, note),
     onSuccess: (_, vars) => {
       const verb = vars.status === 'APPROVED' ? 'approved' : 'rejected';
-      setSuccess(`User-creation request ${verb}.`);
-      setError(null);
+      toast.success(`User-creation request ${verb}.`);
       setActiveNotes((prev) => {
         const copy = { ...prev };
         delete copy[vars.id];
@@ -38,8 +37,7 @@ export const UserApprovalsTable: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.pendingRequests() });
     },
     onError: (err: any) => {
-      setError(err.message || 'Review failed.');
-      setSuccess(null);
+      toast.error(err.message || 'Review failed.');
     },
   });
 
@@ -87,54 +85,6 @@ export const UserApprovalsTable: React.FC = () => {
         Approve these <strong>before</strong> any group access request from the same user.
       </p>
 
-      {success && (
-        <div
-          style={{
-            backgroundColor: 'var(--status-approved-bg)',
-            color: 'var(--status-approved-text)',
-            padding: '10px 14px',
-            borderRadius: 'var(--radius-md)',
-            fontSize: '13px',
-            fontWeight: 600,
-            marginBottom: '12px',
-            border: '1px solid var(--status-approved-text)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-          }}
-        >
-          <Icons.CheckCircle2 size={16} />
-          <div style={{ flex: 1 }}>{success}</div>
-          <button type="button" onClick={() => setSuccess(null)} style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer' }}>
-            <Icons.X size={14} />
-          </button>
-        </div>
-      )}
-
-      {error && (
-        <div
-          style={{
-            backgroundColor: 'var(--status-rejected-bg)',
-            color: 'var(--status-rejected-text)',
-            padding: '10px 14px',
-            borderRadius: 'var(--radius-md)',
-            fontSize: '13px',
-            fontWeight: 600,
-            marginBottom: '12px',
-            border: '1px solid var(--status-rejected-text)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-          }}
-        >
-          <Icons.AlertTriangle size={16} />
-          <div style={{ flex: 1 }}>{error}</div>
-          <button type="button" onClick={() => setError(null)} style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer' }}>
-            <Icons.X size={14} />
-          </button>
-        </div>
-      )}
-
       {rows.length === 0 ? (
         <div className="empty-state" style={{ padding: '24px' }}>
           <Icons.UserCheck size={32} className="empty-state-icon" />
@@ -181,19 +131,7 @@ export const UserApprovalsTable: React.FC = () => {
                     </div>
                   </td>
                   <td>
-                    <span
-                      style={{
-                        fontSize: '10px',
-                        fontWeight: 700,
-                        letterSpacing: '0.03em',
-                        textTransform: 'uppercase',
-                        padding: '2px 8px',
-                        borderRadius: 999,
-                        background: 'var(--primary-light)',
-                        color: 'var(--primary)',
-                        border: '1px solid var(--border-focus)',
-                      }}
-                    >
+                    <span className="badge badge-admin badge-sm">
                       {row.platform}
                     </span>
                   </td>
@@ -212,8 +150,7 @@ export const UserApprovalsTable: React.FC = () => {
                     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', alignItems: 'center', position: 'relative' }}>
                       <button
                         type="button"
-                        className="btn btn-outline"
-                        style={{ padding: '4px 10px', fontSize: '12px', height: '30px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                        className="btn btn-outline btn-sm"
                         onClick={() => {
                           setOpenNoteId((cur) => (cur === row.id ? null : row.id));
                         }}
@@ -223,14 +160,7 @@ export const UserApprovalsTable: React.FC = () => {
                       </button>
                       <button
                         type="button"
-                        className="btn btn-outline"
-                        style={{
-                          borderColor: 'var(--status-rejected-text)',
-                          color: 'var(--status-rejected-text)',
-                          padding: '4px 10px',
-                          fontSize: '12px',
-                          height: '30px',
-                        }}
+                        className="btn btn-outline btn-danger-outline btn-sm"
                         onClick={() => reviewMutation.mutate({ id: row.id, status: 'REJECTED', note: activeNotes[row.id] })}
                         disabled={isSubmitting}
                       >
@@ -238,8 +168,7 @@ export const UserApprovalsTable: React.FC = () => {
                       </button>
                       <button
                         type="button"
-                        className="btn btn-primary"
-                        style={{ padding: '4px 12px', fontSize: '12px', height: '30px' }}
+                        className="btn btn-primary btn-sm"
                         onClick={() => reviewMutation.mutate({ id: row.id, status: 'APPROVED', note: activeNotes[row.id] })}
                         disabled={isSubmitting}
                       >

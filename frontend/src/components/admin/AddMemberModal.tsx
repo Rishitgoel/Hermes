@@ -89,13 +89,12 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({ group, existingM
         </div>
 
         <div className="modal-body">
-          <div style={{ position: 'relative', marginBottom: '14px' }}>
-            <Icons.Search size={16} style={{ position: 'absolute', top: '13px', left: '14px', color: 'var(--text-light)' }} />
+          <div className="form-input-with-icon" style={{ marginBottom: '14px' }}>
+            <Icons.Search size={16} />
             <input
               type="text"
               className="form-input"
               placeholder="Search users by name or email…"
-              style={{ paddingLeft: '40px' }}
               value={search}
               onChange={(e) => {
                 setSearch(e.target.value);
@@ -134,7 +133,7 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({ group, existingM
                       gap: '10px',
                       padding: '10px 12px',
                       border: `1px solid ${isSel ? 'var(--primary)' : 'var(--border)'}`,
-                      background: isSel ? 'var(--primary-light)' : 'white',
+                      background: isSel ? 'var(--primary-light)' : 'var(--bg-card)',
                       borderRadius: 'var(--radius-md)',
                       cursor: isMember ? 'not-allowed' : 'pointer',
                       opacity: isMember ? 0.55 : 1,

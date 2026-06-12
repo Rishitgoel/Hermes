@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Icons from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { useToast } from '../contexts/ToastContext';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import { SkeletonRows } from '../components/common/Skeleton';
 import { queryKeys } from '../lib/queryKeys';
@@ -19,11 +20,10 @@ import {
   type PlatformAdminRow,
 } from '../services/api/admin';
 
-type Banner = { type: 'success' | 'error'; text: string };
-
 export const AdminManagement: React.FC = () => {
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const toast = useToast();
 
   const superAdmin = user?.adminScopes?.superAdmin ?? user?.roles.includes('hermes_super_admin') ?? false;
 
@@ -32,7 +32,6 @@ export const AdminManagement: React.FC = () => {
   const [assignTarget, setAssignTarget] = useState<AssignTarget | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [removePA, setRemovePA] = useState<PlatformAdminRow | null>(null);
-  const [banner, setBanner] = useState<Banner | null>(null);
   const [search, setSearch] = useState('');
   const [showArchived, setShowArchived] = useState(false);
 
@@ -83,11 +82,11 @@ export const AdminManagement: React.FC = () => {
   const removePlatformAdminMutation = useMutation({
     mutationFn: (id: string) => removePlatformAdmin(id),
     onSuccess: () => {
-      setBanner({ type: 'success', text: 'Platform admin removed.' });
+      toast.success('Platform admin removed.');
       setRemovePA(null);
       queryClient.invalidateQueries({ queryKey: queryKeys.adminPlatformAdmins(activePlatform ?? '') });
     },
-    onError: (e: any) => setBanner({ type: 'error', text: e.message || 'Failed to remove platform admin.' }),
+    onError: (e: any) => toast.error(e.message || 'Failed to remove platform admin.'),
   });
 
   if (platformsQuery.isLoading) return <LoadingSpinner />;
@@ -132,30 +131,6 @@ export const AdminManagement: React.FC = () => {
             : 'Manage group admins and members for the platforms you administer.'}
         </p>
       </div>
-
-      {banner && (
-        <div
-          style={{
-            backgroundColor: banner.type === 'success' ? 'var(--status-approved-bg)' : 'var(--status-rejected-bg)',
-            color: banner.type === 'success' ? 'var(--status-approved-text)' : 'var(--status-rejected-text)',
-            padding: '14px 16px',
-            borderRadius: 'var(--radius-md)',
-            fontSize: '14px',
-            fontWeight: 600,
-            marginBottom: '20px',
-            border: `1px solid ${banner.type === 'success' ? 'var(--status-approved-text)' : 'var(--status-rejected-text)'}`,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '10px',
-          }}
-        >
-          {banner.type === 'success' ? <Icons.CheckCircle size={18} /> : <Icons.AlertTriangle size={18} />}
-          <span style={{ flex: 1 }}>{banner.text}</span>
-          <button type="button" onClick={() => setBanner(null)} style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', display: 'flex' }}>
-            <Icons.X size={16} />
-          </button>
-        </div>
-      )}
 
       {/* Platform selector */}
       <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '24px' }}>
@@ -263,13 +238,13 @@ export const AdminManagement: React.FC = () => {
 
         {/* Toolbar: search + show-archived */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '14px', flexWrap: 'wrap' }}>
-          <div style={{ position: 'relative', flex: 1, minWidth: '220px' }}>
-            <Icons.Search size={15} style={{ position: 'absolute', top: '11px', left: '12px', color: 'var(--text-light)' }} />
+          <div className="form-input-with-icon" style={{ flex: 1, minWidth: '220px' }}>
+            <Icons.Search size={15} />
             <input
               type="text"
               className="form-input"
               placeholder="Search groups…"
-              style={{ paddingLeft: '36px', height: '38px' }}
+              style={{ height: '38px' }}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -302,7 +277,7 @@ export const AdminManagement: React.FC = () => {
 
       {/* Group detail drawer */}
       {selectedGroup && (
-        <GroupDrawer group={selectedGroup} onClose={() => setSelectedGroupId(null)} onBanner={setBanner} />
+        <GroupDrawer group={selectedGroup} onClose={() => setSelectedGroupId(null)} />
       )}
 
       {/* Create group */}
@@ -313,7 +288,7 @@ export const AdminManagement: React.FC = () => {
           defaultPlatform={activePlatform}
           onClose={() => setShowCreate(false)}
           onSaved={(msg, record) => {
-            setBanner({ type: 'success', text: msg });
+            toast.success(msg);
             setShowCreate(false);
             // The new group may live on a platform other than the active one — switch to
             // it so the (platform-keyed) list shows it. Seed the list cache so the drawer
@@ -326,7 +301,7 @@ export const AdminManagement: React.FC = () => {
             });
             setSelectedGroupId(record.id);
           }}
-          onError={(msg) => setBanner({ type: 'error', text: msg })}
+          onError={(msg) => toast.error(msg)}
         />
       )}
 
@@ -336,11 +311,11 @@ export const AdminManagement: React.FC = () => {
           target={assignTarget}
           onClose={() => setAssignTarget(null)}
           onAssigned={(msg) => {
-            setBanner({ type: 'success', text: msg });
+            toast.success(msg);
             queryClient.invalidateQueries({ queryKey: queryKeys.adminPlatformAdmins(activePlatform ?? '') });
             setAssignTarget(null);
           }}
-          onError={(msg) => setBanner({ type: 'error', text: msg })}
+          onError={(msg) => toast.error(msg)}
         />
       )}
 
@@ -379,7 +354,7 @@ const GroupRow: React.FC<{ group: ManageableGroup; onClick: () => void }> = ({ g
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span style={{ fontWeight: 700, fontSize: '15px' }}>{group.name}</span>
           {!group.isActive && (
-            <span className="badge" style={{ fontSize: '10px', background: 'var(--text-light)', color: 'white' }}>
+            <span className="badge badge-archived badge-sm">
               ARCHIVED
             </span>
           )}

@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../../lib/queryKeys';
+import { useToast } from '../../contexts/ToastContext';
 import { cleanName } from './adminUtils';
 import { SkeletonRows } from '../common/Skeleton';
 import ConfirmModal from './ConfirmModal';
@@ -15,15 +16,13 @@ import {
   type GroupMember,
 } from '../../services/api/admin';
 
-type Banner = { type: 'success' | 'error'; text: string };
-
 interface GroupMembersTabProps {
   group: ManageableGroup;
-  onBanner: (b: Banner) => void;
 }
 
-export const GroupMembersTab: React.FC<GroupMembersTabProps> = ({ group, onBanner }) => {
+export const GroupMembersTab: React.FC<GroupMembersTabProps> = ({ group }) => {
   const queryClient = useQueryClient();
+  const toast = useToast();
   const [confirmRemove, setConfirmRemove] = useState<GroupMember | null>(null);
   const [showAdd, setShowAdd] = useState(false);
 
@@ -48,22 +47,22 @@ export const GroupMembersTab: React.FC<GroupMembersTabProps> = ({ group, onBanne
   const removeMutation = useMutation({
     mutationFn: (userAccessId: string) => removeGroupMember(group.id, userAccessId),
     onSuccess: () => {
-      onBanner({ type: 'success', text: 'Member removed from group.' });
+      toast.success('Member removed from group.');
       setConfirmRemove(null);
       refreshMembers();
     },
-    onError: (e: any) => onBanner({ type: 'error', text: e.message || 'Failed to remove member.' }),
+    onError: (e: any) => toast.error(e.message || 'Failed to remove member.'),
   });
 
   const setLevelMutation = useMutation({
     mutationFn: ({ userAccessId, levelId }: { userAccessId: string; levelId: string }) =>
       setGroupMemberLevel(group.id, userAccessId, levelId),
     onSuccess: () => {
-      onBanner({ type: 'success', text: 'Member level updated.' });
+      toast.success('Member level updated.');
       refreshMembers();
       queryClient.invalidateQueries({ queryKey: queryKeys.adminGroupLevels(group.id) });
     },
-    onError: (e: any) => onBanner({ type: 'error', text: e.message || 'Failed to update member level.' }),
+    onError: (e: any) => toast.error(e.message || 'Failed to update member level.'),
   });
 
   const members = useMemo(() => membersQuery.data ?? [], [membersQuery.data]);
@@ -73,7 +72,7 @@ export const GroupMembersTab: React.FC<GroupMembersTabProps> = ({ group, onBanne
     <div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
         <div className="admin-section-label">Members</div>
-        <button type="button" className="btn btn-outline" style={{ padding: '5px 12px', fontSize: '12px' }} onClick={() => setShowAdd(true)}>
+        <button type="button" className="btn btn-outline btn-sm" onClick={() => setShowAdd(true)}>
           <Icons.UserPlus size={14} /> Add member
         </button>
       </div>
@@ -93,18 +92,9 @@ export const GroupMembersTab: React.FC<GroupMembersTabProps> = ({ group, onBanne
                   <span style={{ fontWeight: 600, fontSize: '13px' }}>{cleanName(m.userName)}</span>
                   {m.isAdmin && (
                     <span
+                      className="badge badge-admin badge-sm"
                       title="Also a group admin — removing their membership keeps their approval rights"
-                      style={{
-                        marginLeft: '8px',
-                        fontSize: '10px',
-                        fontWeight: 800,
-                        letterSpacing: '0.04em',
-                        padding: '1px 7px',
-                        borderRadius: 999,
-                        background: 'var(--primary-light)',
-                        color: 'var(--primary)',
-                        border: '1px solid var(--primary)',
-                      }}
+                      style={{ marginLeft: '8px' }}
                     >
                       ADMIN
                     </span>
@@ -140,15 +130,14 @@ export const GroupMembersTab: React.FC<GroupMembersTabProps> = ({ group, onBanne
                 )}
 
                 {m.expiresAt && (
-                  <span className="badge badge-pending" style={{ fontSize: '10px' }}>
+                  <span className="badge badge-pending badge-sm">
                     expires {new Date(m.expiresAt).toLocaleDateString()}
                   </span>
                 )}
 
                 <button
                   type="button"
-                  className="btn btn-outline btn-danger-outline"
-                  style={{ padding: '3px 9px', fontSize: '12px' }}
+                  className="btn btn-outline btn-danger-outline btn-sm"
                   onClick={() => setConfirmRemove(m)}
                 >
                   Remove
@@ -165,12 +154,12 @@ export const GroupMembersTab: React.FC<GroupMembersTabProps> = ({ group, onBanne
           existingMemberIds={memberUserIds}
           onClose={() => setShowAdd(false)}
           onAdded={(msg) => {
-            onBanner({ type: 'success', text: msg });
+            toast.success(msg);
             setShowAdd(false);
             refreshMembers();
             queryClient.invalidateQueries({ queryKey: queryKeys.adminGroupLevels(group.id) });
           }}
-          onError={(msg) => onBanner({ type: 'error', text: msg })}
+          onError={(msg) => toast.error(msg)}
         />
       )}
 
