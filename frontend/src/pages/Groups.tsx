@@ -297,7 +297,7 @@ export const Groups: React.FC = () => {
       <div>
         {/* Page Header */}
         <div className="section-header" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '8px', marginBottom: '32px' }}>
-          <h1 style={{ fontSize: '28px', fontFamily: 'Outfit, sans-serif' }}>Access Platforms</h1>
+          <h1 style={{ fontSize: '28px' }}>Access Platforms</h1>
           <p style={{ color: 'var(--text-muted)', fontSize: '15px' }}>
             Select an ecosystem platform below to browse groups and manage credentials.
           </p>
@@ -373,7 +373,7 @@ export const Groups: React.FC = () => {
                       </span>
                     </div>
                   </div>
-                  <p className="group-card-desc" style={{ fontSize: '13.5px', marginBottom: '16px', lineHeight: 1.4 }}>
+                  <p className="group-card-desc" style={{ fontSize: '13px', marginBottom: '16px', lineHeight: 1.4 }}>
                     {platform.description}
                   </p>
                 </div>
@@ -381,7 +381,7 @@ export const Groups: React.FC = () => {
                 <div className="group-card-footer" style={{ borderTop: '1px solid var(--border)', paddingTop: '12px', marginTop: 'auto' }}>
                   {isActive ? (
                     <>
-                      <span className="group-members-count" style={{ fontSize: '12.5px', fontWeight: 600 }}>
+                      <span className="group-members-count" style={{ fontSize: '12px', fontWeight: 600 }}>
                         <Icons.Layers size={14} /> {groupCount} groups • <Icons.Users size={14} /> {memberCount} memberships
                       </span>
                       <span className="badge badge-approved" style={{ fontSize: '10px', padding: '2px 8px' }}>
@@ -390,7 +390,7 @@ export const Groups: React.FC = () => {
                     </>
                   ) : (
                     <>
-                      <span className="group-members-count" style={{ color: 'var(--text-light)', fontSize: '12.5px' }}>
+                      <span className="group-members-count" style={{ color: 'var(--text-light)', fontSize: '12px' }}>
                         <Icons.Lock size={14} /> Integration Pending
                       </span>
                       <span className="badge badge-revoked" style={{ fontSize: '10px', padding: '2px 8px', backgroundColor: 'var(--border)' }}>
@@ -420,7 +420,7 @@ export const Groups: React.FC = () => {
 
       {/* Page Header */}
       <div className="section-header">
-        <h1 style={{ fontSize: '28px', fontFamily: 'Outfit, sans-serif' }}>{activePlatformMeta?.name ?? 'Platform'} Data Groups</h1>
+        <h1 style={{ fontSize: '28px' }}>{activePlatformMeta?.name ?? 'Platform'} Data Groups</h1>
         
         {/* Search Bar */}
         <div style={{ position: 'relative', width: '300px' }}>
@@ -451,7 +451,7 @@ export const Groups: React.FC = () => {
           color: 'var(--status-pending-text)',
           padding: '16px',
           borderRadius: 'var(--radius-md)',
-          fontSize: '14.5px',
+          fontSize: '14px',
           fontWeight: 600,
           marginBottom: '24px',
           border: '1px solid var(--status-pending-text)',
@@ -486,7 +486,7 @@ export const Groups: React.FC = () => {
           color: 'var(--primary)',
           padding: '12px 16px',
           borderRadius: 'var(--radius-md)',
-          fontSize: '13.5px',
+          fontSize: '13px',
           fontWeight: 600,
           marginBottom: '20px',
           border: '1px solid var(--border-focus)',

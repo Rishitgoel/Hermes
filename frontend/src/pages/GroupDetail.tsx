@@ -264,7 +264,6 @@ export const GroupDetail: React.FC = () => {
                         padding: '4px 10px',
                         borderRadius: 'var(--radius-sm)',
                         border: '1px solid var(--border-focus)',
-                        fontFamily: 'monospace',
                         letterSpacing: '0.02em'
                       }}
                     >

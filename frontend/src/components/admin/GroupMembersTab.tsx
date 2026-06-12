@@ -89,7 +89,7 @@ export const GroupMembersTab: React.FC<GroupMembersTabProps> = ({ group, onBanne
               <div key={m.id} className="admin-row">
                 <Icons.User size={16} style={{ color: 'var(--text-light)' }} />
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <span style={{ fontWeight: 600, fontSize: '13.5px' }}>{cleanName(m.userName)}</span>
+                  <span style={{ fontWeight: 600, fontSize: '13px' }}>{cleanName(m.userName)}</span>
                   {m.isAdmin && (
                     <span
                       title="Also a group admin — removing their membership keeps their approval rights"
@@ -147,7 +147,7 @@ export const GroupMembersTab: React.FC<GroupMembersTabProps> = ({ group, onBanne
                 <button
                   type="button"
                   className="btn btn-outline btn-danger-outline"
-                  style={{ padding: '3px 9px', fontSize: '11.5px' }}
+                  style={{ padding: '3px 9px', fontSize: '12px' }}
                   onClick={() => setConfirmRemove(m)}
                 >
                   Remove

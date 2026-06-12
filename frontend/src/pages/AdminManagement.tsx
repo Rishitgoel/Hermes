@@ -122,7 +122,7 @@ export const AdminManagement: React.FC = () => {
     <div>
       {/* Header */}
       <div className="section-header" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '6px', marginBottom: '24px' }}>
-        <h1 style={{ fontSize: '28px', fontFamily: 'Outfit, sans-serif', display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <h1 style={{ fontSize: '28px', display: 'flex', alignItems: 'center', gap: '10px' }}>
           <Icons.ShieldCheck size={28} style={{ color: 'var(--primary)' }} /> Admin Management
         </h1>
         <p style={{ color: 'var(--text-muted)', fontSize: '15px' }}>
@@ -182,7 +182,7 @@ export const AdminManagement: React.FC = () => {
       {superAdmin && activePlatform && (
         <section style={{ marginBottom: '36px' }}>
           <div className="section-header" style={{ marginBottom: '12px' }}>
-            <h2 style={{ fontSize: '20px', fontFamily: 'Outfit, sans-serif', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <h2 style={{ fontSize: '20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
               <Icons.UserCog size={20} style={{ color: 'var(--primary)' }} /> {prettyPlatform(activePlatform)} Platform Admins
             </h2>
             <button
@@ -246,7 +246,7 @@ export const AdminManagement: React.FC = () => {
       {/* Groups */}
       <section>
         <div className="section-header" style={{ marginBottom: '12px' }}>
-          <h2 style={{ fontSize: '20px', fontFamily: 'Outfit, sans-serif', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <h2 style={{ fontSize: '20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
             <Icons.Layers size={20} style={{ color: 'var(--primary)' }} /> Groups
           </h2>
           <button

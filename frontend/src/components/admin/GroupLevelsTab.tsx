@@ -147,7 +147,7 @@ export const GroupLevelsTab: React.FC<GroupLevelsTabProps> = ({ group, onBanner 
             <div key={lvl.id} className="admin-row" style={{ opacity: lvl.isActive ? 1 : 0.6 }}>
               <Icons.Layers size={15} style={{ color: lvl.isActive ? 'var(--primary)' : 'var(--text-light)' }} />
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 600, fontSize: '13.5px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                <div style={{ fontWeight: 600, fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                   {lvl.name}
                   {lvl.permission && (
                     <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '1px 6px' }}>
@@ -160,13 +160,13 @@ export const GroupLevelsTab: React.FC<GroupLevelsTabProps> = ({ group, onBanner 
                   ext id: {lvl.externalGroupId || '—'} · rank {lvl.rank} · {lvl.memberCount} member{lvl.memberCount === 1 ? '' : 's'}
                 </div>
               </div>
-              <button type="button" className="btn btn-outline" style={{ padding: '3px 9px', fontSize: '11.5px' }} onClick={() => startEdit(lvl)}>
+              <button type="button" className="btn btn-outline" style={{ padding: '3px 9px', fontSize: '12px' }} onClick={() => startEdit(lvl)}>
                 Edit
               </button>
               <button
                 type="button"
                 className="btn btn-outline"
-                style={{ padding: '3px 9px', fontSize: '11.5px' }}
+                style={{ padding: '3px 9px', fontSize: '12px' }}
                 disabled={toggleActiveMutation.isPending}
                 onClick={() => toggleActiveMutation.mutate(lvl)}
               >
@@ -175,7 +175,7 @@ export const GroupLevelsTab: React.FC<GroupLevelsTabProps> = ({ group, onBanner 
               <button
                 type="button"
                 className="btn btn-outline btn-danger-outline"
-                style={{ padding: '3px 9px', fontSize: '11.5px' }}
+                style={{ padding: '3px 9px', fontSize: '12px' }}
                 disabled={deleteMutation.isPending}
                 onClick={() => setConfirmDelete(lvl)}
               >

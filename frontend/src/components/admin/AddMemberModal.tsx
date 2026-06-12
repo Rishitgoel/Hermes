@@ -143,7 +143,7 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({ group, existingM
                   >
                     <Icons.UserCircle size={20} style={{ color: isSel ? 'var(--primary)' : 'var(--text-light)' }} />
                     <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 600, fontSize: '13.5px' }}>{cleanName(u.userName)}</div>
+                      <div style={{ fontWeight: 600, fontSize: '13px' }}>{cleanName(u.userName)}</div>
                       <div style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{u.userEmail}</div>
                     </div>
                     {isMember ? (

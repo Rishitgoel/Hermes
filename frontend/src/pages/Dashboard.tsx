@@ -115,7 +115,7 @@ export const Dashboard: React.FC = () => {
         flexDirection: 'column',
         gap: '8px'
       }}>
-        <h1 style={{ fontSize: '32px', fontFamily: 'Outfit, sans-serif', color: 'white' }}>
+        <h1 style={{ fontSize: '32px', color: 'white' }}>
           Welcome back, {user?.username.split('_').join(' ')}!
         </h1>
         <p style={{ opacity: 0.9, fontSize: '15px', fontWeight: 500 }}>

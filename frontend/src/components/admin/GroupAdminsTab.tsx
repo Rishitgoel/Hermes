@@ -72,13 +72,13 @@ export const GroupAdminsTab: React.FC<GroupAdminsTabProps> = ({ group, onBanner 
             <div key={a.id} className="admin-row">
               <Icons.UserCheck size={16} style={{ color: 'var(--primary)' }} />
               <div style={{ flex: 1 }}>
-                <span style={{ fontWeight: 600, fontSize: '13.5px' }}>{cleanName(a.userName)}</span>
+                <span style={{ fontWeight: 600, fontSize: '13px' }}>{cleanName(a.userName)}</span>
                 <span style={{ color: 'var(--text-muted)', fontSize: '12px', marginLeft: '8px' }}>{a.userEmail}</span>
               </div>
               <button
                 type="button"
                 className="btn btn-outline btn-danger-outline"
-                style={{ padding: '3px 9px', fontSize: '11.5px' }}
+                style={{ padding: '3px 9px', fontSize: '12px' }}
                 onClick={() => setConfirmRemove(a)}
               >
                 Remove

@@ -154,7 +154,7 @@ export const AuditLog: React.FC = () => {
     <div>
       {/* Page Header */}
       <div className="section-header">
-        <h1 style={{ fontSize: '28px', fontFamily: 'Outfit, sans-serif' }}>Platform Audit Log</h1>
+        <h1 style={{ fontSize: '28px' }}>Platform Audit Log</h1>
 
         {/* Sync Trigger button */}
         {syncStatus && (

@@ -94,7 +94,7 @@ export const GroupSettingsTab: React.FC<GroupSettingsTabProps> = ({ group, onBan
         <div className="admin-section-label" style={{ color: 'var(--status-rejected-text)', marginBottom: '8px' }}>Danger Zone</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
-            <div style={{ fontSize: '12.5px', color: 'var(--text-muted)', lineHeight: 1.4 }}>
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.4 }}>
               {group.isActive
                 ? 'Archiving hides this group from new requests. Existing members keep access until expiry/revoke.'
                 : 'This group is archived. Restore it to make it requestable again.'}
@@ -110,7 +110,7 @@ export const GroupSettingsTab: React.FC<GroupSettingsTabProps> = ({ group, onBan
             </button>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
-            <div style={{ fontSize: '12.5px', color: 'var(--text-muted)', lineHeight: 1.4 }}>
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.4 }}>
               Permanently delete. Only possible if the group has never had a member or request; otherwise it archives.
             </div>
             <button

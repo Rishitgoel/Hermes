@@ -49,7 +49,7 @@ export const MyRequests: React.FC = () => {
       <AccountStatusPanel />
 
       <div className="section-header">
-        <h1 style={{ fontSize: '28px', fontFamily: 'Outfit, sans-serif' }}>My Access Requests</h1>
+        <h1 style={{ fontSize: '28px' }}>My Access Requests</h1>
         <span style={{ fontSize: '13px', color: 'var(--text-muted)', fontWeight: 700 }}>
           {requests.length} Requests Total
         </span>

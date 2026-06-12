@@ -74,7 +74,7 @@ export const UserApprovalsTable: React.FC = () => {
   return (
     <div style={{ marginBottom: '32px' }}>
       <div className="section-header" style={{ marginBottom: '12px' }}>
-        <h2 style={{ fontSize: '20px', fontFamily: 'Outfit, sans-serif', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <h2 style={{ fontSize: '20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Icons.UserPlus size={20} style={{ color: 'var(--primary)' }} />
           User Approvals
         </h2>
