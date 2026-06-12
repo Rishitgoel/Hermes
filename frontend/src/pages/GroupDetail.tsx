@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import apiClient from '../services/apiClient';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import EmptyState from '../components/common/EmptyState';
+import ExpiryBadge from '../components/common/ExpiryBadge';
 import ReasonModal from '../components/common/ReasonModal';
 import AccessRequestModal, { type GroupLevelOption } from '../components/access/AccessRequestModal';
 import ChangeLevelModal from '../components/access/ChangeLevelModal';
@@ -382,15 +383,7 @@ export const GroupDetail: React.FC = () => {
                       )}
                       <td>{formatDate(member.grantedAt)}</td>
                       <td>
-                        {member.expiresAt ? (
-                          <span style={{ color: 'var(--status-pending-text)', fontWeight: 600 }}>
-                            {formatDate(member.expiresAt)}
-                          </span>
-                        ) : (
-                          <span style={{ color: 'var(--primary)', fontWeight: 700 }}>
-                            Permanent
-                          </span>
-                        )}
+                        <ExpiryBadge expiresAt={member.expiresAt} />
                       </td>
                       {canManage && (
                         <td style={{ textAlign: 'right' }}>

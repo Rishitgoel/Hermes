@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import apiClient from '../services/apiClient';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import EmptyState from '../components/common/EmptyState';
+import ExpiryBadge, { isExpiringSoon } from '../components/common/ExpiryBadge';
 import { queryKeys } from '../lib/queryKeys';
 import { fetchPlatforms } from '../services/api/platforms';
 import * as Icons from 'lucide-react';
@@ -217,18 +218,19 @@ export const Dashboard: React.FC = () => {
                     </div>
                   </td>
                   <td>
-                    {access.expiresAt ? (
-                      <span className="badge badge-pending badge-sm" style={{ gap: '4px' }}>
-                        <Icons.Clock size={12} /> Expires {formatDate(access.expiresAt)}
-                      </span>
-                    ) : (
-                      <span className="badge badge-approved badge-sm" style={{ gap: '4px' }}>
-                        <Icons.CheckCircle2 size={12} /> Permanent Access
-                      </span>
-                    )}
+                    <ExpiryBadge expiresAt={access.expiresAt} />
                   </td>
                   <td style={{ textAlign: 'right' }}>
                     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                      {isExpiringSoon(access.expiresAt) && (
+                        <button
+                          className="btn btn-outline btn-sm"
+                          title="Request renewed access for this group"
+                          onClick={() => navigate(`/groups/${access.group.slug}`)}
+                        >
+                          <Icons.RotateCw size={12} /> Extend
+                        </button>
+                      )}
                       <button
                         className="btn btn-outline btn-sm"
                         onClick={() => navigate(`/groups/${access.group.slug}`)}

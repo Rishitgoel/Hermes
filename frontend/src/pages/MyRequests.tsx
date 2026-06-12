@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import apiClient from '../services/apiClient';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import StatusBadge from '../components/common/StatusBadge';
+import ExpiryBadge from '../components/common/ExpiryBadge';
 import { FileText } from 'lucide-react';
 import { queryKeys } from '../lib/queryKeys';
 import AccountStatusPanel from '../components/user-creation/AccountStatusPanel';
@@ -104,7 +105,10 @@ export const MyRequests: React.FC = () => {
                     {formatDate(req.createdAt)}
                   </td>
                   <td>
-                    <StatusBadge status={req.status} />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'flex-start' }}>
+                      <StatusBadge status={req.status} />
+                      {req.status === 'PROVISIONED' && req.expiresAt && <ExpiryBadge expiresAt={req.expiresAt} />}
+                    </div>
                   </td>
                   <td style={{ fontSize: '13px', maxWidth: '200px' }}>
                     {req.reviewerName ? (
