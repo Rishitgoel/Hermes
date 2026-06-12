@@ -151,6 +151,19 @@ export const authenticateToken = useSimulation
   ? [checkJwtSimulated]
   : [checkJwtLive, mapLiveKeycloakUser, handleJwtError];
 
+// EventSource (used by the SSE notification stream) cannot send custom headers, so
+// the token rides in a `?token=` query param. Copy it into the Authorization header
+// BEFORE the normal auth chain runs, so both the simulated and live (express-jwt)
+// paths validate it exactly as a header-borne Bearer token — no duplicated auth logic.
+// NOTE: this means the token appears in the request URL (and thus access logs) for the
+// stream endpoint; acceptable for SSE, which has no header alternative.
+export const injectQueryTokenAsHeader = (req: Request, res: Response, next: NextFunction): void => {
+  if (!req.headers.authorization && typeof req.query.token === 'string' && req.query.token) {
+    req.headers.authorization = `Bearer ${req.query.token}`;
+  }
+  next();
+};
+
 // Enforce role checks
 export const requireRole = (requiredRoles: string[]) => {
   return (req: Request, res: Response, next: NextFunction): void => {

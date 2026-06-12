@@ -5,7 +5,20 @@ import reactRefresh from 'eslint-plugin-react-refresh';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist', 'node_modules', 'vite.config.ts'] },
+  // Test files are run by Vitest (esbuild), not tsc, and are excluded from the
+  // production tsconfig — keep them out of lint too, matching the backend config.
+  {
+    ignores: [
+      'dist',
+      'node_modules',
+      'vite.config.ts',
+      'src/**/*.test.ts',
+      'src/**/*.test.tsx',
+      'src/**/*.spec.ts',
+      'src/**/*.spec.tsx',
+      'src/test/**',
+    ],
+  },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],

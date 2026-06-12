@@ -9,6 +9,9 @@
     "prisma:generate": "prisma generate --schema=prisma/hermes/schema.prisma",
     "prisma:migrate": "prisma migrate dev --schema=prisma/hermes/schema.prisma",
     "prisma:seed": "ts-node prisma/hermes/seed.ts",
+    "lint": "eslint .",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\"",
     "test": "vitest",
     "test:run": "vitest run"
   },
@@ -31,16 +34,21 @@
     "zod": "^3.25.71"
   },
   "devDependencies": {
+    "@eslint/js": "^9.17.0",
     "@testcontainers/postgresql": "^12.0.1",
     "@types/cors": "^2.8.18",
     "@types/express": "^5.0.2",
     "@types/node": "^22.15.19",
     "@types/node-cron": "^3.0.11",
+    "eslint": "^9.17.0",
+    "globals": "^15.14.0",
     "nodemon": "^3.1.10",
+    "prettier": "^3.4.2",
     "prisma": "^6.8.2",
     "testcontainers": "^12.0.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.6.3",
+    "typescript-eslint": "^8.18.2",
     "vitest": "^4.1.8"
   }
 }

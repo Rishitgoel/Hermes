@@ -288,7 +288,10 @@ cd "D:\Bachatt\Hermes 2\backend"; npx prisma validate --schema=prisma/hermes/sch
 # If you changed frontend
 cd "D:\Bachatt\Hermes 2\frontend"; npm run lint
 
-# Frontend lint exists. Tests exist (P2-1). Backend lint doesn't exist yet (P2-3). CI doesn't exist yet (P2-4).
+# If you changed backend (lint exists as of P2-3)
+cd "D:\Bachatt\Hermes 2\backend"; npm run lint
+
+# Frontend + backend lint exist. Tests exist (P2-1). CI runs all of these on push/PR to main (P2-4).
 ```
 
 Tell the user what passed/failed before reporting "done."
@@ -314,8 +317,12 @@ Tell the user what passed/failed before reporting "done."
 - ✅ Platform ACTIVE/COMING_SOON derived from the registry via `GET /api/platforms` — `frontend/src/lib/platforms.ts` is presentation-only
 - ✅ Frontend ESLint wired (`cd frontend; npm run lint`)
 - ✅ Vitest test suite implemented (P2-1)
-- ❌ No CI
-- ❌ No backend linter (frontend has one)
+- ✅ Backend ESLint (flat config `backend/eslint.config.mjs`) + Prettier (P2-3) — `cd backend; npm run lint` / `npm run format`; type-aware `@typescript-eslint/no-floating-promises` is on
+- ✅ CI on push/PR to `main` (P2-4) — `.github/workflows/ci.yml`: typecheck + lint + prisma-validate + tests for both projects, Node 22, per-project npm cache
+- ✅ Bulk endpoints (P2-2) — `POST /api/access-requests/bulk` + `PUT /api/access-requests/bulk/review`: one HTTP call instead of N. Create is one transaction + partial-success results + one consolidated `requests.bulk.created` notification; review reuses the per-item path (each requester still notified) and returns per-item `reviewed`/`failed`.
+- ✅ Audit log filtering (P2-5) — `auditQuerySchema`/controller accept `performerId`, `fromDate`, `toDate`, `groupId`, `platform` (platform → group ids, since `AuditEntry` has no platform column); AuditLog UI has date range + platform + group selectors.
+- ✅ Notifications over SSE (P2-6) — `GET /api/notifications/stream`; `createNotification` emits a scoped `notification.created`, `notification-stream.service` fans out per user (one bus listener). Replaces the 60s poll. EventSource auths via `?token=`. In-process today; swap to the queue when P3-2 lands.
+- ⚠ Test files are excluded from the production `tsconfig` of **both** projects (Vitest owns them via esbuild). `tsc --noEmit` / `npm run build` no longer type-check `*.test.*`; this fixed pre-existing build breakage. Backend ESLint also ignores test files.
 
 When the user asks "what's next?" — open `ROADMAP.md` and suggest the next P1 item that fits the time they have.
 

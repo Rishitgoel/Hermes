@@ -24,7 +24,7 @@ interface NotificationContextType {
 const NotificationContext = createContext<NotificationContextType | undefined>(undefined);
 
 export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, isSimulated } = useAuth();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState<number>(0);
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -68,15 +68,77 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     }
   };
 
+  // Live notifications via Server-Sent Events (P2-6) — replaces the old 60s poll.
+  // The backend pushes each new notification for this user as it's created; we just
+  // keep one EventSource open and append. We still hydrate on mount (and on every
+  // reconnect) so the bell is correct even if events were missed while disconnected.
   useEffect(() => {
-    if (isAuthenticated) {
-      fetchNotifications();
-      
-      // Auto poll every 60 seconds (fixes #28)
-      const interval = setInterval(fetchNotifications, 60000);
-      return () => clearInterval(interval);
-    }
-  }, [isAuthenticated]);
+    if (!isAuthenticated) return;
+
+    fetchNotifications();
+
+    const baseUrl = import.meta.env.VITE_BASE_URL_BACKEND || 'http://localhost:8001';
+    let es: EventSource | null = null;
+    let closed = false;
+    let reopenTimer: number | null = null;
+
+    // EventSource can't send an Authorization header, so the token rides in the URL.
+    // Live: the Keycloak access token (refreshed in the background by AuthContext).
+    // Simulation: the mock role string in localStorage.
+    const getToken = (): string | null => {
+      const kc = (window as { keycloak?: { token?: string } }).keycloak;
+      if (kc?.token) return kc.token;
+      if (isSimulated) return localStorage.getItem('hermes_mock_token');
+      return null;
+    };
+
+    const connect = () => {
+      if (closed) return;
+      const token = getToken();
+      if (!token) {
+        // Keycloak may still be initialising — retry shortly.
+        reopenTimer = window.setTimeout(connect, 2000);
+        return;
+      }
+
+      es = new EventSource(`${baseUrl}/api/notifications/stream?token=${encodeURIComponent(token)}`);
+
+      es.addEventListener('open', () => {
+        // (Re)connected: re-hydrate to catch anything emitted while we were away.
+        fetchNotifications();
+      });
+
+      es.addEventListener('notification', (ev) => {
+        try {
+          const n = JSON.parse((ev as MessageEvent).data) as Notification;
+          setNotifications((prev) => (prev.some((x) => x.id === n.id) ? prev : [n, ...prev]));
+          if (!n.isRead) setUnreadCount((c) => c + 1);
+        } catch {
+          // Ignore a malformed frame rather than tearing down the stream.
+        }
+      });
+
+      es.onerror = () => {
+        // EventSource would auto-retry with the SAME (possibly expired) token. Close
+        // and reopen ourselves so we re-read a refreshed token, with a short backoff.
+        es?.close();
+        es = null;
+        if (closed) return;
+        if (reopenTimer) window.clearTimeout(reopenTimer);
+        reopenTimer = window.setTimeout(connect, 3000);
+      };
+    };
+
+    connect();
+
+    return () => {
+      closed = true;
+      if (reopenTimer) window.clearTimeout(reopenTimer);
+      es?.close();
+    };
+    // fetchNotifications is stable enough for our purposes; re-running only on auth change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated, isSimulated]);
 
   return (
     <NotificationContext.Provider

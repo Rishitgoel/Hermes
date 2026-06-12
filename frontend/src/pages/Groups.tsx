@@ -96,29 +96,46 @@ export const Groups: React.FC = () => {
     (!account || userCreationStatus === 'DRAFT' || userCreationStatus === 'REJECTED');
 
   const bulkSubmitMutation = useMutation({
+    // One HTTP call instead of N parallel POSTs (P2-2): the backend validates each
+    // item, inserts the valid ones in a single transaction, fires one consolidated
+    // notification, and returns per-item created/failed so we can report both.
     mutationFn: async (
       requestsToSubmit: { groupId: string; justification: string; levelId?: string }[]
     ) => {
-      return Promise.allSettled(
-        requestsToSubmit.map((req) =>
-          apiClient.post('/api/access-requests', {
-            groupId: req.groupId,
-            justification: req.justification,
-            duration: selectedDuration,
-            ...(req.levelId ? { levelId: req.levelId } : {}),
-          })
-        )
-      );
+      const res = await apiClient.post('/api/access-requests/bulk', {
+        duration: selectedDuration,
+        requests: requestsToSubmit.map((req) => ({
+          groupId: req.groupId,
+          justification: req.justification,
+          ...(req.levelId ? { levelId: req.levelId } : {}),
+        })),
+      });
+      return res.data as {
+        created: { groupId: string; requestId: string; groupName: string; levelName: string | null }[];
+        failed: { groupId: string; groupName: string | null; error: string }[];
+      };
     },
-    onSuccess: (results) => {
-      const failures = results.filter((r) => r.status === 'rejected') as PromiseRejectedResult[];
-      const successes = results.filter((r) => r.status === 'fulfilled');
-
-      if (failures.length > 0) {
-        const errorDetails = failures.map((f) => f.reason?.message || 'Unknown error').join(', ');
-        setBulkError(`Submitted ${successes.length} request(s) successfully, but ${failures.length} failed: ${errorDetails}`);
+    onSuccess: (result) => {
+      if (result.failed.length > 0) {
+        const details = result.failed
+          .map((f) => `${f.groupName ?? 'group'} (${f.error})`)
+          .join(', ');
+        setBulkError(
+          `Submitted ${result.created.length} request(s); ${result.failed.length} could not be submitted: ${details}`
+        );
+        // Drop the selections that went through, keep the failed ones so the user can fix + retry.
+        if (result.created.length > 0) {
+          const createdIds = new Set(result.created.map((c) => c.groupId));
+          setSelectedGroups((prev) => {
+            const copy = { ...prev };
+            createdIds.forEach((id) => {
+              copy[id] = false;
+            });
+            return copy;
+          });
+        }
       } else {
-        setBulkSuccess(`Successfully requested access to ${successes.length} group(s).`);
+        setBulkSuccess(`Successfully requested access to ${result.created.length} group(s).`);
         setSelectedGroups({});
         setCustomReasons({});
         setSelectedLevels({});

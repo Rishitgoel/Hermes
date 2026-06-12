@@ -61,7 +61,8 @@ export class RedashService {
     // and clean the map entry once we're the last link to avoid unbounded growth.
     const tail = run.catch(() => {});
     this.userMutationChains.set(redashUserId, tail);
-    tail.then(() => {
+    // Fire-and-forget map cleanup once this link settles (no need to await it).
+    void tail.then(() => {
       if (this.userMutationChains.get(redashUserId) === tail) {
         this.userMutationChains.delete(redashUserId);
       }

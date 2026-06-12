@@ -9,6 +9,19 @@ router.post('/', authenticateToken, (req: Request, res: Response, next: NextFunc
   controller.createRequest(req, res, next).catch(next);
 });
 
+// Bulk submit — one call instead of N. Static path, so no conflict with POST '/'.
+router.post('/bulk', authenticateToken, (req: Request, res: Response, next: NextFunction) => {
+  const controller = new AccessRequestController(req, res, next);
+  controller.createRequestsBulk(req, res, next).catch(next);
+});
+
+// Bulk review — MUST be registered before '/:id/review' so "bulk" isn't matched as
+// an :id. Authorized per-item in the controller via isGroupAdminOf.
+router.put('/bulk/review', authenticateToken, (req: Request, res: Response, next: NextFunction) => {
+  const controller = new AccessRequestController(req, res, next);
+  controller.reviewRequestsBulk(req, res, next).catch(next);
+});
+
 // Change the level the caller already holds in a group (promote/demote). Authorized
 // in the controller (the caller may only change their own level).
 router.post('/change-level', authenticateToken, (req: Request, res: Response, next: NextFunction) => {

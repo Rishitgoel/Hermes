@@ -281,12 +281,18 @@ describe('SyncService.reconcileHermesGroups', () => {
 
     await syncService.reconcileHermesGroups('aws', liveAdapter);
 
-    const groups = await prisma.group.findMany({ include: { levels: { orderBy: { rank: 'asc' } } } });
+    const groups = await prisma.group.findMany({ include: { levels: true } });
     expect(groups).toHaveLength(1); // ONE group...
     expect(groups[0].name).toBe('Credit Card');
     expect(groups[0].externalGroupId).toBe('ext-cc');
-    // ...with the dashed names as its levels.
-    expect(groups[0].levels.map(l => ({ name: l.name, ext: l.externalGroupId, active: l.isActive }))).toEqual([
+    // ...with the dashed names as its levels. Sort by name in JS so the assertion is
+    // order-independent: reconciliation assigns the two auto-created levels their ranks
+    // in platform-cache read order, which Postgres does not guarantee.
+    expect(
+      groups[0].levels
+        .map((l) => ({ name: l.name, ext: l.externalGroupId, active: l.isActive }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    ).toEqual([
       { name: 'Admin', ext: 'ext-cc-admin', active: true },
       { name: 'Senior Dev', ext: 'ext-cc-senior', active: true },
     ]);
@@ -324,8 +330,15 @@ describe('SyncService.reconcileHermesGroups', () => {
     await syncService.reconcileHermesGroups('aws', liveAdapter);
 
     expect(await prisma.group.count()).toBe(1); // strays gone
-    const levels = await prisma.groupLevel.findMany({ where: { groupId: parent.id }, orderBy: { rank: 'asc' } });
-    expect(levels.map(l => ({ name: l.name, ext: l.externalGroupId, active: l.isActive }))).toEqual([
+    // Sort by name in JS so the assertion is order-independent: reconciliation assigns
+    // the two auto-created levels their ranks in platform-cache read order, which
+    // Postgres does not guarantee (this was an intermittently-failing assertion).
+    const levels = await prisma.groupLevel.findMany({ where: { groupId: parent.id } });
+    expect(
+      levels
+        .map((l) => ({ name: l.name, ext: l.externalGroupId, active: l.isActive }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    ).toEqual([
       { name: 'Admin', ext: '9', active: true },
       { name: 'Senior Dev', ext: '10', active: true },
     ]);

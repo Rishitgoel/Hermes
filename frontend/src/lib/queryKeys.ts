@@ -8,8 +8,17 @@ export const queryKeys = {
   myAccess: () => ['my-access'] as const,
   myRequests: () => ['my-requests'] as const,
   pendingRequests: () => ['pending-requests'] as const,
-  audit: (params: { page: number; pageSize: number; action: string; search: string }) =>
-    ['audit', params] as const,
+  audit: (params: {
+    page: number;
+    pageSize: number;
+    action: string;
+    search: string;
+    performerId?: string;
+    fromDate?: string;
+    toDate?: string;
+    groupId?: string;
+    platform?: string;
+  }) => ['audit', params] as const,
   platformStatus: (platform: string) => ['platform-status', platform] as const,
   pendingUserCreations: () => ['pending-user-creations'] as const,
   // Per-platform account-creation status for the current user.

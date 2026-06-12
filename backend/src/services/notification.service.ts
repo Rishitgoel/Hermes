@@ -1,4 +1,5 @@
 import prisma from '../config/prisma';
+import eventBus from './event-bus';
 import slackService from './slack.service';
 import emailService from './email.service';
 import logger from '../utils/logger';
@@ -48,7 +49,7 @@ export class NotificationService {
     linkUrl?: string
   ): Promise<void> {
     try {
-      await prisma.notification.create({
+      const created = await prisma.notification.create({
         data: {
           userId,
           title,
@@ -57,6 +58,21 @@ export class NotificationService {
         },
       });
       logger.info(`🔔 In-app notification created for user ${userId}: "${title}"`);
+
+      // Push it to any open SSE stream for this user (P2-6, replaces 60s polling).
+      // Best-effort: a stream-delivery problem must never fail the DB write above.
+      eventBus.emitNotificationCreated({
+        userId,
+        notification: {
+          id: created.id,
+          userId: created.userId,
+          title: created.title,
+          message: created.message,
+          linkUrl: created.linkUrl,
+          isRead: created.isRead,
+          createdAt: created.createdAt,
+        },
+      });
     } catch (error: any) {
       logger.error(`Failed to create in-app notification for ${userId}:`, error.message);
     }
@@ -176,6 +192,92 @@ export class NotificationService {
       }
     } catch (error: any) {
       logger.error('Failed to notify group/platform admins:', error.message);
+    }
+  }
+
+  /**
+   * Bulk variant of notifyRequestCreated: one team-channel ping for the whole batch,
+   * then ONE summary per admin (in-app + email + Slack DM) instead of N pings. Each
+   * admin is told only about the groups in this batch they can actually review; an
+   * item with no group/platform admin falls back to super admins (resolved once).
+   */
+  async notifyRequestsCreatedBulk(
+    requesterName: string,
+    duration: string,
+    items: { requestId: string; groupId: string; groupName: string; levelName: string | null }[],
+  ): Promise<void> {
+    if (!items || items.length === 0) return;
+
+    const labelFor = (i: { groupName: string; levelName: string | null }) =>
+      i.levelName ? `${i.groupName} — ${i.levelName}` : i.groupName;
+
+    // 1. One team-channel ping for the whole batch.
+    const allLabels = items.map(labelFor);
+    const slackMsg = `📋 *Hermes Access Requests*\n--------------------------\n*${escapeSlackText(requesterName)}* requested access to ${items.length} group(s): ${allLabels.map(escapeSlackText).join(', ')}.\nDuration: ${formatDuration(duration)}\n\n👉 Review in Hermes: ${config.frontend.url}/pending-approvals`;
+    await slackService.sendPing(slackMsg);
+
+    // 2. Fan out to the admins who can action these groups — one summary per admin.
+    try {
+      const groupIds = [...new Set(items.map((i) => i.groupId))];
+      const groups = await prisma.group.findMany({
+        where: { id: { in: groupIds } },
+        select: { id: true, platform: true },
+      });
+      const platformByGroup = new Map(groups.map((g) => [g.id, g.platform]));
+      const platforms = [...new Set(groups.map((g) => g.platform).filter(Boolean))] as string[];
+
+      const [groupAdmins, platformAdmins] = await Promise.all([
+        prisma.groupAdmin.findMany({ where: { groupId: { in: groupIds } } }),
+        platforms.length > 0
+          ? prisma.platformAdmin.findMany({ where: { platform: { in: platforms } } })
+          : Promise.resolve([] as { userId: string; userEmail: string; platform: string }[]),
+      ]);
+
+      // adminUserId -> { email, set of group labels they can review in this batch }
+      const recipients = new Map<string, { email?: string | null; labels: Set<string> }>();
+      const addRecipient = (userId: string, email: string | null | undefined, label: string) => {
+        const entry = recipients.get(userId) ?? { email, labels: new Set<string>() };
+        if (!entry.email && email) entry.email = email;
+        entry.labels.add(label);
+        recipients.set(userId, entry);
+      };
+
+      let supers: Awaited<ReturnType<typeof keycloakSetupService.getSuperAdmins>> | null = null;
+      for (const item of items) {
+        const label = labelFor(item);
+        const platform = platformByGroup.get(item.groupId);
+        const ga = groupAdmins.filter((a) => a.groupId === item.groupId);
+        const pa = platform ? platformAdmins.filter((a) => a.platform === platform) : [];
+        if (ga.length === 0 && pa.length === 0) {
+          // Nobody scoped to this group → fall back to super admins (fetched once).
+          if (!supers) supers = await keycloakSetupService.getSuperAdmins();
+          supers.forEach((s) => addRecipient(s.id, s.email, label));
+        } else {
+          ga.forEach((a) => addRecipient(a.userId, a.userEmail, label));
+          pa.forEach((a) => addRecipient(a.userId, a.userEmail, label));
+        }
+      }
+
+      await Promise.allSettled(
+        [...recipients.entries()].map(async ([userId, info]) => {
+          const labels = [...info.labels];
+          await this.createNotification(
+            userId,
+            'Pending Approval Requests',
+            `${requesterName} requested access to ${labels.length} group(s): ${labels.join(', ')}.`,
+            '/pending-approvals',
+          );
+          const email = templates.adminNewGroupRequestsBulk({ requesterName, groupLabels: labels, duration });
+          const dm = `📋 *${escapeSlackText(requesterName)}* requested access to ${labels.length} group(s): ${labels.map(escapeSlackText).join(', ')} (${formatDuration(duration)}).\n👉 ${config.frontend.url}/pending-approvals`;
+          await this.emailAndDm(info.email, email, dm);
+        }),
+      );
+
+      if (recipients.size === 0) {
+        logger.warn('notifyRequestsCreatedBulk: no admins resolved to notify');
+      }
+    } catch (error: any) {
+      logger.error('Failed to fan out bulk request notifications:', error.message);
     }
   }
 

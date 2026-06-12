@@ -106,4 +106,5 @@ async function bootstrap() {
   }
 }
 
-bootstrap();
+// Entrypoint: bootstrap handles its own errors (try/catch → process.exit(1)).
+void bootstrap();

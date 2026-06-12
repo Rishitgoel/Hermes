@@ -21,5 +21,15 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  // Vitest type-checks/runs tests through Vite's esbuild pipeline, not `tsc`. Keep
+  // them out of the production typecheck (`npm run build` = `tsc && vite build`) so
+  // test-only patterns don't break the build / CI typecheck.
+  "exclude": [
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx",
+    "src/**/*.spec.ts",
+    "src/**/*.spec.tsx",
+    "src/test"
+  ]
 }

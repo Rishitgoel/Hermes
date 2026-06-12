@@ -11,5 +11,9 @@
     "forceConsistentCasingInFileNames": true,
     "declaration": true
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*"],
+  // Test files are run by Vitest (its own esbuild pipeline), not tsc. They use
+  // patterns the CommonJS build rejects (top-level await in setup.ts) and must not
+  // land in dist/, so keep them out of `tsc` (build + `--noEmit` typecheck + CI).
+  "exclude": ["node_modules", "dist", "src/**/*.test.ts", "src/**/*.spec.ts", "src/test/**"]
 }

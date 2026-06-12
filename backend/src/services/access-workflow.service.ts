@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import prisma from '../config/prisma';
 import provisioningRegistry from './provisioning.registry';
 import { PlatformAdapter } from './provisioner.interface';
@@ -102,6 +103,200 @@ export class AccessWorkflowService {
     }
 
     return this._persistPendingRequest(requester, group, level, justification, duration);
+  }
+
+  /**
+   * Bulk create access requests in ONE round-trip + ONE Prisma transaction.
+   * Replaces the frontend's N parallel POSTs (Groups page "Submit Requests").
+   *
+   * Partial-success by design: each item is validated independently (the same
+   * group/level/active-access/open-request checks as createRequest); only the valid
+   * items are inserted (atomically, together), and every item — created or skipped —
+   * is reported back so the UI can show "3 submitted, 2 skipped: …". One consolidated
+   * `requests.bulk.created` event replaces the N per-request events (one Slack ping +
+   * one summary per admin instead of N). Per-request REQUEST_CREATED audit rows are
+   * still written (each request needs its own trace + accessRequestId FK), correlated
+   * by a shared `bulkId` in their details.
+   *
+   * `duration` is shared across the batch (matches the UI's single duration picker).
+   */
+  async createRequestsBulk(
+    requester: { id: string; username: string; email: string },
+    items: { groupId: string; levelId?: string | null; justification: string }[],
+    duration: AccessDuration,
+  ): Promise<{
+    created: { groupId: string; requestId: string; groupName: string; levelName: string | null }[];
+    failed: { groupId: string; groupName: string | null; error: string }[];
+  }> {
+    // De-dupe by groupId (the UI sends unique ids, but this also prevents an
+    // intra-batch collision against the open-request unique index).
+    const seenGroup = new Set<string>();
+    const deduped = items.filter((it) => {
+      if (seenGroup.has(it.groupId)) return false;
+      seenGroup.add(it.groupId);
+      return true;
+    });
+    const groupIds = deduped.map((it) => it.groupId);
+
+    // Batch-load everything per-item validation needs — no N+1.
+    const [groups, activeLevels, activeAccesses, openRequests] = await Promise.all([
+      prisma.group.findMany({ where: { id: { in: groupIds } } }),
+      prisma.groupLevel.findMany({ where: { groupId: { in: groupIds }, isActive: true } }),
+      prisma.userAccess.findMany({
+        where: { userId: requester.id, groupId: { in: groupIds }, isActive: true },
+        select: { groupId: true },
+      }),
+      prisma.accessRequest.findMany({
+        where: {
+          requesterId: requester.id,
+          groupId: { in: groupIds },
+          status: { in: [RequestStatus.PENDING, RequestStatus.WAITING_FOR_SETUP] },
+        },
+        select: { groupId: true },
+      }),
+    ]);
+
+    const groupById = new Map(groups.map((g) => [g.id, g]));
+    const levelsByGroup = new Map<string, LevelRow[]>();
+    for (const lvl of activeLevels) {
+      const arr = levelsByGroup.get(lvl.groupId) ?? [];
+      arr.push(lvl);
+      levelsByGroup.set(lvl.groupId, arr);
+    }
+    const hasActiveAccess = new Set(activeAccesses.map((a) => a.groupId));
+    const hasOpenRequest = new Set(openRequests.map((r) => r.groupId));
+
+    const expiresAt = this.calculateExpiry(duration);
+    const valid: { group: GroupRow; level: LevelRow | null; justification: string }[] = [];
+    const failed: { groupId: string; groupName: string | null; error: string }[] = [];
+
+    for (const it of deduped) {
+      const group = groupById.get(it.groupId);
+      if (!group) {
+        failed.push({ groupId: it.groupId, groupName: null, error: 'Group not found' });
+        continue;
+      }
+      const fail = (error: string) => failed.push({ groupId: it.groupId, groupName: group.name, error });
+
+      // Level requiredness — mirrors createRequest exactly.
+      const levels = levelsByGroup.get(it.groupId) ?? [];
+      let level: LevelRow | null = null;
+      if (levels.length > 0) {
+        if (!it.levelId) {
+          fail('This group requires selecting a level.');
+          continue;
+        }
+        level = levels.find((l) => l.id === it.levelId) ?? null;
+        if (!level) {
+          fail('Invalid or inactive level for this group.');
+          continue;
+        }
+        if (!level.externalGroupId) {
+          fail('This level is not fully configured yet (no backing platform group). Please contact an admin.');
+          continue;
+        }
+      } else if (it.levelId) {
+        fail('This group has no levels; do not specify a level.');
+        continue;
+      }
+
+      if (hasActiveAccess.has(it.groupId)) {
+        fail('You already have active access to this group.');
+        continue;
+      }
+      if (hasOpenRequest.has(it.groupId)) {
+        fail('You already have a pending request for this group.');
+        continue;
+      }
+
+      valid.push({ group, level, justification: it.justification });
+    }
+
+    if (valid.length === 0) {
+      return { created: [], failed };
+    }
+
+    // Insert all valid requests + their per-request audit rows atomically, correlated
+    // by a shared bulkId. A concurrent submit (another tab) could still trip the
+    // open-request unique index mid-transaction and roll the whole batch back — surface
+    // that as a retryable conflict rather than silently dropping the valid items.
+    const bulkId = randomUUID();
+    let createdRows: { request: AccessRequest; group: GroupRow; level: LevelRow | null }[];
+    try {
+      createdRows = await prisma.$transaction(async (tx) => {
+        const out: { request: AccessRequest; group: GroupRow; level: LevelRow | null }[] = [];
+        for (const v of valid) {
+          const request = await tx.accessRequest.create({
+            data: {
+              groupId: v.group.id,
+              levelId: v.level?.id ?? null,
+              requesterId: requester.id,
+              requesterName: requester.username,
+              requesterEmail: requester.email,
+              justification: v.justification,
+              duration,
+              expiresAt,
+              status: RequestStatus.PENDING,
+            },
+          });
+          await tx.auditEntry.create({
+            data: {
+              action: 'REQUEST_CREATED',
+              performerId: requester.id,
+              performerName: requester.username,
+              targetUserId: requester.id,
+              targetUserName: requester.username,
+              groupId: v.group.id,
+              accessRequestId: request.id,
+              details: {
+                duration,
+                expiresAt,
+                levelId: v.level?.id ?? null,
+                levelName: v.level?.name ?? null,
+                bulkId,
+                bulk: true,
+              },
+            },
+          });
+          out.push({ request, group: v.group, level: v.level });
+        }
+        return out;
+      });
+    } catch (err: any) {
+      if (err?.code === 'P2002') {
+        throw new ConflictError(
+          'One of these requests was just submitted elsewhere — please refresh and retry.',
+        );
+      }
+      throw err;
+    }
+
+    // One consolidated event for the whole batch (replaces N request.created events).
+    eventBus.emitAccessEvent({
+      type: 'requests.bulk.created',
+      payload: {
+        requesterId: requester.id,
+        requesterName: requester.username,
+        duration,
+        items: createdRows.map((r) => ({
+          requestId: r.request.id,
+          groupId: r.group.id,
+          groupName: r.group.name,
+          levelName: r.level?.name ?? null,
+        })),
+      },
+      timestamp: new Date(),
+    });
+
+    return {
+      created: createdRows.map((r) => ({
+        groupId: r.group.id,
+        requestId: r.request.id,
+        groupName: r.group.name,
+        levelName: r.level?.name ?? null,
+      })),
+      failed,
+    };
   }
 
   /**

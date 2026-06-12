@@ -116,6 +116,26 @@ export function adminNewGroupRequest(opts: {
   };
 }
 
+export function adminNewGroupRequestsBulk(opts: {
+  requesterName: string;
+  groupLabels: string[];
+  duration: string;
+}): EmailContent {
+  const href = url('/pending-approvals');
+  const durationLabel = opts.duration.replace(/_/g, ' ').toLowerCase();
+  const list = opts.groupLabels.map((g) => `<li style="margin-bottom:4px;">${esc(g)}</li>`).join('');
+  return {
+    subject: `[Hermes] ${opts.requesterName} requested access to ${opts.groupLabels.length} group(s)`,
+    html: layout({
+      heading: 'New access requests',
+      bodyHtml: `<p style="margin:0;"><strong>${esc(opts.requesterName)}</strong> requested access to the following group(s):</p><ul style="margin:12px 0 0;padding-left:20px;color:${TEXT};">${list}</ul><p style="margin:12px 0 0;"><strong>Duration:</strong> ${esc(durationLabel)}</p>`,
+      ctaLabel: 'Review requests',
+      ctaHref: href,
+    }),
+    text: `${opts.requesterName} requested access to ${opts.groupLabels.length} group(s): ${opts.groupLabels.join(', ')} (${durationLabel}). Review: ${href}`,
+  };
+}
+
 // ── User-facing ───────────────────────────────────────────────
 
 export function userAccountApproved(opts: { reviewerName: string; platformLabel?: string }): EmailContent {

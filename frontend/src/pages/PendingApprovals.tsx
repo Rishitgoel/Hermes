@@ -117,28 +117,37 @@ export const PendingApprovals: React.FC = () => {
   };
 
   const bulkReviewMutation = useMutation({
+    // One HTTP call instead of N parallel PUTs (P2-2). The backend reviews each item
+    // independently (so a per-item failure — auth, user-not-approved, provision error
+    // — never aborts the rest) and returns per-item reviewed/failed.
     mutationFn: async (status: 'APPROVED' | 'REJECTED') => {
-      const results = await Promise.allSettled(
-        checkedRequestIds.map((requestId) => {
-          const custom = customNotes[requestId]?.trim() || '';
-          const note = custom.length > 0 ? custom : generalNote.trim();
-          return apiClient.put(`/api/access-requests/${requestId}/review`, {
-            status,
-            note,
-          });
-        })
-      );
-      return { results, status };
+      const items = checkedRequestIds.map((requestId) => {
+        const custom = customNotes[requestId]?.trim() || '';
+        const note = custom.length > 0 ? custom : generalNote.trim();
+        return { requestId, status, ...(note ? { note } : {}) };
+      });
+      const res = await apiClient.put('/api/access-requests/bulk/review', { items });
+      return {
+        result: res.data as {
+          reviewed: { requestId: string; status: string }[];
+          failed: { requestId: string; error: string; errorCode?: string }[];
+        },
+        status,
+      };
     },
-    onSuccess: ({ results, status }) => {
-      const failures = results.filter((r) => r.status === 'rejected') as PromiseRejectedResult[];
-      const successes = results.filter((r) => r.status === 'fulfilled');
-
-      if (failures.length > 0) {
-        const errorDetails = failures.map((f) => f.reason?.message || 'Unknown error').join(', ');
-        setBulkError(`Successfully reviewed ${successes.length} request(s), but ${failures.length} failed: ${errorDetails}`);
+    onSuccess: ({ result, status }) => {
+      const verb = status === 'APPROVED' ? 'approved' : 'rejected';
+      if (result.failed.length > 0) {
+        const hasUserNotApproved = result.failed.some((f) => f.errorCode === 'USER_NOT_APPROVED');
+        const prefix = hasUserNotApproved
+          ? "Some requests can't be approved yet — approve the requester's account in the User Approvals section first. "
+          : '';
+        const details = result.failed.map((f) => f.error).join(', ');
+        setBulkError(
+          `${prefix}Reviewed ${result.reviewed.length} request(s); ${result.failed.length} failed: ${details}`
+        );
       } else {
-        setBulkSuccess(`Successfully ${status.toLowerCase()}ed ${successes.length} request(s).`);
+        setBulkSuccess(`Successfully ${verb} ${result.reviewed.length} request(s).`);
         setSelectedRequests({});
         setCustomNotes({});
         setGeneralNote('');
@@ -151,12 +160,7 @@ export const PendingApprovals: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.myAccess() });
     },
     onError: (err: any) => {
-      // Surface USER_NOT_APPROVED specially so the admin knows to approve the user first.
-      if (err?.errorCode === 'USER_NOT_APPROVED') {
-        setBulkError('One or more requests can\'t be approved yet — approve the requester\'s account in the User Approvals section first.');
-      } else {
-        setBulkError(err.message || 'An error occurred during submission.');
-      }
+      setBulkError(err.message || 'An error occurred during submission.');
     },
   });
 

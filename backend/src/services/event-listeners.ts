@@ -18,6 +18,16 @@ export function registerEventListeners(): void {
     }
   });
 
+  // Bulk submit: one consolidated notification fan-out instead of N per-request ones.
+  eventBus.on('requests.bulk.created', async (event) => {
+    try {
+      const { requesterName, duration, items } = event.payload as any;
+      await notificationService.notifyRequestsCreatedBulk(requesterName, duration, items);
+    } catch (err: any) {
+      logger.error('Failed to notify requests.bulk.created event:', err.message);
+    }
+  });
+
   eventBus.on('request.approved', async (event) => {
     try {
       const { requesterId, groupName, reviewerName, note, requesterEmail } = event.payload as any;

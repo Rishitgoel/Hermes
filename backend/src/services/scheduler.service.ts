@@ -25,18 +25,19 @@ export class SchedulerService {
 
   // Stops all cron jobs
   stop(): void {
+    // node-cron's stop() returns a promise; we don't need to await teardown here.
     if (this.expiryJob) {
-      this.expiryJob.stop();
+      void this.expiryJob.stop();
       this.expiryJob = null;
       logger.info('⏰ Scheduler Service: Expiry cron job stopped.');
     }
     if (this.platformSyncJob) {
-      this.platformSyncJob.stop();
+      void this.platformSyncJob.stop();
       this.platformSyncJob = null;
       logger.info('⏰ Scheduler Service: Platform sync cron job stopped.');
     }
     if (this.adminReconcileJob) {
-      this.adminReconcileJob.stop();
+      void this.adminReconcileJob.stop();
       this.adminReconcileJob = null;
       logger.info('⏰ Scheduler Service: Admin reconciliation cron job stopped.');
     }

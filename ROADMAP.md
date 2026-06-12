@@ -54,10 +54,17 @@ Everything below is on `main` / `origin/main`. Verified present in the tree on 2
 | **Group CRUD** | **Group create/edit/archive** from Admin Management UI. Delete is pristine-only; referenced groups are archived. | `admin-management.controller.ts` (`createGroup` / `updateGroup` / `deleteGroup`); `frontend/src/pages/AdminManagement.tsx` |
 | **Dev stack** | **Local Docker Postgres** (`localhost:15433`), simulation flags for Keycloak/Redash/AWS/email. | `docker-compose.yml`, `backend/.env.example`, `CLAUDE.md` |
 | **P2-1** | **Tests (vitest)** | Root-level `npm test` sequentially running backend integration tests (via `@testcontainers/postgresql`) and frontend unit/smoke tests (via `jsdom` and React Testing Library). |
+| **P2-2** | **Bulk endpoints** — `POST /api/access-requests/bulk` + `PUT /api/access-requests/bulk/review`; the Groups + Pending Approvals pages now make one HTTP call instead of N. Create is one transaction with partial-success per-item results + one consolidated `requests.bulk.created` notification (one Slack ping + one summary per admin). Review reuses the per-item path so each requester still gets their own notification; returns per-item `reviewed`/`failed`. | `backend/src/routes/access-request.route.ts`, `controllers/access-request.controller.ts`, `services/access-workflow.service.ts` (`createRequestsBulk`), `validations/access-request.validation.ts`, `services/event-bus.ts`, `event-listeners.ts`, `notification.service.ts` (`notifyRequestsCreatedBulk`), `utils/email-templates.ts`; `frontend/src/pages/Groups.tsx`, `PendingApprovals.tsx` |
+| **P2-3** | **Backend lint + Prettier** — flat ESLint config mirroring the frontend + type-aware `@typescript-eslint/no-floating-promises` (fixed the dropped promises it surfaced: scheduler `stop()`, redash chain cleanup, `bootstrap()`). `npm run lint` / `format` / `format:check`. | `backend/eslint.config.mjs`, `backend/.prettierrc`, `backend/package.json` |
+| **P2-4** | **CI on push** — GitHub Actions on push + PR to `main`: backend/frontend typecheck, backend/frontend lint, prisma-validate, backend tests (testcontainers), frontend tests. Node 22, per-project npm cache. Also fixed pre-existing breakage so the typecheck/build are green (see note below). | `.github/workflows/ci.yml` |
+| **P2-5** | **Audit log filtering** — extended `auditQuerySchema` + controller with `performerId`, `fromDate`, `toDate`, `groupId`, `platform` (platform resolved to its group ids since `AuditEntry` has no platform column); AuditLog UI gained date range + platform + group selectors + Clear filters. | `backend/src/validations/audit.validation.ts`, `controllers/audit.controller.ts`; `frontend/src/pages/AuditLog.tsx`, `lib/queryKeys.ts` |
+| **P2-6** | **SSE instead of polling** — `GET /api/notifications/stream` (Server-Sent Events) replaces the 60s `NotificationContext` poll. `createNotification` emits a scoped `notification.created`; a single-listener `notification-stream.service` fans out per user. EventSource authenticates via `?token=` (header-injection middleware reuses the normal auth chain); the client re-hydrates on (re)connect. In-process today; subscribes to the queue when P3-2 (BullMQ) lands. | `backend/src/services/notification-stream.service.ts`, `event-bus.ts`, `notification.service.ts`, `controllers/notification.controller.ts`, `routes/notification.route.ts`, `middleware/auth.middleware.ts`; `frontend/src/contexts/NotificationContext.tsx` |
 
 **Completed "smaller wins"** (were in the original tail list, now verified done): `process.env.NODE_ENV` reads consolidated into `config.isDev`/`config.isProd` (only `config.ts` reads the raw env); `expireAccess` calls parallelised with `Promise.allSettled` in the scheduler; `ErrorBoundary` added (`frontend/src/components/common/ErrorBoundary.tsx`, wired in `App.tsx`); redash provisioner no longer hardcodes `groupIds: [1]` for invited users; Slack/email message strings extracted to `backend/src/utils/email-templates.ts`.
 
 > ⚠️ **Removed as moot:** the old "add a Redis ping to `/health`" win. Redis isn't referenced anywhere in `backend/src/` (it's only a commented service in `docker-compose.yml`). Revisit only if P3-2 (BullMQ) lands.
+
+> 🛠 **Pre-existing typecheck/build fix (done alongside P2-4):** `tsc` (both `npx tsc --noEmit` and `npm run build`) was silently failing on `main` because the test files were inside the production `tsconfig` — `backend/src/test/setup.ts` uses top-level `await` (illegal under CommonJS) and the frontend test files trip `noUnusedLocals`. Tests are run by Vitest's esbuild pipeline, not `tsc`, so both `tsconfig.json`s now `exclude` `*.test.*` / the test dir (backend also excludes them from ESLint). This makes typecheck/build/CI green. If you add a test-type-check step later, point it at a separate `tsconfig.test.json`.
 
 ---
 
@@ -67,11 +74,11 @@ Everything below is on `main` / `origin/main`. Verified present in the tree on 2
 |----|------|--------|------|
 | **P2** | **Hardening** | | |
 | ~~P2-1~~ | ~~Tests (vitest)~~ — **Done** (see Done table) | — | — |
-| P2-2 | Bulk endpoints | M | Low |
-| P2-3 | Backend lint + Prettier | S | Low |
-| P2-4 | CI on push | M | Low |
-| P2-5 | Audit log filtering | S | Low |
-| P2-6 | Replace polling with SSE | M | Med |
+| ~~P2-2~~ | ~~Bulk endpoints~~ — **Done** (see Done table) | — | — |
+| ~~P2-3~~ | ~~Backend lint + Prettier~~ — **Done** (see Done table) | — | — |
+| ~~P2-4~~ | ~~CI on push~~ — **Done** (see Done table) | — | — |
+| ~~P2-5~~ | ~~Audit log filtering~~ — **Done** (see Done table) | — | — |
+| ~~P2-6~~ | ~~Replace polling with SSE~~ — **Done** (see Done table) | — | — |
 | **P3** | **Architecture for scale** | | |
 | ~~P3-1~~ | ~~Generalize provisioner pattern~~ — **Done** (see Done table) | — | — |
 | P3-2 | Event bus → BullMQ (+ idempotency keys) | L | Med |
