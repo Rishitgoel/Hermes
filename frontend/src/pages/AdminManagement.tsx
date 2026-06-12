@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Icons from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/common/LoadingSpinner';
+import { SkeletonRows } from '../components/common/Skeleton';
 import { queryKeys } from '../lib/queryKeys';
 import { prettyPlatform, cleanName } from '../components/admin/adminUtils';
 import GroupDrawer from '../components/admin/GroupDrawer';
@@ -195,7 +196,7 @@ export const AdminManagement: React.FC = () => {
             </button>
           </div>
           {platformAdminsQuery.isLoading ? (
-            <div style={{ color: 'var(--text-muted)', padding: '12px 0' }}>Loading…</div>
+            <SkeletonRows count={2} />
           ) : (platformAdminsQuery.data ?? []).length === 0 ? (
             <div className="empty-state" style={{ padding: '24px' }}>
               <Icons.UserCog size={30} className="empty-state-icon" />
@@ -280,7 +281,7 @@ export const AdminManagement: React.FC = () => {
         </div>
 
         {groupsQuery.isLoading ? (
-          <div style={{ color: 'var(--text-muted)', padding: '12px 0' }}>Loading groups…</div>
+          <SkeletonRows count={4} />
         ) : visibleGroups.length === 0 ? (
           <div className="empty-state" style={{ padding: '24px' }}>
             <Icons.Layers size={30} className="empty-state-icon" />

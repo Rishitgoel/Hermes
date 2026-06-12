@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth, type UserCreationInfo } from '../../contexts/AuthContext';
 import UserCreationFormModal from '../user-creation/UserCreationFormModal';
+import Modal from '../common/Modal';
 import { UserPlus, Mail, Clock, AlertTriangle } from 'lucide-react';
 
 interface PlatformInviteModalProps {
@@ -145,39 +146,30 @@ export const PlatformInviteModal: React.FC<PlatformInviteModalProps> = ({
 
   return (
     <>
-      <div className="modal-overlay">
-        <div className="modal-content" style={{ maxWidth: '480px' }}>
-          <div className="modal-header">
-            <h3 className="modal-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              {icon}
-              {title}
-            </h3>
-            <button className="modal-close-btn" onClick={onClose}>
-              &times;
-            </button>
-          </div>
-
-          <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            {body}
-          </div>
-
-          <div className="modal-footer">
+      <Modal
+        isOpen={isOpen}
+        onClose={onClose}
+        title={
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+            {icon}
+            {title}
+          </span>
+        }
+        footer={
+          <>
             <button type="button" className="btn btn-outline" onClick={onClose}>
               Close
             </button>
             {primary && (
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={primary.action}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
-              >
+              <button type="button" className="btn btn-primary" onClick={primary.action}>
                 {primary.label}
               </button>
             )}
-          </div>
-        </div>
-      </div>
+          </>
+        }
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>{body}</div>
+      </Modal>
 
       <UserCreationFormModal
         isOpen={showForm}

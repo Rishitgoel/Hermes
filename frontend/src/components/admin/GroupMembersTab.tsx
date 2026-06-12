@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../../lib/queryKeys';
 import { cleanName } from './adminUtils';
+import { SkeletonRows } from '../common/Skeleton';
 import ConfirmModal from './ConfirmModal';
 import AddMemberModal from './AddMemberModal';
 import {
@@ -78,7 +79,7 @@ export const GroupMembersTab: React.FC<GroupMembersTabProps> = ({ group, onBanne
       </div>
 
       {membersQuery.isLoading ? (
-        <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Loading members…</div>
+        <SkeletonRows count={3} />
       ) : members.length === 0 ? (
         <div style={{ color: 'var(--text-light)', fontSize: '13px' }}>No active members.</div>
       ) : (

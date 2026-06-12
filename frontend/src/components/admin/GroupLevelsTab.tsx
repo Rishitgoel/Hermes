@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../../lib/queryKeys';
 import { prettyPlatform, slugify } from './adminUtils';
+import { SkeletonRows } from '../common/Skeleton';
 import ConfirmModal from './ConfirmModal';
 import {
   listGroupLevels,
@@ -136,7 +137,7 @@ export const GroupLevelsTab: React.FC<GroupLevelsTabProps> = ({ group, onBanner 
       </p>
 
       {levelsQuery.isLoading ? (
-        <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Loading levels…</div>
+        <SkeletonRows count={2} />
       ) : levels.length === 0 ? (
         <div style={{ color: 'var(--text-light)', fontSize: '13px', marginBottom: '10px' }}>
           No levels. This group is requested directly (no level selection).
