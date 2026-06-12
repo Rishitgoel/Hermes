@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useNotifications, Notification } from '../../contexts/NotificationContext';
+import { getPageTitle } from '../../lib/routeTitles';
 import { Bell } from 'lucide-react';
 
 export const TopBar: React.FC = () => {
@@ -23,17 +24,12 @@ export const TopBar: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Resolve Route Title
-  const getPageTitle = () => {
-    const path = location.pathname;
-    if (path === '/') return 'Dashboard';
-    if (path === '/groups') return 'Groups';
-    if (path.startsWith('/groups/')) return 'Group Details';
-    if (path === '/my-requests') return 'My Requests';
-    if (path === '/pending-approvals') return 'Pending Approvals';
-    if (path === '/audit-log') return 'Audit Log';
-    return 'Hermes';
-  };
+  const pageTitle = getPageTitle(location.pathname);
+
+  // Keep the browser tab title in sync with the current page.
+  useEffect(() => {
+    document.title = pageTitle === 'Hermes' ? 'Hermes — Access Management' : `${pageTitle} — Hermes`;
+  }, [pageTitle]);
 
   const getInitials = (name: string) => {
     return name
@@ -83,7 +79,7 @@ export const TopBar: React.FC = () => {
 
   return (
     <header className="topbar">
-      <h2 className="topbar-title">{getPageTitle()}</h2>
+      <h2 className="topbar-title">{pageTitle}</h2>
 
       <div className="topbar-actions">
         {/* Notification Bell Dropdown */}

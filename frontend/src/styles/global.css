@@ -596,7 +596,21 @@ a:hover {
   border: none;
   cursor: pointer;
   transition: var(--transition);
-  outline: none;
+}
+
+/* Keyboard-only focus ring (mouse clicks don't trigger :focus-visible). */
+.btn:focus-visible,
+.form-input:focus-visible,
+.form-select:focus-visible,
+.form-textarea:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+/* Whole-pixel press nudge — no scale, so text stays crisp. */
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 .btn-primary {
@@ -899,6 +913,10 @@ a:hover {
 
 .hermes-table tr:last-child td {
   border-bottom: none;
+}
+
+.hermes-table tbody tr td {
+  transition: background-color 0.15s ease;
 }
 
 .hermes-table tr:hover td {
