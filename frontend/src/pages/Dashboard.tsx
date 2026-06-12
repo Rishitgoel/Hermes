@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../contexts/AuthContext';
 import apiClient from '../services/apiClient';
 import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
 import { queryKeys } from '../lib/queryKeys';
 import { fetchPlatforms } from '../services/api/platforms';
 import * as Icons from 'lucide-react';
@@ -104,21 +105,11 @@ export const Dashboard: React.FC = () => {
   return (
     <div>
       {/* Welcome Banner */}
-      <div style={{
-        background: 'linear-gradient(135deg, var(--primary), var(--secondary))',
-        color: 'white',
-        padding: '32px',
-        borderRadius: 'var(--radius-lg)',
-        marginBottom: '32px',
-        boxShadow: 'var(--shadow-md)',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '8px'
-      }}>
+      <div className="welcome-banner">
         <h1 style={{ fontSize: '32px', color: 'white' }}>
           Welcome back, {user?.username.split('_').join(' ')}!
         </h1>
-        <p style={{ opacity: 0.9, fontSize: '15px', fontWeight: 500 }}>
+        <p>
           Manage your database permissions, request data access, and review pending credentials from a central dashboard.
         </p>
       </div>
@@ -171,28 +162,30 @@ export const Dashboard: React.FC = () => {
       </div>
 
       {accesses.length === 0 ? (
-        <div className="empty-state">
-          <Icons.ShieldCheck size={44} className="empty-state-icon" />
-          <h3 className="empty-state-title">No Active Access</h3>
-          <p className="empty-state-desc">You do not currently hold active permissions for any data groups. Browse data groups to submit access requests.</p>
-          <button className="btn btn-primary" onClick={() => navigate('/groups')}>
-            Browse Groups
-          </button>
-        </div>
+        <EmptyState
+          icon={<Icons.ShieldCheck size={40} />}
+          title="No Active Access"
+          description="You do not currently hold active permissions for any data groups. Browse data groups to submit access requests."
+          action={
+            <button className="btn btn-primary" onClick={() => navigate('/groups')}>
+              Browse Groups
+            </button>
+          }
+        />
       ) : (
         <div className="table-container">
-          <table className="hermes-table">
+          <table className="hermes-table hermes-table-compact">
             <thead>
               <tr>
-                <th style={{ padding: '12px 24px' }}>Group Name</th>
-                <th style={{ width: '220px', padding: '12px 24px' }}>Expiry Status</th>
-                <th style={{ width: '180px', textAlign: 'right', padding: '12px 24px' }}>Actions</th>
+                <th>Group Name</th>
+                <th style={{ width: '220px' }}>Expiry Status</th>
+                <th style={{ width: '180px', textAlign: 'right' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {accesses.map((access) => (
                 <tr key={access.id}>
-                  <td style={{ padding: '12px 24px' }}>
+                  <td>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                       <div className="group-icon-box" style={{ width: '32px', height: '32px', borderRadius: '6px', flexShrink: 0, background: 'var(--primary-light)' }}>
                         {renderIcon(access.group.icon, access.group.color, 18)}
@@ -223,22 +216,21 @@ export const Dashboard: React.FC = () => {
                       </div>
                     </div>
                   </td>
-                  <td style={{ padding: '12px 24px' }}>
+                  <td>
                     {access.expiresAt ? (
-                      <span className="badge badge-pending" style={{ gap: '4px', backgroundColor: 'hsl(38, 92%, 94%)', color: 'hsl(32, 85%, 33%)', padding: '4px 8px', fontSize: '12px' }}>
+                      <span className="badge badge-pending badge-sm" style={{ gap: '4px' }}>
                         <Icons.Clock size={12} /> Expires {formatDate(access.expiresAt)}
                       </span>
                     ) : (
-                      <span className="badge badge-approved" style={{ gap: '4px', padding: '4px 8px', fontSize: '12px' }}>
+                      <span className="badge badge-approved badge-sm" style={{ gap: '4px' }}>
                         <Icons.CheckCircle2 size={12} /> Permanent Access
                       </span>
                     )}
                   </td>
-                  <td style={{ textAlign: 'right', padding: '12px 24px' }}>
+                  <td style={{ textAlign: 'right' }}>
                     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-                      <button 
-                        className="btn btn-outline"
-                        style={{ padding: '4px 10px', fontSize: '11px', height: '30px' }}
+                      <button
+                        className="btn btn-outline btn-sm"
                         onClick={() => navigate(`/groups/${access.group.slug}`)}
                       >
                         Details
@@ -250,8 +242,7 @@ export const Dashboard: React.FC = () => {
                             href={plat.launchUrl}
                             target="_blank"
                             rel="noreferrer"
-                            className="btn btn-primary"
-                            style={{ padding: '4px 10px', fontSize: '11px', gap: '4px', height: '30px', display: 'inline-flex', alignItems: 'center' }}
+                            className="btn btn-primary btn-sm"
                           >
                             {plat.displayName} <Icons.ExternalLink size={11} />
                           </a>

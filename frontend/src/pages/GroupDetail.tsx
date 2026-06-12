@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../contexts/AuthContext';
 import apiClient from '../services/apiClient';
 import LoadingSpinner from '../components/common/LoadingSpinner';
+import EmptyState from '../components/common/EmptyState';
 import ReasonModal from '../components/common/ReasonModal';
 import AccessRequestModal, { type GroupLevelOption } from '../components/access/AccessRequestModal';
 import ChangeLevelModal from '../components/access/ChangeLevelModal';
@@ -152,10 +153,10 @@ export const GroupDetail: React.FC = () => {
   return (
     <div>
       {/* Page Navigation */}
-      <button 
-        className="btn btn-outline" 
+      <button
+        className="btn btn-outline btn-sm"
         onClick={() => navigate(`/groups?platform=${group.platform}`)}
-        style={{ marginBottom: '24px', padding: '6px 12px' }}
+        style={{ marginBottom: '24px' }}
       >
         <Icons.ChevronLeft size={16} /> Back to Groups
       </button>
@@ -254,19 +255,7 @@ export const GroupDetail: React.FC = () => {
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                 {group.tables && group.tables.length > 0 ? (
                   group.tables.map((table) => (
-                    <span 
-                      key={table} 
-                      style={{
-                        fontSize: '12px',
-                        fontWeight: 700,
-                        backgroundColor: 'var(--primary-light)',
-                        color: 'var(--primary)',
-                        padding: '4px 10px',
-                        borderRadius: 'var(--radius-sm)',
-                        border: '1px solid var(--border-focus)',
-                        letterSpacing: '0.02em'
-                      }}
-                    >
+                    <span key={table} className="chip">
                       {table}
                     </span>
                   ))
@@ -350,11 +339,11 @@ export const GroupDetail: React.FC = () => {
           </div>
 
           {group.members.length === 0 ? (
-            <div className="empty-state">
-              <Icons.Users size={44} className="empty-state-icon" />
-              <h3 className="empty-state-title">No Active Members</h3>
-              <p className="empty-state-desc">There are currently no employees with active access granted to this group.</p>
-            </div>
+            <EmptyState
+              icon={<Icons.Users size={40} />}
+              title="No Active Members"
+              description="There are currently no employees with active access granted to this group."
+            />
           ) : (
             <div className="table-container">
               <table className="hermes-table">
@@ -376,19 +365,7 @@ export const GroupDetail: React.FC = () => {
                       <td style={{ fontWeight: 700 }}>
                         {member.userName.replace('_', ' ')}
                         {memberIsAdmin && (
-                          <span
-                            style={{
-                              marginLeft: 8,
-                              fontSize: 10,
-                              fontWeight: 800,
-                              letterSpacing: '0.04em',
-                              padding: '2px 8px',
-                              borderRadius: 999,
-                              background: 'var(--primary-light)',
-                              color: 'var(--primary)',
-                              border: '1px solid var(--primary)',
-                            }}
-                          >
+                          <span className="badge badge-admin badge-sm" style={{ marginLeft: 8 }}>
                             ADMIN
                           </span>
                         )}
@@ -406,7 +383,7 @@ export const GroupDetail: React.FC = () => {
                       <td>{formatDate(member.grantedAt)}</td>
                       <td>
                         {member.expiresAt ? (
-                          <span style={{ color: '#b7791f', fontWeight: 600 }}>
+                          <span style={{ color: 'var(--status-pending-text)', fontWeight: 600 }}>
                             {formatDate(member.expiresAt)}
                           </span>
                         ) : (
@@ -423,8 +400,7 @@ export const GroupDetail: React.FC = () => {
                             </span>
                           ) : (
                             <button
-                              className="btn btn-danger"
-                              style={{ padding: '6px 12px', fontSize: '12px' }}
+                              className="btn btn-danger btn-sm"
                               onClick={() => setRevokeTarget({ memberAccessId: member.id, memberName: member.userName.replace('_', ' ') })}
                               disabled={revokingId === member.id}
                             >

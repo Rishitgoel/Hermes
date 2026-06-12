@@ -806,6 +806,31 @@ a:hover {
   padding-left: 38px;
 }
 
+/* ── Welcome banner (Dashboard) ── */
+.welcome-banner {
+  background: linear-gradient(135deg, var(--primary), var(--secondary));
+  color: white;
+  padding: 32px;
+  border-radius: var(--radius-lg);
+  margin-bottom: 32px;
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.welcome-banner p {
+  opacity: 0.9;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+/* Slightly tighter row padding (Dashboard tables). */
+.hermes-table-compact th,
+.hermes-table-compact td {
+  padding: 12px 24px;
+}
+
 /* ── Chip (small value token, e.g. table names) ── */
 .chip {
   display: inline-flex;
