@@ -5,6 +5,9 @@ import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
 import App from './App';
 import { queryClient } from './lib/queryClient';
 
+// Apply the saved theme before first paint so there's no light-mode flash.
+document.documentElement.dataset.theme = localStorage.getItem('hermes_theme') === 'dark' ? 'dark' : 'light';
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>

@@ -34,6 +34,8 @@
   --overlay-bg: rgba(26, 32, 44, 0.5);     /* modal/drawer backdrop */
   --bg-hover: hsla(262, 60%, 48%, 0.04);   /* row/list hover tint */
   --bg-inset: hsl(260, 20%, 98%);          /* gray box inside a white card */
+  --tooltip-bg: hsl(224, 45%, 12%);        /* inverted tooltip surface */
+  --tooltip-text: hsl(0, 0%, 100%);
   
   /* Status Colors */
   --status-pending-bg: hsl(38, 92%, 94%);
@@ -56,6 +58,47 @@
   --shadow-sm: 0 2px 4px rgba(107, 70, 193, 0.03);
   --shadow-md: 0 4px 12px rgba(107, 70, 193, 0.05), 0 2px 4px rgba(107, 70, 193, 0.03);
   --shadow-lg: 0 12px 24px rgba(107, 70, 193, 0.08), 0 4px 8px rgba(107, 70, 193, 0.04);
+}
+
+/* ── Dark theme ──
+   Everything below is a variable redefinition; components carry no
+   theme-conditional code. Toggled by the TopBar (persisted in
+   localStorage['hermes_theme'], bootstrapped in main.tsx pre-render). */
+[data-theme="dark"] {
+  --primary: hsl(262, 70%, 64%);
+  --primary-hover: hsl(262, 75%, 70%);
+  --primary-light: hsl(262, 40%, 18%);
+  --primary-glow: hsla(262, 70%, 64%, 0.2);
+
+  --bg-app: hsl(250, 20%, 9%);
+  --bg-sidebar: hsl(250, 18%, 12%);
+  --bg-card: hsl(250, 18%, 13%);
+
+  --text-main: hsl(250, 25%, 92%);
+  --text-muted: hsl(250, 12%, 62%);
+  --text-light: hsl(250, 10%, 45%);
+
+  --border: hsl(250, 14%, 21%);
+  --border-focus: hsl(262, 40%, 45%);
+
+  --overlay-bg: rgba(0, 0, 0, 0.62);
+  --bg-hover: hsla(262, 70%, 64%, 0.07);
+  --bg-inset: hsl(250, 16%, 17%);
+  --tooltip-bg: hsl(250, 16%, 22%);
+  --tooltip-text: hsl(250, 25%, 94%);
+
+  --status-pending-bg: hsl(38, 50%, 16%);
+  --status-pending-text: hsl(38, 85%, 66%);
+  --status-approved-bg: hsl(152, 45%, 13%);
+  --status-approved-text: hsl(150, 60%, 60%);
+  --status-rejected-bg: hsl(0, 45%, 16%);
+  --status-rejected-text: hsl(0, 80%, 70%);
+  --status-revoked-bg: hsl(250, 12%, 20%);
+  --status-revoked-text: hsl(250, 12%, 70%);
+
+  --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.25);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.35), 0 2px 4px rgba(0, 0, 0, 0.25);
+  --shadow-lg: 0 12px 24px rgba(0, 0, 0, 0.45), 0 4px 8px rgba(0, 0, 0, 0.3);
 }
 
 /* ── Reset & Base ── */
@@ -207,7 +250,7 @@ a:hover {
   font-family: inherit;
   font-size: 13px;
   font-weight: 600;
-  background-color: white;
+  background-color: var(--bg-card);
   cursor: pointer;
   color: var(--text-main);
   outline: none;
@@ -229,7 +272,7 @@ a:hover {
 /* Topbar */
 .topbar {
   height: 80px;
-  background-color: #ffffff;
+  background-color: var(--bg-card);
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
@@ -289,7 +332,7 @@ a:hover {
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 2px solid white;
+  border: 2px solid var(--bg-card);
 }
 
 .notification-dropdown {
@@ -297,7 +340,7 @@ a:hover {
   top: 50px;
   right: 0;
   width: 380px;
-  background-color: white;
+  background-color: var(--bg-card);
   border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   box-shadow: var(--shadow-lg);
@@ -869,7 +912,7 @@ a:focus-visible {
 
 /* ── Tables ── */
 .table-container {
-  background-color: white;
+  background-color: var(--bg-card);
   border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   box-shadow: var(--shadow-sm);
@@ -935,7 +978,7 @@ a:focus-visible {
 .empty-state {
   text-align: center;
   padding: 60px 40px;
-  background-color: white;
+  background-color: var(--bg-card);
   border-radius: var(--radius-lg);
   border: 1px dashed var(--border-focus);
 }
@@ -973,7 +1016,7 @@ a:focus-visible {
 }
 
 .modal-content {
-  background-color: white;
+  background-color: var(--bg-card);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
   width: 100%;
@@ -1043,7 +1086,7 @@ a:focus-visible {
   font-size: 14px;
   outline: none;
   transition: var(--transition);
-  background-color: #ffffff;
+  background-color: var(--bg-card);
 }
 
 .form-input:focus, .form-textarea:focus, .form-select:focus {
@@ -1064,7 +1107,7 @@ a:focus-visible {
 }
 
 .detail-card {
-  background-color: white;
+  background-color: var(--bg-card);
   border-radius: var(--radius-lg);
   padding: 28px;
   border: 1px solid var(--border);
@@ -1109,7 +1152,7 @@ a:focus-visible {
 }
 
 .approval-card {
-  background-color: white;
+  background-color: var(--bg-card);
   border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   padding: 24px;
@@ -1298,8 +1341,8 @@ a:focus-visible {
 .info-tooltip {
   visibility: hidden;
   width: 260px;
-  background-color: var(--text-main);
-  color: #fff;
+  background-color: var(--tooltip-bg);
+  color: var(--tooltip-text);
   text-align: left;
   border-radius: var(--radius-md);
   padding: 12px 14px;
@@ -1354,7 +1397,7 @@ a:focus-visible {
 .checkbox-checkmark {
   height: 20px;
   width: 20px;
-  background-color: #fff;
+  background-color: var(--bg-card);
   border: 2px solid var(--border-focus);
   border-radius: 6px;
   transition: var(--transition);
@@ -1432,7 +1475,7 @@ a:focus-visible {
   left: 32px;
   transform: translateY(-50%);
   width: 280px;
-  background-color: #ffffff;
+  background-color: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 12px;
@@ -1466,7 +1509,7 @@ a:focus-visible {
   border-radius: var(--radius-sm);
   resize: vertical;
   outline: none;
-  background-color: #ffffff;
+  background-color: var(--bg-card);
 }
 
 .reason-popover-textarea:focus {
@@ -1483,7 +1526,7 @@ a:focus-visible {
 /* ── Bulk Request Panel ── */
 .bulk-request-panel {
   margin-top: 32px;
-  background-color: #ffffff;
+  background-color: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 24px;
