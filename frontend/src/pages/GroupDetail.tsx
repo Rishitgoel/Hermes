@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../contexts/AuthContext';
 import apiClient from '../services/apiClient';
 import LoadingSpinner from '../components/common/LoadingSpinner';
+import ReasonModal from '../components/common/ReasonModal';
 import AccessRequestModal, { type GroupLevelOption } from '../components/access/AccessRequestModal';
 import ChangeLevelModal from '../components/access/ChangeLevelModal';
 import PlatformInviteModal from '../components/access/PlatformInviteModal';
@@ -64,6 +65,7 @@ export const GroupDetail: React.FC = () => {
   const [isRequestModalOpen, setIsRequestModalOpen] = useState(false);
   const [isChangeLevelModalOpen, setIsChangeLevelModalOpen] = useState(false);
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
+  const [revokeTarget, setRevokeTarget] = useState<{ memberAccessId: string; memberName: string } | null>(null);
 
   const groupQuery = useQuery<GroupDetailData>({
     queryKey: queryKeys.groupDetail(slug ?? ''),
@@ -103,6 +105,8 @@ export const GroupDetail: React.FC = () => {
         data: { reason: reason || 'Revoked manually by administrator' },
       }),
     onSuccess: () => {
+      setRevokeTarget(null);
+      toast.success('Access revoked.');
       queryClient.invalidateQueries({ queryKey: queryKeys.groupDetail(slug ?? '') });
       queryClient.invalidateQueries({ queryKey: queryKeys.groups() });
       queryClient.invalidateQueries({ queryKey: queryKeys.myAccess() });
@@ -112,12 +116,6 @@ export const GroupDetail: React.FC = () => {
     },
   });
   const revokingId = revokeMutation.isPending ? revokeMutation.variables?.memberAccessId : null;
-
-  const handleRevoke = (memberAccessId: string, memberName: string) => {
-    const reason = window.prompt(`Are you sure you want to revoke access for ${memberName}? Enter a reason:`);
-    if (reason === null) return; // cancelled
-    revokeMutation.mutate({ memberAccessId, reason });
-  };
 
   if (isLoading || !group) {
     return <LoadingSpinner />;
@@ -427,7 +425,7 @@ export const GroupDetail: React.FC = () => {
                             <button
                               className="btn btn-danger"
                               style={{ padding: '6px 12px', fontSize: '12px' }}
-                              onClick={() => handleRevoke(member.id, member.userName)}
+                              onClick={() => setRevokeTarget({ memberAccessId: member.id, memberName: member.userName.replace('_', ' ') })}
                               disabled={revokingId === member.id}
                             >
                               {revokingId === member.id ? 'Revoking...' : 'Revoke'}
@@ -479,6 +477,23 @@ export const GroupDetail: React.FC = () => {
           }}
         />
       )}
+
+      {/* Revoke confirmation + reason (replaces window.prompt). */}
+      <ReasonModal
+        isOpen={!!revokeTarget}
+        danger
+        title="Revoke access"
+        confirmLabel="Revoke"
+        placeholder="e.g. No longer on the project…"
+        loading={revokeMutation.isPending}
+        message={
+          revokeTarget
+            ? `Revoke ${revokeTarget.memberName}'s access to ${group.name}? This removes them from the group on ${platformDisplayName(group.platform)}.`
+            : ''
+        }
+        onConfirm={(reason) => revokeTarget && revokeMutation.mutate({ memberAccessId: revokeTarget.memberAccessId, reason })}
+        onClose={() => setRevokeTarget(null)}
+      />
 
       {/* Platform Invite Modal — routes the user into the account-creation flow when needed. */}
       <PlatformInviteModal
