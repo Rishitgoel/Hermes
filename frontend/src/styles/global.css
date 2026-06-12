@@ -820,6 +820,15 @@ a:focus-visible {
   padding-left: 38px;
 }
 
+/* Attention-state stat cards (Dashboard). */
+.stat-card-warning {
+  border-left: 4px solid var(--status-pending-text);
+}
+
+.stat-card-danger {
+  border-left: 4px solid var(--status-rejected-text);
+}
+
 /* ── Welcome banner (Dashboard) ── */
 .welcome-banner {
   background: linear-gradient(135deg, var(--primary), var(--secondary));

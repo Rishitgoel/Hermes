@@ -46,6 +46,7 @@ export const Dashboard: React.FC = () => {
   const activeAccessRef = useRef<HTMLDivElement>(null);
 
   const isAdmin = user?.roles.includes('hermes_super_admin') || user?.roles.includes('hermes_group_admin');
+  const isSuperAdmin = !!user?.roles.includes('hermes_super_admin');
 
   const accessesQuery = useQuery<ActiveAccessData[]>({
     queryKey: queryKeys.myAccess(),
@@ -70,6 +71,23 @@ export const Dashboard: React.FC = () => {
     queryFn: fetchPlatforms,
   });
 
+  // Recent provision failures (last 7 days) — the audit route is super-admin
+  // gated, so this query must never fire for other roles.
+  const failuresFromDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const failuresQuery = useQuery<number>({
+    queryKey: queryKeys.audit({ page: 1, pageSize: 5, action: 'PROVISION_FAILED', search: '', fromDate: failuresFromDate }),
+    queryFn: async () => {
+      const res = await apiClient.get('/api/audit', {
+        headers: { pageno: '1', pagesize: '5' },
+        params: { action: 'PROVISION_FAILED', fromDate: failuresFromDate },
+      });
+      const items = (res.data ?? []) as unknown[];
+      return Number(res.headers['total']) || items.length;
+    },
+    enabled: isSuperAdmin,
+  });
+  const provisionFailureCount = failuresQuery.data ?? 0;
+
   const accesses = accessesQuery.data ?? [];
   const groups = groupsQuery.data ?? [];
   const pendingReviewCount = pendingQuery.data?.length ?? 0;
@@ -89,6 +107,7 @@ export const Dashboard: React.FC = () => {
   const pendingRequestCount = groups.filter(
     (g) => g.accessStatus === 'PENDING' || g.accessStatus === 'AWAITING_SETUP',
   ).length;
+  const expiringSoonCount = accesses.filter((a) => isExpiringSoon(a.expiresAt)).length;
 
   const formatDate = (isoString: string) => {
     return new Date(isoString).toLocaleDateString(undefined, {
@@ -141,6 +160,23 @@ export const Dashboard: React.FC = () => {
           </div>
         </div>
 
+        {expiringSoonCount > 0 && (
+          <div
+            className="stat-card stat-card-warning"
+            onClick={() => activeAccessRef.current?.scrollIntoView({ behavior: 'smooth' })}
+            style={{ cursor: 'pointer' }}
+            title="Grants expiring within 7 days — use Extend in the table below"
+          >
+            <div className="stat-icon-wrapper" style={{ backgroundColor: 'var(--status-pending-bg)', color: 'var(--status-pending-text)' }}>
+              <Icons.Hourglass size={26} />
+            </div>
+            <div className="stat-info">
+              <span className="stat-value" style={{ color: 'var(--status-pending-text)' }}>{expiringSoonCount}</span>
+              <span className="stat-label">Expiring Soon</span>
+            </div>
+          </div>
+        )}
+
         {isAdmin && (
           <div className="stat-card" onClick={() => navigate('/pending-approvals')} style={{ cursor: 'pointer', borderLeft: '4px solid var(--secondary)' }}>
             <div className="stat-icon-wrapper" style={{ backgroundColor: 'var(--primary-light)', color: 'var(--secondary)' }}>
@@ -149,6 +185,23 @@ export const Dashboard: React.FC = () => {
             <div className="stat-info">
               <span className="stat-value" style={{ color: 'var(--secondary)' }}>{pendingReviewCount}</span>
               <span className="stat-label">Approvals Pending</span>
+            </div>
+          </div>
+        )}
+
+        {isSuperAdmin && provisionFailureCount > 0 && (
+          <div
+            className="stat-card stat-card-danger"
+            onClick={() => navigate('/audit-log')}
+            style={{ cursor: 'pointer' }}
+            title="PROVISION_FAILED audit entries in the last 7 days"
+          >
+            <div className="stat-icon-wrapper" style={{ backgroundColor: 'var(--status-rejected-bg)', color: 'var(--status-rejected-text)' }}>
+              <Icons.AlertTriangle size={26} />
+            </div>
+            <div className="stat-info">
+              <span className="stat-value" style={{ color: 'var(--status-rejected-text)' }}>{provisionFailureCount}</span>
+              <span className="stat-label">Provision Failures (7d)</span>
             </div>
           </div>
         )}
