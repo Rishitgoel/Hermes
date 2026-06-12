@@ -376,14 +376,15 @@ export class AccessWorkflowService {
    * Persist a self-reviewed (instant) access request in PROVISIONING + its
    * REQUEST_CREATED audit row, returned with group+level included (ready for
    * _provision, no re-fetch). Shared by the self-service demotion branch of
-   * changeLevel and by adminSetMemberLevel — both create an immediately-provisioned
-   * request whose reviewer is the performer; only the copy/audit details differ.
+   * changeLevel, adminSetMemberLevel, and adminAddMember — all create an
+   * immediately-provisioned request whose reviewer is the performer; only the
+   * copy/audit details differ. `level` is null for a level-less group's grant.
    */
   private async _persistSelfReviewedRequest(opts: {
     performer: { id: string; username: string };
     target: { id: string; name: string; email: string };
     groupId: string;
-    level: { id: string; name: string };
+    level: { id: string; name: string } | null;
     justification: string;
     duration: AccessDuration;
     reviewNote: string;
@@ -400,7 +401,7 @@ export class AccessWorkflowService {
     const created = await prisma.accessRequest.create({
       data: {
         groupId: opts.groupId,
-        levelId: opts.level.id,
+        levelId: opts.level?.id ?? null,
         requesterId: opts.target.id,
         requesterName: opts.target.name,
         requesterEmail: opts.target.email,
@@ -428,8 +429,8 @@ export class AccessWorkflowService {
         details: {
           duration: opts.duration,
           expiresAt,
-          levelId: opts.level.id,
-          levelName: opts.level.name,
+          levelId: opts.level?.id ?? null,
+          levelName: opts.level?.name ?? null,
           ...opts.auditDetails,
         },
       },
@@ -613,6 +614,160 @@ export class AccessWorkflowService {
       },
     });
     return this._provision(fullRequest, { id: performer.id, name: performer.username });
+  }
+
+  /**
+   * Admin override: add a user to a group directly from Admin Management — no
+   * pending request to review (the performer is recorded as the reviewer). The
+   * same validations as a normal request apply (level requiredness, one active
+   * grant per group, one open request per group), and the same per-platform
+   * account gate as reviewRequest: a user with no approved account on this
+   * group's platform can't be added; one whose account is approved but not yet
+   * finalized is queued (WAITING_FOR_SETUP) and provisions automatically when
+   * their setup completes; a COMPLETED account provisions immediately.
+   */
+  async adminAddMember(
+    performer: { id: string; username: string },
+    target: { id: string; name: string; email: string },
+    groupId: string,
+    levelId: string | null,
+    duration: AccessDuration,
+  ): Promise<{ kind: 'provisioned' | 'queued'; request: AccessRequest }> {
+    const group = await prisma.group.findUnique({ where: { id: groupId } });
+    if (!group) throw new NotFoundError('Group not found');
+    if (!group.isActive) {
+      throw new ValidationError('This group is archived — restore it before adding members.');
+    }
+
+    // Level requiredness — mirrors createRequest exactly.
+    const activeLevels = await prisma.groupLevel.findMany({ where: { groupId, isActive: true } });
+    let level: LevelRow | null = null;
+    if (activeLevels.length > 0) {
+      if (!levelId) throw new ValidationError('This group requires selecting a level.');
+      level = activeLevels.find((l) => l.id === levelId) ?? null;
+      if (!level) throw new ValidationError('Invalid or inactive level for this group.');
+      if (!level.externalGroupId) {
+        throw new ValidationError('This level is not fully configured yet (no backing platform group). Configure it first.');
+      }
+    } else if (levelId) {
+      throw new ValidationError('This group has no levels; do not specify a level.');
+    }
+
+    const activeAccess = await prisma.userAccess.findFirst({
+      where: { userId: target.id, groupId, isActive: true },
+    });
+    if (activeAccess) {
+      throw new ConflictError('This user is already an active member of this group.');
+    }
+
+    const openRequest = await prisma.accessRequest.findFirst({
+      where: {
+        requesterId: target.id,
+        groupId,
+        status: { in: [RequestStatus.PENDING, RequestStatus.WAITING_FOR_SETUP] },
+      },
+    });
+    if (openRequest) {
+      throw new ConflictError('This user already has an open request for this group — review that request instead.');
+    }
+
+    // Per-platform account gate — same bar as reviewRequest's APPROVED branch.
+    const platform = this.requirePlatform(group);
+    const userCreation = await prisma.userCreationRequest.findUnique({
+      where: { userId_platform: { userId: target.id, platform } },
+    });
+    const isApprovedOrLater =
+      userCreation &&
+      (userCreation.status === UserCreationStatus.APPROVED ||
+        userCreation.status === UserCreationStatus.AWAITING_SETUP ||
+        userCreation.status === UserCreationStatus.COMPLETED);
+    if (!isApprovedOrLater) {
+      throw new UserNotApprovedError(
+        `Cannot add this user — they are not yet an approved Hermes user on ${platform}. A super admin must approve their ${platform} account request first.`,
+        { userCreationStatus: userCreation?.status ?? 'MISSING', platform },
+      );
+    }
+
+    const justification = `Added by ${performer.username} via Admin Management`;
+    const reviewNote = 'Added directly by admin';
+
+    // Account approved but not finalized → queue. provisionWaitingRequests releases
+    // it (and provisions) once the user's platform setup completes.
+    if (userCreation.status !== UserCreationStatus.COMPLETED) {
+      let queued: AccessRequest;
+      try {
+        queued = await prisma.accessRequest.create({
+          data: {
+            groupId,
+            levelId: level?.id ?? null,
+            requesterId: target.id,
+            requesterName: target.name,
+            requesterEmail: target.email,
+            justification,
+            duration,
+            expiresAt: this.calculateExpiry(duration),
+            status: RequestStatus.WAITING_FOR_SETUP,
+            reviewerId: performer.id,
+            reviewerName: performer.username,
+            reviewNote,
+            reviewedAt: new Date(),
+          },
+        });
+      } catch (err: any) {
+        // Partial unique open-request index fired (a concurrent submit slipped past
+        // the check above) — surface it the same way the precheck would have.
+        if (err?.code === 'P2002') {
+          throw new ConflictError('This user already has an open request for this group — review that request instead.');
+        }
+        throw err;
+      }
+
+      await prisma.auditEntry.create({
+        data: {
+          action: 'ACCESS_QUEUED_FOR_SETUP',
+          performerId: performer.id,
+          performerName: performer.username,
+          targetUserId: target.id,
+          targetUserName: target.name,
+          groupId,
+          accessRequestId: queued.id,
+          details: {
+            adminAdded: true,
+            userCreationStatus: userCreation.status,
+            duration,
+            levelId: level?.id ?? null,
+            levelName: level?.name ?? null,
+          },
+        },
+      });
+
+      eventBus.emitAccessEvent({
+        type: 'access.queued-for-setup',
+        payload: {
+          requesterId: target.id,
+          groupName: group.name,
+          reviewerName: performer.username,
+          platform,
+        },
+        timestamp: new Date(),
+      });
+
+      return { kind: 'queued', request: queued };
+    }
+
+    // Account ready → provision immediately via the shared self-reviewed machinery.
+    const fullRequest = await this._persistSelfReviewedRequest({
+      performer,
+      target,
+      groupId,
+      level,
+      justification,
+      duration,
+      reviewNote,
+      auditDetails: { adminAdded: true },
+    });
+    const provisioned = await this._provision(fullRequest, { id: performer.id, name: performer.username });
+    return { kind: 'provisioned', request: provisioned };
   }
 
   // Review Request (Admin)

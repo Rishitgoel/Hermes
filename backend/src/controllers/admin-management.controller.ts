@@ -12,7 +12,7 @@ import {
   getManageablePlatforms,
 } from '../utils/authz';
 import { AuthorizationError, NotFoundError, ValidationError, ConflictError } from '../utils/errors';
-import { assignPlatformAdminSchema, assignGroupAdminSchema, setMemberLevelSchema } from '../validations/admin.validation';
+import { assignPlatformAdminSchema, assignGroupAdminSchema, setMemberLevelSchema, addGroupMemberSchema } from '../validations/admin.validation';
 import { createGroupLevelSchema, updateGroupLevelSchema } from '../validations/group-level.validation';
 import { createGroupSchema, updateGroupSchema } from '../validations/group.validation';
 import logger from '../utils/logger';
@@ -63,7 +63,7 @@ export class AdminManagementController extends BaseController {
     });
     if (!row) {
       throw new NotFoundError(
-        'User not found in Hermes. They must sign in to Hermes at least once before they can be assigned an admin role.',
+        'User not found in Hermes. They must sign in to Hermes at least once before they can be assigned a role or added to a group.',
       );
     }
     return { userName: row.userName, userEmail: row.userEmail };
@@ -757,6 +757,54 @@ export class AdminManagementController extends BaseController {
       );
     } catch (error) {
       this.handleError(error, 'Failed to retrieve group members');
+    }
+  }
+
+  // POST /api/admin/groups/:groupId/members  { userId, levelId?, duration }
+  // Admin override: add a user to the group directly — equivalent to an
+  // already-approved request, so it carries the same tier as the other member
+  // actions (group admin of this group, or platform/super above it). The workflow
+  // service applies the normal request validations + the per-platform account gate.
+  async addGroupMember(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const userId = this.getUserId();
+      if (!userId) return;
+
+      // Coarse precheck before the group lookup (avoids a 404-vs-403 existence
+      // oracle); same message as the fine-grained check so they're indistinguishable.
+      if (!(await isAnyAdmin(this.user!))) {
+        throw new AuthorizationError('You do not administer this group');
+      }
+
+      const groupId = String(req.params.groupId);
+      const group = await prisma.group.findUnique({ where: { id: groupId } });
+      if (!group) throw new NotFoundError('Group not found');
+
+      if (!(await isGroupAdminOf(this.user!, groupId, group.slug))) {
+        throw new AuthorizationError('You do not administer this group');
+      }
+
+      const validated = this.validateWithZod(addGroupMemberSchema, this.req.body);
+      if (!validated.success) return;
+
+      const profile = await this.resolveUserProfile(validated.data.userId);
+      const result = await accessWorkflowService.adminAddMember(
+        { id: userId, username: this.user!.username },
+        { id: validated.data.userId, name: profile.userName, email: profile.userEmail },
+        groupId,
+        validated.data.levelId ?? null,
+        validated.data.duration,
+      );
+
+      this.sendResponse(
+        result,
+        result.kind === 'provisioned'
+          ? 'Member added to group'
+          : 'Member queued — they will be added automatically once their platform account setup completes',
+        201,
+      );
+    } catch (error) {
+      this.handleError(error, 'Failed to add group member');
     }
   }
 

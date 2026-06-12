@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../../lib/queryKeys';
 import { cleanName } from './adminUtils';
 import ConfirmModal from './ConfirmModal';
+import AddMemberModal from './AddMemberModal';
 import {
   listGroupMembers,
   removeGroupMember,
@@ -23,6 +24,7 @@ interface GroupMembersTabProps {
 export const GroupMembersTab: React.FC<GroupMembersTabProps> = ({ group, onBanner }) => {
   const queryClient = useQueryClient();
   const [confirmRemove, setConfirmRemove] = useState<GroupMember | null>(null);
+  const [showAdd, setShowAdd] = useState(false);
 
   const membersQuery = useQuery({
     queryKey: queryKeys.adminGroupMembers(group.id),
@@ -63,11 +65,17 @@ export const GroupMembersTab: React.FC<GroupMembersTabProps> = ({ group, onBanne
     onError: (e: any) => onBanner({ type: 'error', text: e.message || 'Failed to update member level.' }),
   });
 
-  const members = membersQuery.data ?? [];
+  const members = useMemo(() => membersQuery.data ?? [], [membersQuery.data]);
+  const memberUserIds = useMemo(() => new Set(members.map((m) => m.userId)), [members]);
 
   return (
     <div>
-      <div className="admin-section-label" style={{ marginBottom: '10px' }}>Members</div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+        <div className="admin-section-label">Members</div>
+        <button type="button" className="btn btn-outline" style={{ padding: '5px 12px', fontSize: '12px' }} onClick={() => setShowAdd(true)}>
+          <Icons.UserPlus size={14} /> Add member
+        </button>
+      </div>
 
       {membersQuery.isLoading ? (
         <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Loading members…</div>
@@ -148,6 +156,21 @@ export const GroupMembersTab: React.FC<GroupMembersTabProps> = ({ group, onBanne
             );
           })}
         </div>
+      )}
+
+      {showAdd && (
+        <AddMemberModal
+          group={group}
+          existingMemberIds={memberUserIds}
+          onClose={() => setShowAdd(false)}
+          onAdded={(msg) => {
+            onBanner({ type: 'success', text: msg });
+            setShowAdd(false);
+            refreshMembers();
+            queryClient.invalidateQueries({ queryKey: queryKeys.adminGroupLevels(group.id) });
+          }}
+          onError={(msg) => onBanner({ type: 'error', text: msg })}
+        />
       )}
 
       <ConfirmModal

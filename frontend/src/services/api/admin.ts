@@ -182,6 +182,23 @@ export async function listGroupMembers(groupId: string): Promise<GroupMember[]> 
   return res.data as GroupMember[];
 }
 
+export type AccessDurationValue = 'PERMANENT' | 'ONE_DAY' | 'ONE_WEEK' | 'ONE_MONTH' | 'THREE_MONTHS';
+
+export interface AddGroupMemberResult {
+  // 'provisioned' = added immediately; 'queued' = the user's platform account isn't
+  // finalized yet, so the grant applies automatically once their setup completes.
+  kind: 'provisioned' | 'queued';
+}
+
+/** Admin override: add a user to a group directly (no request to review). */
+export async function addGroupMember(
+  groupId: string,
+  body: { userId: string; levelId?: string; duration: AccessDurationValue },
+): Promise<AddGroupMemberResult> {
+  const res = await apiClient.post(`/api/admin/groups/${groupId}/members`, body);
+  return res.data as AddGroupMemberResult;
+}
+
 export async function removeGroupMember(groupId: string, userAccessId: string): Promise<void> {
   await apiClient.delete(`/api/admin/groups/${groupId}/members/${userAccessId}`);
 }

@@ -48,6 +48,7 @@ router.delete('/groups/:groupId', authenticateToken, adminMgmt('deleteGroup'));
 
 // Members
 router.get('/groups/:groupId/members', authenticateToken, adminMgmt('listGroupMembers'));
+router.post('/groups/:groupId/members', authenticateToken, adminMgmt('addGroupMember'));
 router.put('/groups/:groupId/members/:userAccessId/level', authenticateToken, adminMgmt('setGroupMemberLevel'));
 router.delete('/groups/:groupId/members/:userAccessId', authenticateToken, adminMgmt('removeGroupMember'));
 
