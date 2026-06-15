@@ -93,17 +93,18 @@ export class UserCreationController extends BaseController {
   // Redash platform admin reviews Redash account requests, AWS platform admin AWS, etc.
   async listPending(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      // Super admins see every platform (no filter); platform admins are scoped to
-      // their mirror platforms. Anyone else (incl. pure group admins) has none → 403.
-      if (isSuperAdmin(this.user!)) {
-        const rows = await userCreationService.listPending();
-        this.sendResponse(rows, 'Pending user-creation requests retrieved');
-        return;
-      }
-
+      // Super admins see every platform; platform admins are scoped to their mirror
+      // platforms. Anyone else (incl. pure group admins) has none → 403. Either way
+      // we scope to getManageablePlatforms, which excludes a disabled platform (e.g.
+      // AWS toggled off) — so its pending account requests drop out of this page too,
+      // matching the rest of the admin surface, not just the Admin Management tabs.
       const platforms = await getManageablePlatforms(this.user!);
       if (platforms.length === 0) {
-        throw new AuthorizationError('Only platform admins can review account requests');
+        throw new AuthorizationError(
+          isSuperAdmin(this.user!)
+            ? 'No platforms are currently enabled'
+            : 'Only platform admins can review account requests',
+        );
       }
 
       const rows = await userCreationService.listPending(platforms);
@@ -135,6 +136,15 @@ export class UserCreationController extends BaseController {
       if (!(await isPlatformAdminOf(this.user!, row.platform))) {
         throw new AuthorizationError(
           'You do not have permission to review account requests for this platform',
+        );
+      }
+      // Defense-in-depth: a disabled platform (e.g. AWS toggled off) drops out of
+      // getManageablePlatforms, so reject reviewing its requests even for a super
+      // admin — approving would just fail at the provisioner's disabled guard and
+      // leave the row APPROVED-but-failed. Mirrors the listPending filter above.
+      if (!(await getManageablePlatforms(this.user!)).includes(row.platform.toLowerCase())) {
+        throw new AuthorizationError(
+          `Account requests for "${row.platform}" are unavailable while that platform is disabled`,
         );
       }
 

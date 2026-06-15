@@ -1,5 +1,6 @@
 import prisma from '../config/prisma';
 import provisioningRegistry from '../services/provisioning.registry';
+import config from '../config/config';
 import { AuthenticatedUser } from '../middleware/auth.middleware';
 
 const SUPER_ADMIN_ROLE = 'hermes_super_admin';
@@ -124,11 +125,17 @@ export async function isAnyAdmin(user: AuthenticatedUser): Promise<boolean> {
  * platform; everyone else gets their PlatformAdmin mirror rows. Lower-cased + de-duped.
  */
 export async function getManageablePlatforms(user: AuthenticatedUser): Promise<string[]> {
-  if (isSuperAdmin(user)) {
-    return provisioningRegistry.listPlatforms();
-  }
-  const platforms = await getSnapshot(user).platformAdminPlatforms;
-  return Array.from(platforms);
+  const platforms = isSuperAdmin(user)
+    ? provisioningRegistry.listPlatforms()
+    : Array.from(await getSnapshot(user).platformAdminPlatforms);
+  // Honor the AWS enable/disable toggle (config.aws.isEnabled, driven by
+  // AWS_ENABLED via scripts/toggle-aws.ts). A disabled platform must not be
+  // manageable anywhere — this mirrors the same filter in platform.controller's
+  // GET /api/platforms, so the Admin Management UI (which is built entirely off
+  // this list) hides AWS too, and pending AWS account-creation requests drop out
+  // of the per-platform approvals filter. Applied to both tiers so a standing AWS
+  // platform admin also loses the AWS tab while it's off.
+  return platforms.filter((key) => key !== 'aws' || config.aws.isEnabled);
 }
 
 export interface AdminScopes {
