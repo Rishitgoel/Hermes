@@ -317,7 +317,7 @@ export const Groups: React.FC = () => {
 
         {/* Platform Grid */}
         <div className="cards-grid">
-          {PLATFORMS.map((platform) => {
+          {PLATFORMS.filter((platform) => livePlatforms.has(platform.id)).map((platform) => {
             const isActive = livePlatforms.has(platform.id);
             // Count only the groups that belong to this platform, so each card
             // reflects its own platform once AWS / Jira groups exist alongside Redash.
