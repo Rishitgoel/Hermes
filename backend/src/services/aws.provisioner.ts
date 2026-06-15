@@ -60,6 +60,9 @@ export class AwsProvisioner implements PlatformAdapter {
 
   /** Ensure the user exists in Identity Center, then add them to the group. */
   async provision(ctx: ProvisionContext): Promise<ProvisionResult> {
+    if (!config.aws.isEnabled) {
+      throw new Error('AWS integration is currently disabled');
+    }
     const userId = await this.ensureUser(ctx.email, ctx.name);
     if (ctx.externalGroupId) {
       await awsIdentityCenterService.addUserToGroup(ctx.externalGroupId, userId);
@@ -70,6 +73,9 @@ export class AwsProvisioner implements PlatformAdapter {
 
   /** Remove the user from the target group on Identity Center. */
   async deprovision(ctx: DeprovisionContext): Promise<void> {
+    if (!config.aws.isEnabled) {
+      throw new Error('AWS integration is currently disabled');
+    }
     if (ctx.externalGroupId) {
       await awsIdentityCenterService.removeUserFromGroup(ctx.externalGroupId, ctx.externalUserId);
       await this.cacheRemoveGroup(ctx.externalUserId, ctx.externalGroupId);
@@ -78,6 +84,9 @@ export class AwsProvisioner implements PlatformAdapter {
 
   /** Look up whether a user exists, cache-first with a live fallback. */
   async checkUserStatus(email: string): Promise<PlatformUserStatus> {
+    if (!config.aws.isEnabled) {
+      return { exists: false, email };
+    }
     const cached = await prisma.platformExternalUser.findUnique({
       where: { platform_email: { platform: PLATFORM, email: email.toLowerCase() } },
     });
@@ -92,6 +101,9 @@ export class AwsProvisioner implements PlatformAdapter {
 
   /** Create a brand-new Identity Center user and seed a cache row for them. */
   async inviteUser(email: string, name: string): Promise<ProvisionResult> {
+    if (!config.aws.isEnabled) {
+      throw new Error('AWS integration is currently disabled');
+    }
     const { userId } = await awsIdentityCenterService.createUser(email, name);
     await this.upsertUserRow({ userId, email, name, isPending: true });
     return { externalUserId: userId };
@@ -105,12 +117,18 @@ export class AwsProvisioner implements PlatformAdapter {
 
   /** Create a backing Identity Center group; returns its GroupId. */
   async createExternalGroup(name: string): Promise<{ externalGroupId: string; name?: string }> {
+    if (!config.aws.isEnabled) {
+      throw new Error('AWS integration is currently disabled');
+    }
     const group = await awsIdentityCenterService.createGroup(name);
     return { externalGroupId: group.groupId, name: group.displayName };
   }
 
   /** Delete a backing Identity Center group by its GroupId. */
   async deleteExternalGroup(externalGroupId: string): Promise<void> {
+    if (!config.aws.isEnabled) {
+      throw new Error('AWS integration is currently disabled');
+    }
     await awsIdentityCenterService.deleteGroup(externalGroupId);
   }
 
@@ -157,6 +175,7 @@ export class AwsProvisioner implements PlatformAdapter {
 
   /** Pull all Identity Center groups into the cache, pruning vanished ones. */
   async syncGroups(): Promise<{ count: number }> {
+    if (!config.aws.isEnabled) return { count: 0 };
     const now = new Date();
     const groups = await awsIdentityCenterService.listGroups();
     logger.info(`🔄 AwsProvisioner: Fetched ${groups.length} groups from Identity Center.`);
@@ -196,6 +215,7 @@ export class AwsProvisioner implements PlatformAdapter {
 
   /** Pull all Identity Center users into the cache, pruning vanished ones. */
   async syncUsers(): Promise<{ count: number }> {
+    if (!config.aws.isEnabled) return { count: 0 };
     const now = new Date();
     const users = await awsIdentityCenterService.listUsers();
     logger.info(`🔄 AwsProvisioner: Fetched ${users.length} users from Identity Center.`);
@@ -258,6 +278,7 @@ export class AwsProvisioner implements PlatformAdapter {
    * by email and advance any pending account-creation request for them.
    */
   async syncSingleUser(email: string): Promise<boolean> {
+    if (!config.aws.isEnabled) return false;
     const userId = await awsIdentityCenterService.getUserIdByEmail(email);
     if (!userId) {
       logger.warn({ email }, '🔄 AwsProvisioner: user not found in Identity Center during single sync.');

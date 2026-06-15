@@ -10,6 +10,7 @@
    ══════════════════════════════════════════════════════════════════ */
 
 :root {
+  color-scheme: light;
   /* Colors */
   --primary: hsl(262, 60%, 48%);       /* Rich Purple */
   --primary-hover: hsl(262, 70%, 42%);
@@ -65,6 +66,7 @@
    theme-conditional code. Toggled by the TopBar (persisted in
    localStorage['hermes_theme'], bootstrapped in main.tsx pre-render). */
 [data-theme="dark"] {
+  color-scheme: dark;
   --primary: hsl(262, 70%, 64%);
   --primary-hover: hsl(262, 75%, 70%);
   --primary-light: hsl(262, 40%, 18%);
@@ -115,6 +117,13 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;
+}
+
+/* Form/control elements don't inherit font-family by default — without this,
+   any bare <button>/<input> falls back to the UA font (Arial-ish). Make the
+   whole app use the Plus Jakarta Sans body font unless a rule overrides it. */
+button, input, select, textarea {
+  font-family: inherit;
 }
 
 h1, h2, h3, h4, h5, h6 {
@@ -208,7 +217,7 @@ a:hover {
 .nav-item.active {
   background-color: var(--primary);
   color: #ffffff;
-  box-shadow: 0 4px 12px hsla(262, 60%, 48%, 0.25);
+  box-shadow: 0 4px 12px var(--primary-glow);
 }
 
 .nav-badge {
@@ -400,6 +409,10 @@ a:hover {
   border-left: 3px solid var(--primary);
 }
 
+[data-theme="dark"] .notification-item.unread {
+  background-color: hsla(262, 70%, 64%, 0.06);
+}
+
 .notification-item-title {
   font-weight: 700;
   font-size: 14px;
@@ -543,6 +556,107 @@ a:hover {
   font-weight: 700;
 }
 
+/* ── Unified section header (SectionHeader component) ──
+   One consistent level for every in-content section, a clear step below the
+   TopBar page title (24px). Replaces the old ad-hoc 28px <h1> page titles +
+   mixed 20px <h2>/<h3> section heads. */
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.section-head-main {
+  min-width: 0;
+}
+
+.section-head-title {
+  font-family: 'Outfit', system-ui, -apple-system, sans-serif;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.section-head-title > svg {
+  color: var(--primary);
+  flex-shrink: 0;
+}
+
+.section-head-desc {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-top: 3px;
+  line-height: 1.4;
+}
+
+.section-head-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.section-head-meta {
+  font-size: 13px;
+  color: var(--text-muted);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* ── Platform tabs (PlatformTabs component) ──
+   Scrollable underline tab bar for switching platform views. Scales past a
+   handful of platforms by scrolling horizontally instead of wrapping. */
+.platform-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: thin;
+  margin-bottom: 24px;
+}
+
+.platform-tabs::-webkit-scrollbar {
+  height: 4px;
+}
+.platform-tabs::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: var(--radius-full);
+}
+
+.platform-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 14px;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.platform-tab:hover {
+  color: var(--text-main);
+}
+
+.platform-tab.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+}
+
 .cards-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
@@ -673,7 +787,7 @@ a:focus-visible {
 }
 
 .btn-secondary:hover:not(:disabled) {
-  background-color: hsla(262, 60%, 48%, 0.08);
+  background-color: var(--bg-hover);
 }
 
 .btn-outline {
@@ -769,7 +883,7 @@ a:focus-visible {
 
 .badge-neutral {
   background-color: var(--bg-inset);
-  color: var(--text-muted);
+  color: var(--text-main);
   border: 1px solid var(--border);
 }
 
@@ -946,7 +1060,7 @@ a:focus-visible {
 
 .hermes-table th {
   background-color: var(--primary-light);
-  color: var(--primary);
+  color: var(--text-main);
   font-weight: 700;
   font-size: 13px;
   padding: 16px 24px;
@@ -984,7 +1098,7 @@ a:focus-visible {
 }
 
 .empty-state-icon {
-  color: var(--primary-light);
+  color: var(--text-light);
   margin-bottom: 16px;
 }
 
@@ -1087,6 +1201,7 @@ a:focus-visible {
   outline: none;
   transition: var(--transition);
   background-color: var(--bg-card);
+  color: var(--text-main);
 }
 
 .form-input:focus, .form-textarea:focus, .form-select:focus {
@@ -1471,7 +1586,7 @@ a:focus-visible {
   margin-left: -6px;
   border-width: 6px;
   border-style: solid;
-  border-color: var(--text-main) transparent transparent transparent;
+  border-color: var(--tooltip-bg) transparent transparent transparent;
 }
 
 .info-tooltip-container:hover .info-tooltip {
@@ -1748,6 +1863,7 @@ a:focus-visible {
   width: 520px;
   max-width: 92vw;
   height: 100%;
+  max-height: 100%;
   background: var(--bg-app);
   box-shadow: var(--shadow-lg);
   display: flex;

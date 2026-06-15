@@ -1,7 +1,10 @@
 import { Request, Response, NextFunction } from 'express';
 import BaseController from './base.controller';
 import config from '../config/config';
+import prisma from '../config/prisma';
 import userCreationService from '../services/user-creation.service';
+import { isSuperAdmin, isPlatformAdminOf, getManageablePlatforms } from '../utils/authz';
+import { AuthorizationError, NotFoundError } from '../utils/errors';
 import {
   submitUserCreationSchema,
   reviewUserCreationSchema,
@@ -85,17 +88,33 @@ export class UserCreationController extends BaseController {
     }
   }
 
-  // GET /api/user-creation-requests/pending — admin
+  // GET /api/user-creation-requests/pending — super admin (all platforms) or
+  // platform admin (their platform(s) only). Account creation is per-platform, so a
+  // Redash platform admin reviews Redash account requests, AWS platform admin AWS, etc.
   async listPending(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const rows = await userCreationService.listPending();
+      // Super admins see every platform (no filter); platform admins are scoped to
+      // their mirror platforms. Anyone else (incl. pure group admins) has none → 403.
+      if (isSuperAdmin(this.user!)) {
+        const rows = await userCreationService.listPending();
+        this.sendResponse(rows, 'Pending user-creation requests retrieved');
+        return;
+      }
+
+      const platforms = await getManageablePlatforms(this.user!);
+      if (platforms.length === 0) {
+        throw new AuthorizationError('Only platform admins can review account requests');
+      }
+
+      const rows = await userCreationService.listPending(platforms);
       this.sendResponse(rows, 'Pending user-creation requests retrieved');
     } catch (error) {
       this.handleError(error, 'Failed to list pending user-creation requests');
     }
   }
 
-  // PUT /api/user-creation-requests/:id/review — admin
+  // PUT /api/user-creation-requests/:id/review — super admin, or platform admin of
+  // the request's platform.
   async review(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const validated = this.validateWithZod(reviewUserCreationSchema, this.req.body);
@@ -105,6 +124,20 @@ export class UserCreationController extends BaseController {
       if (!userId) return;
 
       const id = this.req.params.id as string;
+
+      // Authorize against the request's own platform: a platform admin may only
+      // review account requests for the platform they administer.
+      const row = await prisma.userCreationRequest.findUnique({
+        where: { id },
+        select: { platform: true },
+      });
+      if (!row) throw new NotFoundError('User-creation request not found');
+      if (!(await isPlatformAdminOf(this.user!, row.platform))) {
+        throw new AuthorizationError(
+          'You do not have permission to review account requests for this platform',
+        );
+      }
+
       const reviewer = { id: userId, username: this.user!.username };
       const updated = await userCreationService.reviewRequest(
         id,

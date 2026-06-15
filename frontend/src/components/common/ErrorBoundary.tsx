@@ -40,7 +40,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
         justifyContent: 'center',
         minHeight: '100vh',
         padding: '40px',
-        background: 'radial-gradient(circle at 50% 50%, hsl(260, 20%, 97%) 0%, var(--bg-app) 100%)',
+        background: 'var(--bg-app)',
         fontFamily: 'Outfit, sans-serif',
         textAlign: 'center',
       }}>
@@ -48,7 +48,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
           width: '72px',
           height: '72px',
           borderRadius: '20px',
-          backgroundColor: '#fff',
+          backgroundColor: 'var(--bg-card)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',

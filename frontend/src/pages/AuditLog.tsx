@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import apiClient from '../services/apiClient';
 import LoadingSpinner from '../components/common/LoadingSpinner';
+import SectionHeader from '../components/common/SectionHeader';
 import { Scroll, Search, RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react';
 import { queryKeys } from '../lib/queryKeys';
 import { fetchPlatforms } from '../services/api/platforms';
@@ -152,19 +153,20 @@ export const AuditLog: React.FC = () => {
   return (
     <div>
       {/* Page Header */}
-      <div className="section-header">
-        <h1 style={{ fontSize: '28px' }}>Platform Audit Log</h1>
-
-        <button
-          className="btn btn-primary"
-          onClick={() => syncMutation.mutate()}
-          disabled={isSyncing}
-          style={{ gap: '8px' }}
-        >
-          <RefreshCw size={16} style={{ animation: isSyncing ? 'spin 1.5s linear infinite' : 'none' }} />
-          {isSyncing ? 'Syncing...' : 'Sync Platform Cache'}
-        </button>
-      </div>
+      <SectionHeader
+        title="Platform Audit Log"
+        actions={
+          <button
+            className="btn btn-primary btn-sm"
+            onClick={() => syncMutation.mutate()}
+            disabled={isSyncing}
+            style={{ gap: '8px' }}
+          >
+            <RefreshCw size={16} style={{ animation: isSyncing ? 'spin 1.5s linear infinite' : 'none' }} />
+            {isSyncing ? 'Syncing...' : 'Sync Platform Cache'}
+          </button>
+        }
+      />
 
       {/* Filter and Search Bar */}
       <div style={{

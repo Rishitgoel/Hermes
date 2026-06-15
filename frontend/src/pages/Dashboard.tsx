@@ -1,11 +1,13 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../contexts/AuthContext';
 import apiClient from '../services/apiClient';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import EmptyState from '../components/common/EmptyState';
+import SectionHeader from '../components/common/SectionHeader';
 import ExpiryBadge, { isExpiringSoon } from '../components/common/ExpiryBadge';
+import RenewAccessModal from '../components/access/RenewAccessModal';
 import { queryKeys } from '../lib/queryKeys';
 import { fetchPlatforms } from '../services/api/platforms';
 import * as Icons from 'lucide-react';
@@ -42,8 +44,10 @@ interface ActiveAccessData {
 export const Dashboard: React.FC = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
   const activeAccessRef = useRef<HTMLDivElement>(null);
+  const [renewTarget, setRenewTarget] = useState<{ groupId: string; groupName: string } | null>(null);
 
   const isAdmin = user?.roles.includes('hermes_super_admin') || user?.roles.includes('hermes_group_admin');
   const isSuperAdmin = !!user?.roles.includes('hermes_super_admin');
@@ -208,11 +212,8 @@ export const Dashboard: React.FC = () => {
       </div>
 
       {/* My Active Access */}
-      <div className="section-header" ref={activeAccessRef} style={{ scrollMarginTop: '20px' }}>
-        <h3 className="section-title">My Active Access</h3>
-        <span style={{ fontSize: '13px', color: 'var(--text-muted)', fontWeight: 700 }}>
-          {accesses.length} Active Grants
-        </span>
+      <div ref={activeAccessRef} style={{ scrollMarginTop: '20px' }}>
+        <SectionHeader title="My Active Access" meta={`${accesses.length} Active Grants`} />
       </div>
 
       {accesses.length === 0 ? (
@@ -259,7 +260,7 @@ export const Dashboard: React.FC = () => {
                       <div className="info-tooltip-container">
                         <Icons.Info size={14} />
                         <div className="info-tooltip">
-                          <strong style={{ display: 'block', marginBottom: '4px', fontSize: '13px', color: 'var(--primary-light)' }}>
+                          <strong style={{ display: 'block', marginBottom: '4px', fontSize: '13px', color: 'var(--primary)' }}>
                             Access Details
                           </strong>
                           <div style={{ marginBottom: '6px' }}>{access.group.description}</div>
@@ -278,8 +279,8 @@ export const Dashboard: React.FC = () => {
                       {isExpiringSoon(access.expiresAt) && (
                         <button
                           className="btn btn-outline btn-sm"
-                          title="Request renewed access for this group"
-                          onClick={() => navigate(`/groups/${access.group.slug}`)}
+                          title="Request an extension for this group"
+                          onClick={() => setRenewTarget({ groupId: access.groupId, groupName: access.group.name })}
                         >
                           <Icons.RotateCw size={12} /> Extend
                         </button>
@@ -310,6 +311,21 @@ export const Dashboard: React.FC = () => {
             </tbody>
           </table>
         </div>
+      )}
+
+      {/* Extend / renew access for an expiring grant. */}
+      {renewTarget && (
+        <RenewAccessModal
+          isOpen={!!renewTarget}
+          onClose={() => setRenewTarget(null)}
+          groupId={renewTarget.groupId}
+          groupName={renewTarget.groupName}
+          onSuccess={() => {
+            queryClient.invalidateQueries({ queryKey: queryKeys.myAccess() });
+            queryClient.invalidateQueries({ queryKey: queryKeys.myRequests() });
+            queryClient.invalidateQueries({ queryKey: queryKeys.pendingRequests() });
+          }}
+        />
       )}
     </div>
   );

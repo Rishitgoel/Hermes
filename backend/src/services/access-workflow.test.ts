@@ -6,7 +6,7 @@ import provisioningRegistry from './provisioning.registry';
 import { AccessDuration, RequestStatus, UserCreationStatus } from '@prisma/client';
 import { ConflictError, UserNotApprovedError } from '../utils/errors';
 import config from '../config/config';
-
+  
 describe('AccessWorkflowService Integration Tests', () => {
   const testUser = {
     id: 'usr-test',
@@ -584,6 +584,139 @@ describe('AccessWorkflowService Integration Tests', () => {
         externalGroupId: levelSenior.externalGroupId,
         metadata: { groupSlug: group.slug, levelSlug: levelSenior.slug },
       });
+    });
+  });
+
+  describe('Access Renewal (extension) flows', () => {
+    let group: any;
+    let level: any;
+    let userAccess: any;
+
+    beforeEach(async () => {
+      group = await prisma.group.create({
+        data: {
+          name: 'Renewable Group',
+          slug: 'renewable',
+          description: 'Renewable Access',
+          platform: 'redash',
+          externalGroupId: 'ext-grp-renew-base',
+        },
+      });
+
+      level = await prisma.groupLevel.create({
+        data: {
+          groupId: group.id,
+          name: 'Member',
+          slug: 'member',
+          rank: 0,
+          externalGroupId: 'ext-grp-renew-member',
+        },
+      });
+
+      await prisma.userCreationRequest.create({
+        data: {
+          userId: testUser.id,
+          userName: testUser.username,
+          userEmail: testUser.email,
+          platform: 'redash',
+          status: UserCreationStatus.COMPLETED,
+        },
+      });
+
+      const req = await accessWorkflowService.createRequest(
+        testUser,
+        group.id,
+        'Initial grant',
+        AccessDuration.ONE_MONTH,
+        level.id,
+      );
+      await accessWorkflowService.reviewRequest(req.id, adminUser, 'APPROVED');
+
+      userAccess = await prisma.userAccess.findFirst({
+        where: { userId: testUser.id, groupId: group.id, isActive: true },
+      });
+    });
+
+    it('extends the grant on the same level when an admin approves the renewal (no deprovision)', async () => {
+      // Current grant is about to expire tomorrow.
+      const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      await prisma.userAccess.update({
+        where: { id: userAccess.id },
+        data: { expiresAt: tomorrow },
+      });
+
+      // User requests a renewal for a fresh 3-month window (keeps their current level).
+      const renewal = await accessWorkflowService.requestRenewal(
+        testUser,
+        group.id,
+        'Campaign extended into next quarter',
+        AccessDuration.THREE_MONTHS,
+      );
+      expect(renewal.status).toBe(RequestStatus.PENDING);
+      expect(renewal.levelId).toBe(level.id);
+
+      // Until approval, the original grant stays active with its original expiry.
+      const stillOld = await prisma.userAccess.findFirst({
+        where: { userId: testUser.id, groupId: group.id, isActive: true },
+      });
+      expect(stillOld?.id).toBe(userAccess.id);
+      expect(stillOld?.expiresAt?.getTime()).toBe(tomorrow.getTime());
+
+      // Admin approves → grant extended.
+      await accessWorkflowService.reviewRequest(renewal.id, adminUser, 'APPROVED');
+
+      // Old grant deactivated; a fresh grant on the SAME level with a later expiry.
+      const oldGrant = await prisma.userAccess.findUnique({ where: { id: userAccess.id } });
+      expect(oldGrant?.isActive).toBe(false);
+
+      const newGrant = await prisma.userAccess.findFirst({
+        where: { userId: testUser.id, groupId: group.id, isActive: true },
+      });
+      expect(newGrant).not.toBeNull();
+      expect(newGrant?.id).not.toBe(userAccess.id);
+      expect(newGrant?.levelId).toBe(level.id);
+      expect(newGrant?.expiresAt!.getTime()).toBeGreaterThan(tomorrow.getTime());
+
+      // Same external group on both sides → the user is never removed from the platform.
+      expect(mockRedashAdapter.deprovision).not.toHaveBeenCalled();
+
+      // Audited as a renewal, not a level change; old request marked superseded.
+      const renewAudit = await prisma.auditEntry.findFirst({ where: { action: 'ACCESS_RENEWED' } });
+      expect(renewAudit).not.toBeNull();
+      const oldRequest = await prisma.accessRequest.findUnique({
+        where: { id: userAccess.accessRequestId },
+      });
+      expect(oldRequest?.status).toBe(RequestStatus.REVOKED);
+      expect(oldRequest?.revokeReason).toContain('renewal');
+    });
+
+    it('rejects a renewal when the user has no active access to the group', async () => {
+      await accessWorkflowService.revokeAccess(userAccess.id, adminUser, 'cleanup');
+      await expect(
+        accessWorkflowService.requestRenewal(
+          testUser,
+          group.id,
+          'please extend my access',
+          AccessDuration.ONE_MONTH,
+        ),
+      ).rejects.toThrow(ConflictError);
+    });
+
+    it('rejects a renewal when an open request already exists for the group', async () => {
+      await accessWorkflowService.requestRenewal(
+        testUser,
+        group.id,
+        'first renewal attempt',
+        AccessDuration.ONE_MONTH,
+      );
+      await expect(
+        accessWorkflowService.requestRenewal(
+          testUser,
+          group.id,
+          'second renewal attempt',
+          AccessDuration.ONE_MONTH,
+        ),
+      ).rejects.toThrow(ConflictError);
     });
   });
 });

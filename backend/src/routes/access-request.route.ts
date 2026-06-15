@@ -29,6 +29,13 @@ router.post('/change-level', authenticateToken, (req: Request, res: Response, ne
   controller.changeLevel(req, res, next).catch(next);
 });
 
+// Renew (extend) access the caller already holds in a group. Static path, so no
+// conflict with POST '/'. Authorized in the service (caller must hold active access).
+router.post('/renew', authenticateToken, (req: Request, res: Response, next: NextFunction) => {
+  const controller = new AccessRequestController(req, res, next);
+  controller.renewAccess(req, res, next).catch(next);
+});
+
 router.get('/my', authenticateToken, (req: Request, res: Response, next: NextFunction) => {
   const controller = new AccessRequestController(req, res, next);
   controller.getMyRequests(req, res, next).catch(next);

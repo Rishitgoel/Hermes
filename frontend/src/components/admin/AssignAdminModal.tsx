@@ -1,41 +1,26 @@
-import React, { useEffect, useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import React, { useState } from 'react';
+import { useMutation } from '@tanstack/react-query';
 import * as Icons from 'lucide-react';
-import { queryKeys } from '../../lib/queryKeys';
 import { prettyPlatform, cleanName } from './adminUtils';
-import { searchUsers, assignPlatformAdmin, assignGroupAdmin, type AdminUser } from '../../services/api/admin';
+import { assignPlatformAdmin, assignGroupAdmin, type AdminUser } from '../../services/api/admin';
+import UserPicker from './UserPicker';
 
 /** What an assignment targets: a whole platform, or a single group. */
 export type AssignTarget =
   | { kind: 'platform'; platform: string }
   | { kind: 'group'; groupId: string; groupName: string };
 
-/** Small debounce so the user-search query doesn't fire on every keystroke. */
-function useDebounced<T>(value: T, delay = 300): T {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const id = window.setTimeout(() => setDebounced(value), delay);
-    return () => window.clearTimeout(id);
-  }, [value, delay]);
-  return debounced;
-}
-
 interface AssignAdminModalProps {
   target: AssignTarget;
+  /** userIds that are already admins of this target — shown un-selectable. */
+  existingAdminIds?: Set<string>;
   onClose: () => void;
   onAssigned: (message: string) => void;
   onError: (message: string) => void;
 }
 
-export const AssignAdminModal: React.FC<AssignAdminModalProps> = ({ target, onClose, onAssigned, onError }) => {
-  const [search, setSearch] = useState('');
+export const AssignAdminModal: React.FC<AssignAdminModalProps> = ({ target, existingAdminIds, onClose, onAssigned, onError }) => {
   const [selected, setSelected] = useState<AdminUser | null>(null);
-  const debouncedSearch = useDebounced(search, 300);
-
-  const usersQuery = useQuery({
-    queryKey: queryKeys.adminUsers(debouncedSearch),
-    queryFn: () => searchUsers(debouncedSearch),
-  });
 
   const assignMutation = useMutation({
     mutationFn: () => {
@@ -54,91 +39,68 @@ export const AssignAdminModal: React.FC<AssignAdminModalProps> = ({ target, onCl
   });
 
   const title = target.kind === 'platform' ? `Add ${prettyPlatform(target.platform)} platform admin` : `Add admin to ${target.groupName}`;
+  const subtitle =
+    target.kind === 'platform'
+      ? `They'll be able to manage every group on ${prettyPlatform(target.platform)} — effective on their next login.`
+      : `They'll get approval rights for ${target.groupName} — effective on their next login.`;
+
+  const submit = () => {
+    if (selected && !assignMutation.isPending) assignMutation.mutate();
+  };
 
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">
-          <div className="modal-title">{title}</div>
+        <div className="modal-header" style={{ alignItems: 'flex-start' }}>
+          <div>
+            <div className="modal-title">{title}</div>
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '3px', lineHeight: 1.4 }}>{subtitle}</div>
+          </div>
           <button type="button" className="modal-close-btn" onClick={onClose}>
             <Icons.X size={20} />
           </button>
         </div>
 
         <div className="modal-body">
-          <div className="form-input-with-icon" style={{ marginBottom: '14px' }}>
-            <Icons.Search size={16} />
-            <input
-              type="text"
-              className="form-input"
-              placeholder="Search users by name or email…"
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setSelected(null);
-              }}
-              autoFocus
-            />
-          </div>
-
-          <div style={{ maxHeight: '280px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            {usersQuery.isLoading ? (
-              <div style={{ color: 'var(--text-muted)', fontSize: '13px', padding: '8px' }}>Searching…</div>
-            ) : usersQuery.isError ? (
-              <div style={{ color: 'var(--status-rejected-text)', fontSize: '13px', padding: '8px' }}>
-                {(usersQuery.error as any)?.message || 'Failed to search users.'}
-              </div>
-            ) : (usersQuery.data ?? []).length === 0 ? (
-              <div style={{ color: 'var(--text-light)', fontSize: '13px', padding: '8px' }}>
-                {debouncedSearch
-                  ? 'No matching users. They must sign in to Hermes once before they can be promoted.'
-                  : 'No users yet. Users appear here once they have signed in to Hermes.'}
-              </div>
-            ) : (
-              (usersQuery.data ?? []).map((u) => {
-                const isSel = selected?.userId === u.userId;
-                return (
-                  <button
-                    key={u.userId}
-                    type="button"
-                    onClick={() => setSelected(u)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '10px',
-                      padding: '10px 12px',
-                      border: `1px solid ${isSel ? 'var(--primary)' : 'var(--border)'}`,
-                      background: isSel ? 'var(--primary-light)' : 'var(--bg-card)',
-                      borderRadius: 'var(--radius-md)',
-                      cursor: 'pointer',
-                      textAlign: 'left',
-                    }}
-                  >
-                    <Icons.UserCircle size={20} style={{ color: isSel ? 'var(--primary)' : 'var(--text-light)' }} />
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 600, fontSize: '13px' }}>{cleanName(u.userName)}</div>
-                      <div style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{u.userEmail}</div>
-                    </div>
-                    {isSel && <Icons.Check size={16} style={{ color: 'var(--primary)' }} />}
-                  </button>
-                );
-              })
-            )}
-          </div>
+          <UserPicker
+            selected={selected}
+            onSelect={setSelected}
+            disabledIds={existingAdminIds}
+            disabledLabel="Already admin"
+            emptyVerb="promoted"
+            onSubmit={submit}
+            onCancel={onClose}
+            listMaxHeight={280}
+          />
         </div>
 
-        <div className="modal-footer">
-          <button type="button" className="btn btn-outline" onClick={onClose} disabled={assignMutation.isPending}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            disabled={!selected || assignMutation.isPending}
-            onClick={() => assignMutation.mutate()}
-          >
-            {assignMutation.isPending ? 'Assigning…' : 'Assign'}
-          </button>
+        <div className="modal-footer" style={{ justifyContent: 'space-between' }}>
+          <div style={{ fontSize: '12px', color: selected ? 'var(--text-muted)' : 'var(--text-light)', display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+            {selected ? (
+              <>
+                <Icons.UserCheck size={14} style={{ color: 'var(--primary)', flexShrink: 0 }} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <strong style={{ fontWeight: 600 }}>{cleanName(selected.userName)}</strong> selected
+                </span>
+              </>
+            ) : (
+              'Select a user to assign.'
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+            <button type="button" className="btn btn-outline" onClick={onClose} disabled={assignMutation.isPending}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={!selected || assignMutation.isPending}
+              style={!selected ? { background: 'var(--bg-inset)', color: 'var(--text-light)', boxShadow: 'none' } : undefined}
+              onClick={submit}
+            >
+              {assignMutation.isPending ? 'Assigning…' : 'Assign'}
+            </button>
+          </div>
         </div>
       </div>
     </div>

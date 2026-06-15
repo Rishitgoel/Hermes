@@ -1,4 +1,4 @@
-import './config/config'; // Loads dotenv + normalizes env once
+import './config/config'; // Loads dotenv + normalizes env once (trigger restart - live redash reset)
 
 import config from './config/config';
 import logger from './utils/logger';

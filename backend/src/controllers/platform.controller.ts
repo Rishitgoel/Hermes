@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import BaseController from './base.controller';
 import provisioningRegistry from '../services/provisioning.registry';
+import config from '../config/config';
 
 export class PlatformController extends BaseController {
   // GET /api/platforms
@@ -13,14 +14,16 @@ export class PlatformController extends BaseController {
   //    the key. `launchUrl` is null when the adapter has none configured.
   async list(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const platforms = provisioningRegistry.listPlatforms().map((key) => {
-        const adapter = provisioningRegistry.get(key);
-        return {
-          key,
-          displayName: adapter.displayName,
-          launchUrl: adapter.getLaunchUrl?.() ?? null,
-        };
-      });
+      const platforms = provisioningRegistry.listPlatforms()
+        .filter((key) => key !== 'aws' || config.aws.isEnabled)
+        .map((key) => {
+          const adapter = provisioningRegistry.get(key);
+          return {
+            key,
+            displayName: adapter.displayName,
+            launchUrl: adapter.getLaunchUrl?.() ?? null,
+          };
+        });
       this.sendResponse(
         { live: platforms.map((p) => p.key), platforms },
         'Platforms retrieved',

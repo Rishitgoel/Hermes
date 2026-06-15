@@ -114,8 +114,8 @@ export const GroupSettingsTab: React.FC<GroupSettingsTabProps> = ({ group, onDel
             </div>
             <button
               type="button"
-              className="btn btn-primary btn-danger btn-sm"
-              style={{ flexShrink: 0, background: 'var(--status-rejected-text)', borderColor: 'var(--status-rejected-text)' }}
+              className="btn btn-primary btn-sm"
+              style={{ flexShrink: 0, color: 'white', background: 'var(--status-rejected-text)', borderColor: 'var(--status-rejected-text)' }}
               disabled={deleteMutation.isPending}
               onClick={() => setConfirmDelete(true)}
             >

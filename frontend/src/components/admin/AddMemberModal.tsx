@@ -1,26 +1,16 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../../lib/queryKeys';
 import { cleanName } from './adminUtils';
+import UserPicker from './UserPicker';
 import {
-  searchUsers,
   addGroupMember,
   listGroupLevels,
   type AdminUser,
   type ManageableGroup,
   type AccessDurationValue,
 } from '../../services/api/admin';
-
-/** Small debounce so the user-search query doesn't fire on every keystroke. */
-function useDebounced<T>(value: T, delay = 300): T {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const id = window.setTimeout(() => setDebounced(value), delay);
-    return () => window.clearTimeout(id);
-  }, [value, delay]);
-  return debounced;
-}
 
 interface AddMemberModalProps {
   group: ManageableGroup;
@@ -34,20 +24,13 @@ interface AddMemberModalProps {
 /**
  * Add a user to a group directly from Admin Management (Members tab) — the
  * admin-side equivalent of an already-approved access request. Same user search
- * as AssignAdminModal, plus a level picker (required when the group has active
- * levels) and a duration picker.
+ * as AssignAdminModal (shared UserPicker), plus a level picker (required when the
+ * group has active levels) and a duration picker.
  */
 export const AddMemberModal: React.FC<AddMemberModalProps> = ({ group, existingMemberIds, onClose, onAdded, onError }) => {
-  const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<AdminUser | null>(null);
   const [levelId, setLevelId] = useState('');
   const [duration, setDuration] = useState<AccessDurationValue>('PERMANENT');
-  const debouncedSearch = useDebounced(search, 300);
-
-  const usersQuery = useQuery({
-    queryKey: queryKeys.adminUsers(debouncedSearch),
-    queryFn: () => searchUsers(debouncedSearch),
-  });
 
   // Shares the query key with the Levels/Members tabs so the data is fetched once.
   const levelsQuery = useQuery({
@@ -78,125 +61,102 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({ group, existingM
 
   const canSubmit = !!selected && (!needsLevel || !!levelId) && !addMutation.isPending;
 
+  const submit = () => {
+    if (canSubmit) addMutation.mutate();
+  };
+
+  const helper = !selected ? 'Select a user to add.' : needsLevel && !levelId ? 'Pick a level below.' : null;
+
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">
-          <div className="modal-title">Add member to {group.name}</div>
+        <div className="modal-header" style={{ alignItems: 'flex-start' }}>
+          <div>
+            <div className="modal-title">Add member to {group.name}</div>
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '3px', lineHeight: 1.4 }}>
+              Grants access directly — no request to review.
+            </div>
+          </div>
           <button type="button" className="modal-close-btn" onClick={onClose}>
             <Icons.X size={20} />
           </button>
         </div>
 
         <div className="modal-body">
-          <div className="form-input-with-icon" style={{ marginBottom: '14px' }}>
-            <Icons.Search size={16} />
-            <input
-              type="text"
-              className="form-input"
-              placeholder="Search users by name or email…"
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setSelected(null);
-              }}
-              autoFocus
-            />
-          </div>
+          <UserPicker
+            selected={selected}
+            onSelect={setSelected}
+            disabledIds={existingMemberIds}
+            disabledLabel="Already a member"
+            emptyVerb="added"
+            onSubmit={submit}
+            onCancel={onClose}
+            listMaxHeight={220}
+          />
 
-          <div style={{ maxHeight: '220px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '14px' }}>
-            {usersQuery.isLoading ? (
-              <div style={{ color: 'var(--text-muted)', fontSize: '13px', padding: '8px' }}>Searching…</div>
-            ) : usersQuery.isError ? (
-              <div style={{ color: 'var(--status-rejected-text)', fontSize: '13px', padding: '8px' }}>
-                {(usersQuery.error as any)?.message || 'Failed to search users.'}
-              </div>
-            ) : (usersQuery.data ?? []).length === 0 ? (
-              <div style={{ color: 'var(--text-light)', fontSize: '13px', padding: '8px' }}>
-                {debouncedSearch
-                  ? 'No matching users. They must sign in to Hermes once before they can be added.'
-                  : 'No users yet. Users appear here once they have signed in to Hermes.'}
-              </div>
-            ) : (
-              (usersQuery.data ?? []).map((u) => {
-                const isMember = existingMemberIds.has(u.userId);
-                const isSel = selected?.userId === u.userId;
-                return (
-                  <button
-                    key={u.userId}
-                    type="button"
-                    disabled={isMember}
-                    onClick={() => setSelected(u)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '10px',
-                      padding: '10px 12px',
-                      border: `1px solid ${isSel ? 'var(--primary)' : 'var(--border)'}`,
-                      background: isSel ? 'var(--primary-light)' : 'var(--bg-card)',
-                      borderRadius: 'var(--radius-md)',
-                      cursor: isMember ? 'not-allowed' : 'pointer',
-                      opacity: isMember ? 0.55 : 1,
-                      textAlign: 'left',
-                    }}
-                  >
-                    <Icons.UserCircle size={20} style={{ color: isSel ? 'var(--primary)' : 'var(--text-light)' }} />
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 600, fontSize: '13px' }}>{cleanName(u.userName)}</div>
-                      <div style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{u.userEmail}</div>
-                    </div>
-                    {isMember ? (
-                      <span style={{ fontSize: '11px', color: 'var(--text-light)', fontWeight: 600 }}>Already a member</span>
-                    ) : (
-                      isSel && <Icons.Check size={16} style={{ color: 'var(--primary)' }} />
-                    )}
-                  </button>
-                );
-              })
-            )}
-          </div>
-
-          {needsLevel && (
-            <div className="form-group" style={{ marginBottom: '14px' }}>
-              <label className="form-label">Level</label>
-              <select className="form-select" value={levelId} onChange={(e) => setLevelId(e.target.value)} disabled={addMutation.isPending}>
-                <option value="" disabled>
-                  Select a level…
-                </option>
-                {activeLevels.map((l) => (
-                  <option key={l.id} value={l.id}>
-                    {l.name}
-                    {l.permission ? ` · ${l.permission}` : ''}
+          <div style={{ marginTop: '14px' }}>
+            {needsLevel && (
+              <div className="form-group" style={{ marginBottom: '14px' }}>
+                <label className="form-label">Level</label>
+                <select className="form-select" value={levelId} onChange={(e) => setLevelId(e.target.value)} disabled={addMutation.isPending}>
+                  <option value="" disabled>
+                    Select a level…
                   </option>
-                ))}
+                  {activeLevels.map((l) => (
+                    <option key={l.id} value={l.id}>
+                      {l.name}
+                      {l.permission ? ` · ${l.permission}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label className="form-label">Access Duration</label>
+              <select
+                className="form-select"
+                value={duration}
+                onChange={(e) => setDuration(e.target.value as AccessDurationValue)}
+                disabled={addMutation.isPending}
+              >
+                <option value="PERMANENT">Permanent Access</option>
+                <option value="ONE_DAY">1 Day (Temp Access)</option>
+                <option value="ONE_WEEK">1 Week</option>
+                <option value="ONE_MONTH">1 Month</option>
+                <option value="THREE_MONTHS">3 Months</option>
               </select>
             </div>
-          )}
-
-          <div className="form-group" style={{ marginBottom: 0 }}>
-            <label className="form-label">Access Duration</label>
-            <select
-              className="form-select"
-              value={duration}
-              onChange={(e) => setDuration(e.target.value as AccessDurationValue)}
-              disabled={addMutation.isPending}
-            >
-              <option value="PERMANENT">Permanent Access</option>
-              <option value="ONE_DAY">1 Day (Temp Access)</option>
-              <option value="ONE_WEEK">1 Week</option>
-              <option value="ONE_MONTH">1 Month</option>
-              <option value="THREE_MONTHS">3 Months</option>
-            </select>
           </div>
         </div>
 
-        <div className="modal-footer">
-          <button type="button" className="btn btn-outline" onClick={onClose} disabled={addMutation.isPending}>
-            Cancel
-          </button>
-          <button type="button" className="btn btn-primary" disabled={!canSubmit} onClick={() => addMutation.mutate()}>
-            {addMutation.isPending ? 'Adding…' : 'Add member'}
-          </button>
+        <div className="modal-footer" style={{ justifyContent: 'space-between' }}>
+          <div style={{ fontSize: '12px', color: selected ? 'var(--text-muted)' : 'var(--text-light)', display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+            {helper ? (
+              helper
+            ) : (
+              <>
+                <Icons.UserCheck size={14} style={{ color: 'var(--primary)', flexShrink: 0 }} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <strong style={{ fontWeight: 600 }}>{cleanName(selected!.userName)}</strong> selected
+                </span>
+              </>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+            <button type="button" className="btn btn-outline" onClick={onClose} disabled={addMutation.isPending}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={!canSubmit}
+              style={!canSubmit ? { background: 'var(--bg-inset)', color: 'var(--text-light)', boxShadow: 'none' } : undefined}
+              onClick={submit}
+            >
+              {addMutation.isPending ? 'Adding…' : 'Add member'}
+            </button>
+          </div>
         </div>
       </div>
     </div>

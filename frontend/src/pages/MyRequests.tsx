@@ -7,6 +7,7 @@ import ExpiryBadge from '../components/common/ExpiryBadge';
 import { FileText } from 'lucide-react';
 import { queryKeys } from '../lib/queryKeys';
 import AccountStatusPanel from '../components/user-creation/AccountStatusPanel';
+import SectionHeader from '../components/common/SectionHeader';
 
 interface RequestData {
   id: string;
@@ -49,12 +50,7 @@ export const MyRequests: React.FC = () => {
     <div>
       <AccountStatusPanel />
 
-      <div className="section-header">
-        <h1 style={{ fontSize: '28px' }}>My Access Requests</h1>
-        <span style={{ fontSize: '13px', color: 'var(--text-muted)', fontWeight: 700 }}>
-          {requests.length} Requests Total
-        </span>
-      </div>
+      <SectionHeader title="My Access Requests" meta={`${requests.length} Requests Total`} />
 
       {isLoading ? (
         <LoadingSpinner />

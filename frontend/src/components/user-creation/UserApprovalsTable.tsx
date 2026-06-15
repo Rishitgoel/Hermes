@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { listPendingUserCreations, reviewUserCreation, PendingUserCreationRequest } from '../../services/api/userCreation';
 import { queryKeys } from '../../lib/queryKeys';
 import { useToast } from '../../contexts/ToastContext';
+import SectionHeader from '../common/SectionHeader';
 import * as Icons from 'lucide-react';
 
 /**
@@ -71,27 +72,22 @@ export const UserApprovalsTable: React.FC = () => {
 
   return (
     <div style={{ marginBottom: '32px' }}>
-      <div className="section-header" style={{ marginBottom: '12px' }}>
-        <h2 style={{ fontSize: '20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <Icons.UserPlus size={20} style={{ color: 'var(--primary)' }} />
-          User Approvals
-        </h2>
-        <span style={{ fontSize: '13px', color: 'var(--text-muted)', fontWeight: 700 }}>
-          {rows.length} Pending
-        </span>
-      </div>
+      <SectionHeader
+        title="User Approvals"
+        icon={<Icons.UserPlus size={18} />}
+        meta={`${rows.length} Pending`}
+        style={{ marginBottom: '10px' }}
+      />
 
       <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '12px' }}>
         Approve these <strong>before</strong> any group access request from the same user.
       </p>
 
       {rows.length === 0 ? (
-        <div className="empty-state" style={{ padding: '24px' }}>
-          <Icons.UserCheck size={32} className="empty-state-icon" />
-          <h4 className="empty-state-title" style={{ fontSize: '15px' }}>No pending users</h4>
-          <p className="empty-state-desc" style={{ fontSize: '13px' }}>
-            Every account request has been reviewed.
-          </p>
+        <div className="empty-state">
+          <Icons.UserCheck size={44} className="empty-state-icon" />
+          <h3 className="empty-state-title">No pending users</h3>
+          <p className="empty-state-desc">Every account request has been reviewed.</p>
         </div>
       ) : (
         <div className="table-container">

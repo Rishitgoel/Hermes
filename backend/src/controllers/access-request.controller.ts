@@ -6,6 +6,7 @@ import {
   createRequestSchema,
   reviewRequestSchema,
   changeLevelSchema,
+  renewRequestSchema,
   createRequestsBulkSchema,
   reviewRequestsBulkSchema,
 } from '../validations/access-request.validation';
@@ -176,6 +177,38 @@ export class AccessRequestController extends BaseController {
       this.sendResponse(result, message, result.kind === 'instant' ? 200 : 201);
     } catch (error) {
       this.handleError(error, 'Failed to change level');
+    }
+  }
+
+  // POST /api/access-requests/renew
+  // Renew (extend) access the caller already holds in a group. Keeps their current
+  // level, goes through normal admin approval, and on approval extends the grant
+  // (the service decides — it rejects callers with no active grant).
+  async renewAccess(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const validated = this.validateWithZod(renewRequestSchema, this.req.body);
+      if (!validated.success) return;
+
+      const userId = this.getUserId();
+      if (!userId) return;
+
+      const requester = {
+        id: userId,
+        username: this.user!.username,
+        email: this.user!.email,
+      };
+
+      const { groupId, justification, duration } = validated.data;
+      const request = await accessWorkflowService.requestRenewal(
+        requester,
+        groupId,
+        justification,
+        duration,
+      );
+
+      this.sendResponse(request, 'Renewal request submitted for approval', 201);
+    } catch (error) {
+      this.handleError(error, 'Failed to submit renewal request');
     }
   }
 

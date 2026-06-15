@@ -20,6 +20,8 @@ services:
   keycloak:
     image: quay.io/keycloak/keycloak:24.0
     container_name: hermes_keycloak
+    # ⚠️  start-dev is for local development ONLY (disables HTTPS, uses H2 in-memory DB).
+    #     In production, use: start --hostname=keycloak.bachatt.app --db=postgres --db-url=...
     command: start-dev --http-port 8080 --health-enabled=true
     environment:
       KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
@@ -54,19 +56,37 @@ services:
     image: postgres:15-alpine
     container_name: hermes_redash_postgres
     environment:
-      POSTGRES_USER: redash
-      POSTGRES_PASSWORD: redash_pass
-      POSTGRES_DB: redash
+      POSTGRES_USER: ${REDASH_POSTGRES_USER:-redash}
+      POSTGRES_PASSWORD: ${REDASH_POSTGRES_PASSWORD:-redash_pass}
+      POSTGRES_DB: ${REDASH_POSTGRES_DB:-redash}
     ports:
       - '15434:5432'
     volumes:
       - redash_postgres_data:/var/lib/postgresql/data
     restart: always
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U redash -d redash']
+      test: ['CMD-SHELL', 'pg_isready -U ${REDASH_POSTGRES_USER:-redash} -d ${REDASH_POSTGRES_DB:-redash}']
       interval: 10s
       timeout: 5s
       retries: 5
+
+  # ── Redash Database Initialisation (one-shot) ──
+  # Creates Redash's internal tables on first run. Exits immediately on subsequent
+  # runs (tables already exist). The server + worker + scheduler depend on this so
+  # a fresh `docker compose up` never hits an empty DB.
+  redash-create-db:
+    image: redash/redash:latest
+    container_name: hermes_redash_create_db
+    command: create_db
+    environment:
+      REDASH_DATABASE_URL: 'postgresql://${REDASH_POSTGRES_USER:-redash}:${REDASH_POSTGRES_PASSWORD:-redash_pass}@redash-postgres:5432/${REDASH_POSTGRES_DB:-redash}'
+      REDASH_REDIS_URL: 'redis://redis:6379/0'
+    depends_on:
+      redis:
+        condition: service_healthy
+      redash-postgres:
+        condition: service_healthy
+    restart: 'no'
 
   # ── Redash Server ──
   redash:
@@ -74,14 +94,16 @@ services:
     container_name: hermes_redash
     command: server
     environment:
-      REDASH_DATABASE_URL: 'postgresql://redash:redash_pass@redash-postgres:5432/redash'
+      REDASH_DATABASE_URL: 'postgresql://${REDASH_POSTGRES_USER:-redash}:${REDASH_POSTGRES_PASSWORD:-redash_pass}@redash-postgres:5432/${REDASH_POSTGRES_DB:-redash}'
       REDASH_REDIS_URL: 'redis://redis:6379/0'
       REDASH_WEB_WORKERS: '4'
-      REDASH_COOKIE_SECRET: ${REDASH_COOKIE_SECRET:-super_secret_cookie}
+      REDASH_COOKIE_SECRET: ${REDASH_COOKIE_SECRET:?REDASH_COOKIE_SECRET must be set}
       PYTHONUNBUFFERED: '0'
     ports:
       - '5500:5000'
     depends_on:
+      redash-create-db:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       redash-postgres:
@@ -100,14 +122,16 @@ services:
     container_name: hermes_redash_worker
     command: worker
     environment:
-      REDASH_DATABASE_URL: 'postgresql://redash:redash_pass@redash-postgres:5432/redash'
+      REDASH_DATABASE_URL: 'postgresql://${REDASH_POSTGRES_USER:-redash}:${REDASH_POSTGRES_PASSWORD:-redash_pass}@redash-postgres:5432/${REDASH_POSTGRES_DB:-redash}'
       REDASH_REDIS_URL: 'redis://redis:6379/0'
       REDASH_WEB_WORKERS: '1'
-      REDASH_COOKIE_SECRET: ${REDASH_COOKIE_SECRET:-super_secret_cookie}
+      REDASH_COOKIE_SECRET: ${REDASH_COOKIE_SECRET:?REDASH_COOKIE_SECRET must be set}
       PYTHONUNBUFFERED: '0'
       QUEUES: 'queries,scheduled_queries,celery'
       WORKERS_COUNT: '2'
     depends_on:
+      redash-create-db:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       redash-postgres:
@@ -120,10 +144,12 @@ services:
     container_name: hermes_redash_scheduler
     command: scheduler
     environment:
-      REDASH_DATABASE_URL: 'postgresql://redash:redash_pass@redash-postgres:5432/redash'
+      REDASH_DATABASE_URL: 'postgresql://${REDASH_POSTGRES_USER:-redash}:${REDASH_POSTGRES_PASSWORD:-redash_pass}@redash-postgres:5432/${REDASH_POSTGRES_DB:-redash}'
       REDASH_REDIS_URL: 'redis://redis:6379/0'
-      REDASH_COOKIE_SECRET: ${REDASH_COOKIE_SECRET:-super_secret_cookie}
+      REDASH_COOKIE_SECRET: ${REDASH_COOKIE_SECRET:?REDASH_COOKIE_SECRET must be set}
     depends_on:
+      redash-create-db:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       redash-postgres:

@@ -2,6 +2,7 @@ import prisma from '../config/prisma';
 import provisioningRegistry from './provisioning.registry';
 import keycloakAdminService from './keycloak-admin.service';
 import logger from '../utils/logger';
+import config from '../config/config';
 
 export interface ReconcileCounts {
   /** Mirror rows added (a Keycloak role mapping had no mirror row). */
@@ -87,6 +88,10 @@ export class AdminReconciliationService {
     const tag = dryRun ? '[dry-run] would' : '';
 
     for (const platform of provisioningRegistry.listPlatforms()) {
+      if (platform === 'aws' && !config.aws.isEnabled) {
+        logger.debug('🔁 Reconcile: Skipping platform-admin reconciliation for AWS because it is disabled.');
+        continue;
+      }
       try {
         const kcIds = new Set(await keycloakAdminService.getUsersInRole(platformAdminRole(platform)));
         const mirror = await prisma.platformAdmin.findMany({ where: { platform } });
@@ -126,7 +131,15 @@ export class AdminReconciliationService {
   private async reconcileGroupAdmins(dryRun: boolean): Promise<ReconcileCounts> {
     const counts = zero();
     const tag = dryRun ? '[dry-run] would' : '';
-    const groups = await prisma.group.findMany({ select: { id: true, slug: true, platform: true } });
+    const groups = await prisma.group.findMany({
+      where: {
+        OR: [
+          { platform: { not: 'aws' } },
+          ...(config.aws.isEnabled ? [{ platform: 'aws' }] : []),
+        ],
+      },
+      select: { id: true, slug: true, platform: true },
+    });
 
     for (const g of groups) {
       try {

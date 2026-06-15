@@ -106,6 +106,67 @@ export class AccessWorkflowService {
   }
 
   /**
+   * Request a RENEWAL (extension) of access the user already holds in a group.
+   *
+   * Unlike createRequest, this is only valid when the user *already* has an active
+   * grant — it carries the user's current level forward and goes through the normal
+   * admin-approval flow. On approval, _provision detects the existing grant and
+   * extends it (deactivate old + create new with a fresh window) rather than
+   * creating a parallel grant, so the one-active-grant-per-(user,group) invariant
+   * holds and the user keeps their platform membership uninterrupted.
+   *
+   * Renewals deliberately go through approval (not self-service): letting a user
+   * recompute their own expiry window would be a silent self-extension — the same
+   * reason a self-service demotion preserves the current expiry.
+   */
+  async requestRenewal(
+    requester: { id: string; username: string; email: string },
+    groupId: string,
+    justification: string,
+    duration: AccessDuration,
+  ): Promise<AccessRequest> {
+    const group = await prisma.group.findUnique({ where: { id: groupId } });
+    if (!group) throw new NotFoundError('Group not found');
+
+    // Must already hold active access — otherwise this is a first-time request and
+    // belongs in createRequest (which enforces level requiredness and the account gate).
+    const currentAccess = await prisma.userAccess.findFirst({
+      where: { userId: requester.id, groupId, isActive: true },
+    });
+    if (!currentAccess) {
+      throw new ConflictError(
+        'You do not have active access to this group to renew. Request access first.',
+      );
+    }
+
+    // One open request per group — block if a previous request is still in flight.
+    const pendingRequest = await prisma.accessRequest.findFirst({
+      where: {
+        requesterId: requester.id,
+        groupId,
+        status: { in: [RequestStatus.PENDING, RequestStatus.WAITING_FOR_SETUP] },
+      },
+    });
+    if (pendingRequest) {
+      throw new ConflictError(
+        'You already have a pending request for this group. Wait for it to be reviewed.',
+      );
+    }
+
+    // A renewal keeps the user on the level they currently hold; carry it onto the
+    // request so approval re-provisions the same level (level-less grant ⇒ null).
+    let level: LevelRow | null = null;
+    if (currentAccess.levelId) {
+      level = await prisma.groupLevel.findUnique({
+        where: { id: currentAccess.levelId },
+        select: { id: true, name: true, slug: true, externalGroupId: true },
+      });
+    }
+
+    return this._persistPendingRequest(requester, group, level, justification, duration);
+  }
+
+  /**
    * Bulk create access requests in ONE round-trip + ONE Prisma transaction.
    * Replaces the frontend's N parallel POSTs (Groups page "Submit Requests").
    *
@@ -985,16 +1046,20 @@ export class AccessWorkflowService {
       const expiresAt =
         opts?.expiresAtOverride !== undefined ? opts.expiresAtOverride : this.calculateExpiry(request.duration);
 
-      // A pre-existing active grant on a DIFFERENT level means this is a level
-      // change → swap it (atomically deactivate the old grant + create the new one,
-      // then remove the user from the old level's external group) and finalize.
-      // A grant on the SAME level is a genuine duplicate (e.g. concurrent approval)
-      // and is left to the P2002 short-circuit in the create branch below.
+      // A pre-existing active grant created by a DIFFERENT (older) request means this
+      // request is meant to replace it → swap (atomically deactivate the old grant +
+      // create the new one). Two cases land here:
+      //   - different level → level change (remove user from the old level's group).
+      //   - same level      → renewal: same external group, so _swapGrant skips the
+      //     platform deprovision and the user keeps membership with a fresh expiry.
+      // A grant created by THIS SAME request (accessRequestId === request.id) is a
+      // genuine concurrent duplicate (double-provision of one request) and is left to
+      // the P2002 short-circuit in the create branch below — not a swap.
       const existingGrant = await prisma.userAccess.findFirst({
         where: { userId: request.requesterId, groupId: request.groupId, isActive: true },
         include: { level: true },
       });
-      if (existingGrant && existingGrant.levelId !== request.levelId) {
+      if (existingGrant && existingGrant.accessRequestId !== request.id) {
         // _swapGrant now performs the full atomic finalize (deactivate old + create
         // new + revoke old request + mark this request PROVISIONED + audit) inside
         // one transaction and returns the finalized request, so the swap path does
@@ -1153,6 +1218,10 @@ export class AccessWorkflowService {
   ): Promise<AccessRequest> {
     const { externalUserId, grantedAt, expiresAt, performer, platform, newExternalGroupId, provisioner, note } = ctx;
     const oldExternalGroupId = existingGrant.level?.externalGroupId ?? request.group.externalGroupId;
+    // Same level being re-granted = a renewal (extend the expiry), not a level change.
+    // Drives the request/audit wording below; the platform deprovision is skipped
+    // anyway because both levels resolve to the same external group.
+    const isRenewal = existingGrant.levelId === request.levelId;
 
     // All Hermes-side state changes commit together (no partial-failure window):
     // deactivate the old grant, create the new one, REVOKE the old request, mark THIS
@@ -1192,7 +1261,9 @@ export class AccessWorkflowService {
           where: { id: existingGrant.accessRequestId },
           data: {
             status: RequestStatus.REVOKED,
-            revokeReason: `Superseded by level change to "${request.level?.name ?? 'another level'}"`,
+            revokeReason: isRenewal
+              ? 'Superseded by access renewal'
+              : `Superseded by level change to "${request.level?.name ?? 'another level'}"`,
             revokedAt: new Date(),
           },
         });
@@ -1257,7 +1328,8 @@ export class AccessWorkflowService {
     try {
       await prisma.auditEntry.create({
         data: {
-          action: 'ACCESS_LEVEL_CHANGED',
+          // Same level re-granted with a fresh window = a renewal; a different level = a level change.
+          action: isRenewal ? 'ACCESS_RENEWED' : 'ACCESS_LEVEL_CHANGED',
           performerId: performer.id,
           performerName: performer.name,
           targetUserId: request.requesterId,
@@ -1275,6 +1347,7 @@ export class AccessWorkflowService {
             oldExternalGroupId,
             newExternalGroupId,
             oldDeprovisionError,
+            ...(isRenewal ? { renewal: true, newExpiresAt: expiresAt } : {}),
           },
         },
       });

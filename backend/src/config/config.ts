@@ -100,6 +100,10 @@ export const config = {
     // build the Secrets Manager client *before* loadSecrets() runs; the getter
     // reads the same process.env at that moment, so the conversion is harmless for
     // it (it must already be in .env to bootstrap secrets).
+    get isEnabled() {
+      return process.env.AWS_ENABLED !== 'false';
+    },
+
     get region() { return process.env.AWS_REGION; },
     get accessKeyId() { return process.env.AWS_ACCESS_KEY_ID; },
     get secretAccessKey() { return process.env.AWS_SECRET_ACCESS_KEY; },

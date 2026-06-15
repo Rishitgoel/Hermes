@@ -11,6 +11,7 @@ import { fetchPlatforms, type LivePlatform } from '../../services/api/platforms'
 import { queryKeys } from '../../lib/queryKeys';
 import { PLATFORMS, platformDisplayName } from '../../lib/platforms';
 import UserCreationFormModal from './UserCreationFormModal';
+import SectionHeader from '../common/SectionHeader';
 import * as Icons from 'lucide-react';
 
 /**
@@ -127,12 +128,7 @@ export const AccountStatusPanel: React.FC = () => {
 
   return (
     <div style={{ marginBottom: '24px' }}>
-      <div className="section-header">
-        <h3 className="section-title">Your platform accounts</h3>
-        <span style={{ fontSize: '13px', color: 'var(--text-muted)', fontWeight: 700 }}>
-          {summary.join(' · ')}
-        </span>
-      </div>
+      <SectionHeader title="Your platform accounts" meta={summary.join(' · ')} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
         {entries.map((entry) => (
           <PlatformAccountRow key={entry.platform} entry={entry} />

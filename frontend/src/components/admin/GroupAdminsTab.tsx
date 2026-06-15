@@ -90,6 +90,7 @@ export const GroupAdminsTab: React.FC<GroupAdminsTabProps> = ({ group }) => {
       {showAssign && (
         <AssignAdminModal
           target={{ kind: 'group', groupId: group.id, groupName: group.name }}
+          existingAdminIds={new Set(admins.map((a) => a.userId))}
           onClose={() => setShowAssign(false)}
           onAssigned={(msg) => {
             toast.success(msg, { duration: 8000 });

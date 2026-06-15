@@ -6,6 +6,7 @@ import { getMyUserCreation } from '../services/api/userCreation';
 import { fetchPlatforms } from '../services/api/platforms';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import EmptyState from '../components/common/EmptyState';
+import SectionHeader from '../components/common/SectionHeader';
 import PlatformInviteModal from '../components/access/PlatformInviteModal';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../lib/queryKeys';
@@ -297,12 +298,11 @@ export const Groups: React.FC = () => {
     return (
       <div>
         {/* Page Header */}
-        <div className="section-header" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '8px', marginBottom: '32px' }}>
-          <h1 style={{ fontSize: '28px' }}>Access Platforms</h1>
-          <p style={{ color: 'var(--text-muted)', fontSize: '15px' }}>
-            Select an ecosystem platform below to browse groups and manage credentials.
-          </p>
-        </div>
+        <SectionHeader
+          title="Access Platforms"
+          description="Select an ecosystem platform below to browse groups and manage credentials."
+          style={{ marginBottom: '28px' }}
+        />
 
         {/* Info Banner */}
         {infoMessage && (
@@ -403,21 +403,21 @@ export const Groups: React.FC = () => {
       </button>
 
       {/* Page Header */}
-      <div className="section-header">
-        <h1 style={{ fontSize: '28px' }}>{activePlatformMeta?.name ?? 'Platform'} Data Groups</h1>
-        
-        {/* Search Bar */}
-        <div className="form-input-with-icon" style={{ width: '300px' }}>
-          <Icons.Search size={18} />
-          <input
-            type="text"
-            className="form-input"
-            placeholder="Search groups..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-          />
-        </div>
-      </div>
+      <SectionHeader
+        title={`${activePlatformMeta?.name ?? 'Platform'} Data Groups`}
+        actions={
+          <div className="form-input-with-icon" style={{ width: '300px' }}>
+            <Icons.Search size={18} />
+            <input
+              type="text"
+              className="form-input"
+              placeholder="Search groups..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+          </div>
+        }
+      />
 
       {/* Account Action Banner — only shown when the user needs to submit (DRAFT) or has been rejected. */}
       {!isPlatformUser && (
@@ -620,7 +620,7 @@ export const Groups: React.FC = () => {
                         <div className="info-tooltip-container">
                           <Icons.Info size={14} />
                           <div className="info-tooltip">
-                            <strong style={{ display: 'block', marginBottom: '4px', fontSize: '13px', color: 'var(--primary-light)' }}>
+                            <strong style={{ display: 'block', marginBottom: '4px', fontSize: '13px', color: 'var(--primary)' }}>
                               {group.name}
                             </strong>
                             {group.description}

@@ -13,7 +13,10 @@
     "format": "prettier --write \"src/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\"",
     "test": "vitest",
-    "test:run": "vitest run"
+    "test:run": "vitest run",
+    "aws:enable": "ts-node scripts/toggle-aws.ts enable",
+    "aws:disable": "ts-node scripts/toggle-aws.ts disable",
+    "aws:status": "ts-node scripts/toggle-aws.ts status"
   },
   "dependencies": {
     "@aws-sdk/client-identitystore": "^3.1063.0",

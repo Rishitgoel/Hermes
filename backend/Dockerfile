@@ -1,6 +1,6 @@
 # ── Builder stage ──────────────────────────────────────────────────────────
 # Installs all deps, generates the Prisma client, and compiles TS → dist/.
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /app
 
@@ -18,7 +18,7 @@ RUN npx tsc
 # ── Runner stage ───────────────────────────────────────────────────────────
 # Slim runtime image. Carries the compiled output, deps (incl. the Prisma CLI
 # used by the migrate-on-boot entrypoint), and the schema/migrations.
-FROM node:20-alpine AS runner
+FROM node:22-alpine AS runner
 
 WORKDIR /app
 

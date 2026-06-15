@@ -77,7 +77,11 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
     fetchNotifications();
 
-    const baseUrl = import.meta.env.VITE_BASE_URL_BACKEND || 'http://localhost:8001';
+    const rawBase = (import.meta.env.VITE_BASE_URL_BACKEND || '').trim();
+    let baseUrl = rawBase.startsWith('http') ? rawBase : window.location.origin;
+    if (baseUrl.endsWith('/')) {
+      baseUrl = baseUrl.slice(0, -1);
+    }
     let es: EventSource | null = null;
     let closed = false;
     let reopenTimer: number | null = null;

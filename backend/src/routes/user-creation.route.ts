@@ -1,6 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { UserCreationController } from '../controllers/user-creation.controller';
-import { authenticateToken, requireRole } from '../middleware/auth.middleware';
+import { authenticateToken } from '../middleware/auth.middleware';
 
 const router = Router();
 
@@ -30,12 +30,12 @@ router.post('/me/sync-now', authenticateToken, (req: Request, res: Response, nex
   controller.syncMine(req, res, next).catch(next);
 });
 
-// Admin endpoints — user-creation is org-wide, so restrict to super-admins only.
-// Group admins should not be able to approve a brand-new user into Hermes.
+// Admin endpoints — account creation is per-platform. Authorized in the controller
+// (super admin → all platforms; platform admin → their platform(s) only; group
+// admins have no account-approval rights), which requireRole can't express here.
 router.get(
   '/pending',
   authenticateToken,
-  requireRole(['hermes_super_admin']),
   (req: Request, res: Response, next: NextFunction) => {
     const controller = new UserCreationController(req, res, next);
     controller.listPending(req, res, next).catch(next);
@@ -45,7 +45,6 @@ router.get(
 router.put(
   '/:id/review',
   authenticateToken,
-  requireRole(['hermes_super_admin']),
   (req: Request, res: Response, next: NextFunction) => {
     const controller = new UserCreationController(req, res, next);
     controller.review(req, res, next).catch(next);

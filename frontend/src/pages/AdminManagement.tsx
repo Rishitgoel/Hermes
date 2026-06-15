@@ -5,8 +5,10 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import { SkeletonRows } from '../components/common/Skeleton';
+import SectionHeader from '../components/common/SectionHeader';
+import PlatformTabs from '../components/common/PlatformTabs';
 import { queryKeys } from '../lib/queryKeys';
-import { prettyPlatform, cleanName } from '../components/admin/adminUtils';
+import { prettyPlatform, cleanName, groupIconName } from '../components/admin/adminUtils';
 import GroupDrawer from '../components/admin/GroupDrawer';
 import GroupFormModal from '../components/admin/GroupFormModal';
 import ConfirmModal from '../components/admin/ConfirmModal';
@@ -120,56 +122,33 @@ export const AdminManagement: React.FC = () => {
 
   return (
     <div>
-      {/* Header */}
-      <div className="section-header" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '6px', marginBottom: '24px' }}>
-        <h1 style={{ fontSize: '28px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <Icons.ShieldCheck size={28} style={{ color: 'var(--primary)' }} /> Admin Management
-        </h1>
-        <p style={{ color: 'var(--text-muted)', fontSize: '15px' }}>
-          {superAdmin
-            ? 'Manage platform admins, group admins, and members across every platform.'
-            : 'Manage group admins and members for the platforms you administer.'}
-        </p>
-      </div>
-
       {/* Platform selector */}
-      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '24px' }}>
-        {platforms.map((p) => {
-          const active = p === activePlatform;
-          return (
-            <button
-              key={p}
-              type="button"
-              onClick={() => {
-                setActivePlatform(p);
-                setSelectedGroupId(null);
-                setSearch('');
-              }}
-              className={active ? 'btn btn-primary' : 'btn btn-outline'}
-              style={{ padding: '8px 18px', fontSize: '14px' }}
-            >
-              <Icons.Database size={15} /> {prettyPlatform(p)}
-            </button>
-          );
-        })}
-      </div>
+      <PlatformTabs
+        platforms={platforms}
+        active={activePlatform}
+        onChange={(p) => {
+          setActivePlatform(p);
+          setSelectedGroupId(null);
+          setSearch('');
+        }}
+      />
 
       {/* Platform Admins (super admin only) */}
       {superAdmin && activePlatform && (
         <section style={{ marginBottom: '36px' }}>
-          <div className="section-header" style={{ marginBottom: '12px' }}>
-            <h2 style={{ fontSize: '20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Icons.UserCog size={20} style={{ color: 'var(--primary)' }} /> {prettyPlatform(activePlatform)} Platform Admins
-            </h2>
-            <button
-              type="button"
-              className="btn btn-primary"
-              style={{ padding: '6px 14px', fontSize: '13px' }}
-              onClick={() => setAssignTarget({ kind: 'platform', platform: activePlatform })}
-            >
-              <Icons.Plus size={15} /> Add platform admin
-            </button>
-          </div>
+          <SectionHeader
+            title={`${prettyPlatform(activePlatform)} Platform Admins`}
+            icon={<Icons.UserCog size={18} />}
+            actions={
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={() => setAssignTarget({ kind: 'platform', platform: activePlatform })}
+              >
+                <Icons.Plus size={15} /> Add platform admin
+              </button>
+            }
+          />
           {platformAdminsQuery.isLoading ? (
             <SkeletonRows count={2} />
           ) : (platformAdminsQuery.data ?? []).length === 0 ? (
@@ -221,20 +200,20 @@ export const AdminManagement: React.FC = () => {
 
       {/* Groups */}
       <section>
-        <div className="section-header" style={{ marginBottom: '12px' }}>
-          <h2 style={{ fontSize: '20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Icons.Layers size={20} style={{ color: 'var(--primary)' }} /> Groups
-          </h2>
-          <button
-            type="button"
-            className="btn btn-primary"
-            style={{ padding: '6px 14px', fontSize: '13px' }}
-            disabled={!activePlatform}
-            onClick={() => setShowCreate(true)}
-          >
-            <Icons.Plus size={15} /> New group
-          </button>
-        </div>
+        <SectionHeader
+          title="Groups"
+          icon={<Icons.Layers size={18} />}
+          actions={
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              disabled={!activePlatform}
+              onClick={() => setShowCreate(true)}
+            >
+              <Icons.Plus size={15} /> New group
+            </button>
+          }
+        />
 
         {/* Toolbar: search + show-archived */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '14px', flexWrap: 'wrap' }}>
@@ -309,6 +288,7 @@ export const AdminManagement: React.FC = () => {
       {assignTarget && (
         <AssignAdminModal
           target={assignTarget}
+          existingAdminIds={new Set((platformAdminsQuery.data ?? []).map((pa) => pa.userId))}
           onClose={() => setAssignTarget(null)}
           onAssigned={(msg) => {
             toast.success(msg);
@@ -341,7 +321,7 @@ export const AdminManagement: React.FC = () => {
 // ── Group list row (click to open the drawer) ────────────────────────────────
 
 const GroupRow: React.FC<{ group: ManageableGroup; onClick: () => void }> = ({ group, onClick }) => {
-  const LucideIcon = (Icons as any)[group.icon || 'Layers'] || Icons.Layers;
+  const LucideIcon = (Icons as any)[groupIconName(group)] || Icons.Layers;
   return (
     <button type="button" className="admin-group-row" onClick={onClick} style={{ opacity: group.isActive ? 1 : 0.6 }}>
       <div
@@ -352,7 +332,7 @@ const GroupRow: React.FC<{ group: ManageableGroup; onClick: () => void }> = ({ g
       </div>
       <div style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ fontWeight: 700, fontSize: '15px' }}>{group.name}</span>
+          <span style={{ fontWeight: 600, fontSize: '15px' }}>{group.name}</span>
           {!group.isActive && (
             <span className="badge badge-archived badge-sm">
               ARCHIVED

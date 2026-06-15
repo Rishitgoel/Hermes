@@ -7,6 +7,7 @@ import { listPendingUserCreations } from '../services/api/userCreation';
 import { useAuth } from '../contexts/AuthContext';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../lib/queryKeys';
+import SectionHeader from '../components/common/SectionHeader';
 
 interface PendingRequest {
   id: string;
@@ -31,7 +32,10 @@ interface PendingRequest {
 export const PendingApprovals: React.FC = () => {
   const queryClient = useQueryClient();
   const { user } = useAuth();
-  const isSuperAdmin = !!user?.roles?.includes('hermes_super_admin');
+  // Account-creation review is per-platform: super admins (all platforms) and
+  // platform admins (their platform(s)) can approve. Pure group admins cannot.
+  const canApproveAccounts =
+    !!user?.adminScopes?.superAdmin || (user?.adminScopes?.platforms?.length ?? 0) > 0;
 
   const { data: requests = [], isLoading } = useQuery<PendingRequest[]>({
     queryKey: queryKeys.pendingRequests(),
@@ -48,11 +52,12 @@ export const PendingApprovals: React.FC = () => {
 
   // Set of userIds whose group requests are blocked (no approved user-creation row yet).
   // We treat anyone with a row in PENDING as "blocked"; admin must approve user-creation first.
-  // Only super-admins can hit /api/user-creation-requests/pending — skip the query for group admins.
+  // Only account reviewers (super + platform admins) can hit the pending endpoint; for a
+  // platform admin the rows come back scoped to their platform(s). Skip for group admins.
   const { data: pendingUserCreations = [] } = useQuery({
     queryKey: queryKeys.pendingUserCreations(),
     queryFn: listPendingUserCreations,
-    enabled: isSuperAdmin,
+    enabled: canApproveAccounts,
   });
   const blockedUserIds = new Set(pendingUserCreations.map((r) => r.userId));
 
@@ -198,16 +203,15 @@ export const PendingApprovals: React.FC = () => {
 
   return (
     <div>
-      {/* User-creation approvals — super-admins only. Group admins can't approve org-wide
-          identity creation. */}
-      {isSuperAdmin && <UserApprovalsTable />}
+      {/* Account-creation approvals — super admins (all platforms) + platform admins
+          (their platform's rows). Group admins can't approve account creation. */}
+      {canApproveAccounts && <UserApprovalsTable />}
 
-      <div className="section-header">
-        <h1 style={{ fontSize: '28px' }}>Pending Access Approvals</h1>
-        <span style={{ fontSize: '13px', color: 'var(--text-muted)', fontWeight: 700 }}>
-          {requests.length} Requests Pending
-        </span>
-      </div>
+      <SectionHeader
+        title="Pending Access Approvals"
+        icon={<Icons.CheckSquare size={18} />}
+        meta={`${requests.length} Requests Pending`}
+      />
 
       {/* Success and Error Banners — bulk results stay inline (per-item detail), not toasts */}
       {bulkSuccess && (
@@ -367,7 +371,7 @@ export const PendingApprovals: React.FC = () => {
                         <div className="info-tooltip-container">
                           <Icons.Info size={14} />
                           <div className="info-tooltip">
-                            <strong style={{ display: 'block', marginBottom: '4px', fontSize: '13px', color: 'var(--primary-light)' }}>
+                            <strong style={{ display: 'block', marginBottom: '4px', fontSize: '13px', color: 'var(--primary)' }}>
                               Request Details
                             </strong>
                             <div style={{ marginBottom: '6px' }}><strong>Email:</strong> {req.requesterEmail}</div>

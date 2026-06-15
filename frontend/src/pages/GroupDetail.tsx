@@ -6,9 +6,11 @@ import apiClient from '../services/apiClient';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import EmptyState from '../components/common/EmptyState';
 import ExpiryBadge from '../components/common/ExpiryBadge';
+import SectionHeader from '../components/common/SectionHeader';
 import ReasonModal from '../components/common/ReasonModal';
 import AccessRequestModal, { type GroupLevelOption } from '../components/access/AccessRequestModal';
 import ChangeLevelModal from '../components/access/ChangeLevelModal';
+import RenewAccessModal from '../components/access/RenewAccessModal';
 import PlatformInviteModal from '../components/access/PlatformInviteModal';
 import { getMyUserCreation } from '../services/api/userCreation';
 import * as Icons from 'lucide-react';
@@ -66,6 +68,7 @@ export const GroupDetail: React.FC = () => {
 
   const [isRequestModalOpen, setIsRequestModalOpen] = useState(false);
   const [isChangeLevelModalOpen, setIsChangeLevelModalOpen] = useState(false);
+  const [isRenewModalOpen, setIsRenewModalOpen] = useState(false);
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
   const [revokeTarget, setRevokeTarget] = useState<{ memberAccessId: string; memberName: string } | null>(null);
 
@@ -286,6 +289,18 @@ export const GroupDetail: React.FC = () => {
             </button>
           )}
 
+          {/* Extend — request more time on a grant the user already holds. Goes
+              through admin approval; access keeps working until then. */}
+          {group.accessStatus === 'ACTIVE' && (
+            <button
+              className="btn btn-outline"
+              onClick={() => setIsRenewModalOpen(true)}
+              style={{ width: '100%', marginTop: '12px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+            >
+              <Icons.RotateCw size={16} /> Extend Access
+            </button>
+          )}
+
           {/* Change level — for a member who already holds a level in this group. */}
           {canChangeLevel && (
             <button
@@ -332,12 +347,7 @@ export const GroupDetail: React.FC = () => {
 
         {/* Right Column: Members List */}
         <div>
-          <div className="section-header">
-            <h3 className="section-title">Active Group Members</h3>
-            <span style={{ fontSize: '13px', color: 'var(--text-muted)', fontWeight: 700 }}>
-              {group.members.length} Users
-            </span>
-          </div>
+          <SectionHeader title="Active Group Members" meta={`${group.members.length} Users`} />
 
           {group.members.length === 0 ? (
             <EmptyState
@@ -446,6 +456,21 @@ export const GroupDetail: React.FC = () => {
           }}
         />
       )}
+
+      {/* Extend / renew access for the grant the user currently holds. */}
+      <RenewAccessModal
+        isOpen={isRenewModalOpen}
+        onClose={() => setIsRenewModalOpen(false)}
+        groupId={group.id}
+        groupName={group.name}
+        currentLevelName={group.currentLevelName}
+        onSuccess={() => {
+          queryClient.invalidateQueries({ queryKey: queryKeys.groupDetail(slug ?? '') });
+          queryClient.invalidateQueries({ queryKey: queryKeys.groups() });
+          queryClient.invalidateQueries({ queryKey: queryKeys.myRequests() });
+          queryClient.invalidateQueries({ queryKey: queryKeys.myAccess() });
+        }}
+      />
 
       {/* Revoke confirmation + reason (replaces window.prompt). */}
       <ReasonModal

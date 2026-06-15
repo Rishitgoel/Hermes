@@ -39,6 +39,10 @@ export class SyncService {
     let groupsSynced = 0;
 
     for (const platform of provisioningRegistry.listPlatforms()) {
+      if (platform === 'aws' && !config.aws.isEnabled) {
+        logger.info('🔄 SyncService: Skipping AWS sync because it is disabled.');
+        continue;
+      }
       try {
         const result = await this.syncSinglePlatform(platform);
         usersSynced += result.usersSynced;

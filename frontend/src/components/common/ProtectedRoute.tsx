@@ -34,7 +34,7 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, allowe
         <h2 style={{ fontSize: '28px', color: '#c53030', marginBottom: '16px' }}>
           Access Denied
         </h2>
-        <p style={{ color: '#4a5568', fontSize: '16px' }}>
+        <p style={{ color: 'var(--text-muted)', fontSize: '16px' }}>
           You do not have permission to access this page. Please contact your administrator.
         </p>
       </div>

@@ -231,10 +231,16 @@ export class UserCreationService {
     return rows.map(normalizeInviteLink);
   }
 
-  /** Admin: list everything currently in PENDING state, plus APPROVED requests that failed provisioning. */
-  async listPending() {
+  /**
+   * Admin: list everything currently in PENDING state, plus APPROVED requests that
+   * failed provisioning. Optionally scoped to a set of platforms — a platform admin
+   * only reviews account requests for the platform(s) they administer; a super admin
+   * passes no filter and sees every platform.
+   */
+  async listPending(platforms?: string[]) {
     return prisma.userCreationRequest.findMany({
       where: {
+        ...(platforms ? { platform: { in: platforms } } : {}),
         OR: [
           { status: UserCreationStatus.PENDING },
           { status: UserCreationStatus.APPROVED, inviteError: { not: null } },
