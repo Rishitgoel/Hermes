@@ -17,6 +17,9 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  DATABASE_URL_HERMES: postgresql://postgres:postgres@localhost:5432/postgres
+
 jobs:
   backend-typecheck:
     name: Backend typecheck
