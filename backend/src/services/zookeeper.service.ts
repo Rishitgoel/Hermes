@@ -634,7 +634,7 @@ export class ZookeeperService {
     if (this.isSimulation) {
       await tick();
       const node = sim.nodes.get(path);
-      return node?.data != null ? node.data.toString('utf-8') : null;
+      return node?.data !== null && node?.data !== undefined ? node.data.toString('utf-8') : null;
     }
     const client = await this.getClient();
     return new Promise<string | null>((resolve, reject) => {
@@ -643,7 +643,7 @@ export class ZookeeperService {
           if (this.errCode(err) === Exception.NO_NODE) return resolve(null);
           return reject(this.wrapErr(err, 'getData', path));
         }
-        resolve(data != null ? data.toString('utf-8') : null);
+        resolve(data !== null && data !== undefined ? data.toString('utf-8') : null);
       });
     });
   }

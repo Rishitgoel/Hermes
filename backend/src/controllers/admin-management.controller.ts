@@ -1363,7 +1363,7 @@ export class AdminManagementController extends BaseController {
       // Otherwise deactivate — something live is still attached (active members or an
       // in-flight request). Members keep access until expiry/revoke; no new requests
       // can select it (createRequest only offers active levels).
-      const level = await prisma.groupLevel.update({
+      await prisma.groupLevel.update({
         where: { id: levelId },
         data: { isActive: false },
       });

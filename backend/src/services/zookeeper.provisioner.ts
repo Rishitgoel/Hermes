@@ -12,7 +12,7 @@ import zookeeperService from './zookeeper.service';
 import prisma from '../config/prisma';
 import config from '../config/config';
 import logger from '../utils/logger';
-import { AuthorizationError, NotFoundError, ValidationError, ConflictError, ExternalServiceError } from '../utils/errors';
+import { ValidationError, ConflictError, ExternalServiceError } from '../utils/errors';
 import * as templates from '../utils/email-templates';
 
 /**
@@ -217,7 +217,7 @@ export class ZookeeperProvisioner implements PlatformAdapter {
   /** Look a user up — cache-only, since ZooKeeper has no user directory. */
   async checkUserStatus(email: string, userId?: string): Promise<PlatformUserStatus> {
     const cached = await prisma.platformExternalUser.findUnique({
-      where: { platform_email: { platform: PLATFORM, email: email.toLowerCase() } },
+      where: { platform_email: { platform: PLATFORM, email: this.cacheRowEmail(email, userId) } },
     });
     return cached
       ? { exists: true, externalUserId: cached.externalId, email }
@@ -697,7 +697,7 @@ export class ZookeeperProvisioner implements PlatformAdapter {
   }
 
   /** Remove a znode path from the user's cached membership list (atomic, idempotent). */
-  private async cacheRemoveGroup(aclId: string, path: string): Promise<void> {
+  private async cacheRemoveGroup(aclId: string, _path: string): Promise<void> {
     const grants = await prisma.userAccess.findMany({
       where: { externalUserId: aclId, isActive: true },
       include: { group: true, level: true },
