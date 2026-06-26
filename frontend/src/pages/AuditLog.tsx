@@ -32,7 +32,7 @@ export const AuditLog: React.FC = () => {
   const toast = useToast();
 
   const [page, setPage] = useState(1);
-  const [pageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(25);
   const [search, setSearch] = useState('');
   const [submittedSearch, setSubmittedSearch] = useState('');
   const [actionFilter, setActionFilter] = useState('');
@@ -132,9 +132,21 @@ export const AuditLog: React.FC = () => {
       return `Requested duration: ${details.duration?.replace('_', ' ').toLowerCase()}`;
     }
     if (entry.action === 'ACCESS_GRANTED') {
+      // Auto-membership in the built-in default group reads better than the generic line.
+      if (details.source === 'default-group-auto-membership') {
+        return `Auto-added to "${details.groupName ?? 'default'}" group`;
+      }
       // `externalUserId` is the platform-agnostic key; older rows still carry the
       // legacy `redashUserId`, so fall back to it for historic entries.
       return `Access granted by admin. Platform User ID: ${details.externalUserId ?? details.redashUserId ?? 'mock'}`;
+    }
+    if (entry.action === 'ACCESS_IMPORTED') {
+      const lvl = details.levelName ? ` — ${details.levelName}` : '';
+      return `Imported access: ${details.groupName ?? 'group'}${lvl}`;
+    }
+    if (entry.action === 'REDASH_IMPORT_TRIGGERED') {
+      const mode = details.apply ? 'applied' : 'dry run';
+      return `Redash import (${mode}): ${details.grantsCreated ?? 0} grant(s), ${details.accountRequestsCreated ?? 0} account(s), ${details.usersMatched ?? 0} matched`;
     }
     if (entry.action === 'ACCESS_REVOKED') {
       return `Revoked. Reason: "${details.reason || 'manual'}"`;
@@ -144,6 +156,17 @@ export const AuditLog: React.FC = () => {
     }
     if (entry.action === 'MANUAL_SYNC_TRIGGERED') {
       return `${details.platform ?? 'Platform'} synced: ${details.usersSynced} users, ${details.groupsSynced} groups`;
+    }
+    if (entry.action === 'GROUP_CREATED' || entry.action === 'GROUP_UPDATED') {
+      const changed = Array.isArray(details.changed) ? details.changed.join(', ') : null;
+      const name = details.slug ?? details.name ?? 'group';
+      return changed ? `${name}: changed ${changed}` : `${name}`;
+    }
+    if (entry.action === 'GROUP_ARCHIVED') {
+      return `Archived "${details.slug ?? details.name ?? 'group'}"`;
+    }
+    if (entry.action === 'GROUP_DELETED') {
+      return `Deleted "${details.slug ?? details.name ?? 'group'}"${details.forced ? ' (incl. history)' : ''}`;
     }
     return JSON.stringify(details);
   };
@@ -355,7 +378,7 @@ export const AuditLog: React.FC = () => {
                     <td>
                       {entry.targetUserName ? entry.targetUserName.replace('_', ' ') : <span style={{ color: 'var(--text-light)' }}>System</span>}
                     </td>
-                    <td style={{ fontSize: '13px' }}>
+                    <td style={{ fontSize: '13px', maxWidth: '460px', whiteSpace: 'normal', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
                       {formatDetails(entry)}
                     </td>
                   </tr>
@@ -371,9 +394,29 @@ export const AuditLog: React.FC = () => {
             alignItems: 'center',
             marginTop: '24px'
           }}>
-            <span style={{ fontSize: '13px', color: 'var(--text-muted)', fontWeight: 600 }}>
-              Showing page {page} of {totalPages} ({totalLogs} items)
-            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <span style={{ fontSize: '13px', color: 'var(--text-muted)', fontWeight: 600 }}>
+                Showing page {page} of {totalPages} ({totalLogs} items)
+              </span>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', color: 'var(--text-muted)', fontWeight: 600 }}>
+                Per page
+                <select
+                  className="form-select"
+                  value={pageSize}
+                  onChange={(e) => {
+                    setPageSize(Number(e.target.value));
+                    setPage(1);
+                  }}
+                  style={{ width: 'auto', padding: '4px 8px' }}
+                >
+                  {[10, 25, 50, 100].map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
             <div style={{ display: 'flex', gap: '8px' }}>
               <button
                 className="btn btn-outline"

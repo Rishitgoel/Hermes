@@ -18,8 +18,11 @@ import {
   listManageableGroups,
   listPlatformAdmins,
   removePlatformAdmin,
+  updateGroup,
+  importRedashMemberships, // Redash maintenance: membership backfill (collapsed disclosure)
   type ManageableGroup,
   type PlatformAdminRow,
+  type RedashImportReport,
 } from '../services/api/admin';
 
 export const AdminManagement: React.FC = () => {
@@ -35,7 +38,7 @@ export const AdminManagement: React.FC = () => {
   const [showCreate, setShowCreate] = useState(false);
   const [removePA, setRemovePA] = useState<PlatformAdminRow | null>(null);
   const [search, setSearch] = useState('');
-  const [showArchived, setShowArchived] = useState(false);
+  const [groupView, setGroupView] = useState<'active' | 'archived'>('active');
 
   const platformsQuery = useQuery({
     queryKey: queryKeys.adminPlatforms(),
@@ -73,12 +76,13 @@ export const AdminManagement: React.FC = () => {
   const visibleGroups = useMemo(() => {
     const q = search.trim().toLowerCase();
     return groups.filter((g) => {
-      if (!showArchived && !g.isActive) return false;
+      if (groupView === 'archived' ? g.isActive : !g.isActive) return false;
       if (q && !`${g.name} ${g.slug}`.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [groups, search, showArchived]);
+  }, [groups, search, groupView]);
 
+  const activeCount = useMemo(() => groups.filter((g) => g.isActive).length, [groups]);
   const archivedCount = useMemo(() => groups.filter((g) => !g.isActive).length, [groups]);
 
   const removePlatformAdminMutation = useMutation({
@@ -89,6 +93,40 @@ export const AdminManagement: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.adminPlatformAdmins(activePlatform ?? '') });
     },
     onError: (e: any) => toast.error(e.message || 'Failed to remove platform admin.'),
+  });
+
+  // Redash membership import — a rarely-used maintenance tool that backfills
+  // existing Redash accounts + group memberships into Hermes. Lives in a collapsed
+  // "Maintenance" disclosure at the bottom of the Redash platform view (see JSX).
+  // Dry-run previews; Apply writes. Idempotent.
+  const [importReport, setImportReport] = useState<RedashImportReport | null>(null);
+  const importMutation = useMutation({
+    mutationFn: (apply: boolean) => importRedashMemberships(apply),
+    onSuccess: (report) => {
+      setImportReport(report);
+      toast.success(
+        report.apply
+          ? `Import applied: ${report.grantsCreated} grant(s), ${report.accountRequestsCreated} account(s).`
+          : `Dry run: would create ${report.grantsCreated} grant(s), ${report.accountRequestsCreated} account(s).`,
+      );
+      if (report.apply) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.adminGroups(activePlatform ?? '') });
+      }
+    },
+    onError: (e: any) => toast.error(e.message || 'Redash membership import failed.'),
+  });
+
+  // Restore (un-archive) a group straight from the Archived tab — one click merges
+  // it back into the Active list, no need to open the drawer's Danger Zone.
+  const restoreMutation = useMutation({
+    mutationFn: (g: ManageableGroup) => updateGroup(g.id, { isActive: true }),
+    onSuccess: (_r, g) => {
+      toast.success(`"${g.name}" restored — visible in the request flow again.`);
+      queryClient.invalidateQueries({ queryKey: queryKeys.adminGroups(g.platform) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.groups() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.groupDetail(g.slug) });
+    },
+    onError: (e: any) => toast.error(e.message || 'Failed to restore group.'),
   });
 
   if (platformsQuery.isLoading) return <LoadingSpinner />;
@@ -130,6 +168,7 @@ export const AdminManagement: React.FC = () => {
           setActivePlatform(p);
           setSelectedGroupId(null);
           setSearch('');
+          setGroupView('active');
         }}
       />
 
@@ -215,23 +254,41 @@ export const AdminManagement: React.FC = () => {
           }
         />
 
-        {/* Toolbar: search + show-archived */}
+        {/* Toolbar: Active/Archived tabs + search */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '14px', flexWrap: 'wrap' }}>
+          <div className="group-view-tabs" role="tablist" aria-label="Group status">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={groupView === 'active'}
+              className={`group-view-tab${groupView === 'active' ? ' active' : ''}`}
+              onClick={() => setGroupView('active')}
+            >
+              <Icons.Layers size={14} /> Active
+              <span className="group-view-count">{activeCount}</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={groupView === 'archived'}
+              className={`group-view-tab${groupView === 'archived' ? ' active' : ''}`}
+              onClick={() => setGroupView('archived')}
+            >
+              <Icons.Archive size={14} /> Archived
+              <span className="group-view-count">{archivedCount}</span>
+            </button>
+          </div>
           <div className="form-input-with-icon" style={{ flex: 1, minWidth: '220px' }}>
             <Icons.Search size={15} />
             <input
               type="text"
               className="form-input"
-              placeholder="Search groups…"
+              placeholder={groupView === 'archived' ? 'Search archived groups…' : 'Search groups…'}
               style={{ height: '38px' }}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', color: 'var(--text-muted)', cursor: 'pointer', userSelect: 'none' }}>
-            <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
-            Show archived{archivedCount > 0 ? ` (${archivedCount})` : ''}
-          </label>
         </div>
 
         {groupsQuery.isLoading ? (
@@ -242,17 +299,125 @@ export const AdminManagement: React.FC = () => {
             <p className="empty-state-desc" style={{ fontSize: '13px' }}>
               {groups.length === 0
                 ? 'No groups on this platform yet. Create one with “New group”.'
-                : 'No groups match your search.'}
+                : search
+                  ? 'No groups match your search.'
+                  : groupView === 'archived'
+                    ? 'No archived groups on this platform.'
+                    : 'No active groups on this platform.'}
             </p>
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {visibleGroups.map((g) => (
-              <GroupRow key={g.id} group={g} onClick={() => setSelectedGroupId(g.id)} />
+              <GroupRow
+                key={g.id}
+                group={g}
+                onClick={() => setSelectedGroupId(g.id)}
+                onRestore={groupView === 'archived' ? () => restoreMutation.mutate(g) : undefined}
+                restoring={restoreMutation.isPending && restoreMutation.variables?.id === g.id}
+              />
             ))}
           </div>
         )}
       </section>
+
+      {/* Maintenance: Redash membership import. Intentionally tucked away in a
+          collapsed disclosure at the bottom — a rarely-used backfill tool, super
+          admin + Redash only. Closed by default so it stays out of the way. */}
+      {superAdmin && activePlatform === 'redash' && (
+        <details
+          style={{
+            marginTop: '8px',
+            marginBottom: '24px',
+            fontSize: '12px',
+            color: 'var(--text-muted)',
+          }}
+        >
+          <summary style={{ cursor: 'pointer', userSelect: 'none' }}>
+            <Icons.Wrench size={12} style={{ verticalAlign: 'middle', marginRight: '6px' }} />
+            Maintenance — import existing Redash memberships
+          </summary>
+          <div
+            style={{
+              marginTop: '10px',
+              padding: '14px',
+              border: '1px solid var(--border)',
+              borderRadius: '8px',
+            }}
+          >
+            <p style={{ margin: '0 0 12px', lineHeight: 1.5 }}>
+              Backfill existing Redash accounts + group memberships into Hermes so users keep
+              access they already have. Run <strong>Dry run</strong> to preview, then{' '}
+              <strong>Apply</strong> to write. Idempotent — safe to re-run.
+            </p>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                type="button"
+                className="btn btn-outline btn-sm"
+                disabled={importMutation.isPending}
+                onClick={() => importMutation.mutate(false)}
+              >
+                <Icons.Eye size={15} /> Dry run
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={importMutation.isPending}
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      'Apply Redash membership import? This writes grants + completed account requests to the database. It is idempotent (safe to re-run), but real.',
+                    )
+                  ) {
+                    importMutation.mutate(true);
+                  }
+                }}
+              >
+                <Icons.DatabaseZap size={15} /> Apply import
+              </button>
+            </div>
+            {importMutation.isPending && <LoadingSpinner />}
+            {importReport && (
+              <div className="table-container" style={{ padding: '12px', marginTop: '12px' }}>
+                <div style={{ marginBottom: '8px' }}>
+                  <strong>{importReport.apply ? 'Applied' : 'Dry run'}</strong> — mapped groups:{' '}
+                  {importReport.mappedGroups}, cached Redash users: {importReport.cachedUsers},
+                  matched to Keycloak: {importReport.usersMatched}, grants{' '}
+                  {importReport.apply ? 'created' : 'to create'}: {importReport.grantsCreated},
+                  already present: {importReport.grantsAlreadyPresent}, account requests{' '}
+                  {importReport.apply ? 'created' : 'to create'}: {importReport.accountRequestsCreated}
+                </div>
+                {importReport.usersSkippedNoKeycloak.length > 0 && (
+                  <div style={{ color: 'var(--status-pending-text, #b9770e)' }}>
+                    Skipped (no Keycloak identity): {importReport.usersSkippedNoKeycloak.join(', ')}
+                  </div>
+                )}
+                {importReport.usersSkippedDisabled.length > 0 && (
+                  <div style={{ color: 'var(--status-pending-text, #b9770e)' }}>
+                    Skipped (disabled in Redash): {importReport.usersSkippedDisabled.join(', ')}
+                  </div>
+                )}
+                {importReport.membershipsUnmapped.length > 0 && (
+                  <details style={{ marginTop: '6px' }}>
+                    <summary>{importReport.membershipsUnmapped.length} unmapped membership(s)</summary>
+                    <pre style={{ whiteSpace: 'pre-wrap', margin: '6px 0 0' }}>
+                      {importReport.membershipsUnmapped.join('\n')}
+                    </pre>
+                  </details>
+                )}
+                {importReport.levelConflicts.length > 0 && (
+                  <details style={{ marginTop: '6px' }}>
+                    <summary>{importReport.levelConflicts.length} level conflict(s) resolved by seniority</summary>
+                    <pre style={{ whiteSpace: 'pre-wrap', margin: '6px 0 0' }}>
+                      {importReport.levelConflicts.join('\n')}
+                    </pre>
+                  </details>
+                )}
+              </div>
+            )}
+          </div>
+        </details>
+      )}
 
       {/* Group detail drawer */}
       {selectedGroup && (
@@ -320,31 +485,52 @@ export const AdminManagement: React.FC = () => {
 
 // ── Group list row (click to open the drawer) ────────────────────────────────
 
-const GroupRow: React.FC<{ group: ManageableGroup; onClick: () => void }> = ({ group, onClick }) => {
+const GroupRow: React.FC<{
+  group: ManageableGroup;
+  onClick: () => void;
+  /** When set, renders a one-click Restore button (Archived tab) instead of the chevron. */
+  onRestore?: () => void;
+  restoring?: boolean;
+}> = ({ group, onClick, onRestore, restoring }) => {
   const LucideIcon = (Icons as any)[groupIconName(group)] || Icons.Layers;
   return (
-    <button type="button" className="admin-group-row" onClick={onClick} style={{ opacity: group.isActive ? 1 : 0.6 }}>
-      <div
-        className="group-icon-box"
-        style={{ width: '34px', height: '34px', borderRadius: '8px', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-      >
-        <LucideIcon size={18} style={{ color: group.color || 'var(--primary)' }} />
-      </div>
-      <div style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ fontWeight: 600, fontSize: '15px' }}>{group.name}</span>
-          {!group.isActive && (
-            <span className="badge badge-archived badge-sm">
-              ARCHIVED
-            </span>
-          )}
+    <div className="admin-group-row" style={{ opacity: group.isActive ? 1 : 0.75 }}>
+      <button type="button" className="admin-group-row-main" onClick={onClick}>
+        <div
+          className="group-icon-box"
+          style={{ width: '34px', height: '34px', borderRadius: '8px', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        >
+          <LucideIcon size={18} style={{ color: group.color || 'var(--primary)' }} />
         </div>
-        <div style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
-          {group.adminCount} admin{group.adminCount === 1 ? '' : 's'} · {group.memberCount} member{group.memberCount === 1 ? '' : 's'}
+        <div style={{ flex: 1, minWidth: 0, textAlign: 'left' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontWeight: 600, fontSize: '15px' }}>{group.name}</span>
+            {!group.isActive && (
+              <span className="badge badge-archived badge-sm">
+                ARCHIVED
+              </span>
+            )}
+          </div>
+          <div style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
+            {group.adminCount} admin{group.adminCount === 1 ? '' : 's'} · {group.memberCount} member{group.memberCount === 1 ? '' : 's'}
+          </div>
         </div>
-      </div>
-      <Icons.ChevronRight size={18} style={{ color: 'var(--text-light)', flexShrink: 0 }} />
-    </button>
+      </button>
+      {onRestore ? (
+        <button
+          type="button"
+          className="btn btn-outline btn-sm"
+          style={{ flexShrink: 0 }}
+          disabled={restoring}
+          onClick={onRestore}
+          title="Restore this group to the active list"
+        >
+          <Icons.ArchiveRestore size={14} /> {restoring ? 'Restoring…' : 'Restore'}
+        </button>
+      ) : (
+        <Icons.ChevronRight size={18} style={{ color: 'var(--text-light)', flexShrink: 0 }} />
+      )}
+    </div>
   );
 };
 

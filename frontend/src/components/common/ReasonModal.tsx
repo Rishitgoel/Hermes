@@ -69,11 +69,10 @@ export const ReasonModal: React.FC<ReasonModalProps> = ({
       }
     >
       <div style={{ fontSize: '14px', color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: '14px' }}>{message}</div>
-      <div className="form-group" style={{ marginBottom: 0 }}>
+      <div className="form-group form-row" style={{ marginBottom: 0 }}>
         <label className="form-label">Reason</label>
         <textarea
           className="form-textarea"
-          style={{ minHeight: '70px' }}
           placeholder={placeholder}
           value={reason}
           onChange={(e) => setReason(e.target.value)}

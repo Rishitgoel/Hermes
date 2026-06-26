@@ -136,11 +136,11 @@ export const RenewAccessModal: React.FC<RenewAccessModalProps> = ({
             . An admin reviews it like a normal request; your access keeps working in the meantime.
           </div>
 
-          <div className="form-group">
-            <label className="form-label">Justification / Reason</label>
+          <div className="form-group form-row">
+            <label className="form-label">Justification</label>
             <textarea
               className="form-textarea"
-              placeholder="Explain why you still need access (e.g. the campaign was extended into next quarter)..."
+              placeholder="Explain why you still need access (e.g. the campaign was extended)..."
               value={justification}
               onChange={(e) => setJustification(e.target.value)}
               disabled={isSubmitting}
@@ -151,8 +151,8 @@ export const RenewAccessModal: React.FC<RenewAccessModalProps> = ({
             </span>
           </div>
 
-          <div className="form-group">
-            <label className="form-label">New Access Duration</label>
+          <div className="form-group form-row">
+            <label className="form-label">Duration</label>
             <select
               className="form-select"
               value={duration}

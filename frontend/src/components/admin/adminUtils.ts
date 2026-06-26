@@ -1,6 +1,29 @@
 /** Shared formatting helpers for the Admin Management components. */
 
+import type { ReconciliationSummary } from '../../services/api/admin';
+
 export const prettyPlatform = (p: string) => p.charAt(0).toUpperCase() + p.slice(1);
+
+/**
+ * Build a user-facing toast from a member-reconciliation summary (ZooKeeper path edits),
+ * shared by the group Settings tab and the Levels tab so per-member ACL failures are
+ * surfaced consistently rather than silently swallowed.
+ */
+export function reconcileToast(r: ReconciliationSummary | null | undefined): { ok: boolean; message: string } {
+  if (!r) return { ok: true, message: 'Saved.' };
+  const parts: string[] = [];
+  if (r.addedPaths.length) parts.push(`+${r.addedPaths.length} added`);
+  if (r.removedPaths.length) parts.push(`−${r.removedPaths.length} removed`);
+  if (r.updatedPaths.length) parts.push(`${r.updatedPaths.length} perms updated`);
+  const detail = parts.length ? ` (${parts.join(', ')})` : ' (no path changes)';
+  if (r.errors.length) {
+    return {
+      ok: false,
+      message: `Saved, but ${r.errors.length} member update(s) failed — see the audit log for manual cleanup.`,
+    };
+  }
+  return { ok: true, message: `Saved — ${r.memberCount} member(s) reconciled${detail}.` };
+}
 
 /** Keycloak usernames can carry underscores; render them as spaces. */
 export const cleanName = (n: string) => n.replace(/_/g, ' ');

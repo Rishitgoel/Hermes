@@ -9,7 +9,6 @@ import ExpiryBadge from '../components/common/ExpiryBadge';
 import SectionHeader from '../components/common/SectionHeader';
 import ReasonModal from '../components/common/ReasonModal';
 import AccessRequestModal, { type GroupLevelOption } from '../components/access/AccessRequestModal';
-import ChangeLevelModal from '../components/access/ChangeLevelModal';
 import RenewAccessModal from '../components/access/RenewAccessModal';
 import PlatformInviteModal from '../components/access/PlatformInviteModal';
 import { getMyUserCreation } from '../services/api/userCreation';
@@ -67,7 +66,6 @@ export const GroupDetail: React.FC = () => {
   const toast = useToast();
 
   const [isRequestModalOpen, setIsRequestModalOpen] = useState(false);
-  const [isChangeLevelModalOpen, setIsChangeLevelModalOpen] = useState(false);
   const [isRenewModalOpen, setIsRenewModalOpen] = useState(false);
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
   const [revokeTarget, setRevokeTarget] = useState<{ memberAccessId: string; memberName: string } | null>(null);
@@ -129,13 +127,6 @@ export const GroupDetail: React.FC = () => {
   const isSuperAdmin = user?.roles.includes('hermes_super_admin') || false;
   const isGroupAdminOfThisGroup = group.admins.some((adm) => adm.userId === user?.id);
   const canManage = isSuperAdmin || isGroupAdminOfThisGroup;
-  // Anyone holding a real leveled grant can switch levels (admins included — their
-  // grant comes from the normal request flow, same as everyone else's), provided
-  // there's another level to move to. Promote vs demote is decided server-side.
-  const canChangeLevel =
-    group.accessStatus === 'ACTIVE' &&
-    group.levels.length > 1 &&
-    !!group.currentLevelId;
   // Members who are also group admins get an ADMIN badge. Their grant is a real,
   // revocable membership — revoking it leaves their approval rights intact.
   const adminUserIds = new Set(group.admins.map((a) => a.userId));
@@ -301,17 +292,6 @@ export const GroupDetail: React.FC = () => {
             </button>
           )}
 
-          {/* Change level — for a member who already holds a level in this group. */}
-          {canChangeLevel && (
-            <button
-              className="btn btn-outline"
-              onClick={() => setIsChangeLevelModalOpen(true)}
-              style={{ width: '100%', marginTop: '12px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
-            >
-              <Icons.ArrowLeftRight size={16} /> Change Level
-            </button>
-          )}
-
           {/* Approved, but the requester hasn't finished platform-account setup yet.
               Nothing to do here — it activates automatically post-setup, so don't
               offer a (duplicate) Request Access button. */}
@@ -434,25 +414,6 @@ export const GroupDetail: React.FC = () => {
             queryClient.invalidateQueries({ queryKey: queryKeys.groupDetail(slug ?? '') });
             queryClient.invalidateQueries({ queryKey: queryKeys.groups() });
             queryClient.invalidateQueries({ queryKey: queryKeys.myRequests() });
-          }}
-        />
-      )}
-
-      {/* Change Level Modal — only for members holding a real leveled grant. */}
-      {group.currentLevelId && (
-        <ChangeLevelModal
-          isOpen={isChangeLevelModalOpen}
-          onClose={() => setIsChangeLevelModalOpen(false)}
-          groupId={group.id}
-          groupName={group.name}
-          levels={group.levels}
-          currentLevelId={group.currentLevelId}
-          currentLevelName={group.currentLevelName}
-          onSuccess={() => {
-            queryClient.invalidateQueries({ queryKey: queryKeys.groupDetail(slug ?? '') });
-            queryClient.invalidateQueries({ queryKey: queryKeys.groups() });
-            queryClient.invalidateQueries({ queryKey: queryKeys.myRequests() });
-            queryClient.invalidateQueries({ queryKey: queryKeys.myAccess() });
           }}
         />
       )}

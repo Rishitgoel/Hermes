@@ -4,10 +4,12 @@ import apiClient from '../services/apiClient';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import UserApprovalsTable from '../components/user-creation/UserApprovalsTable';
 import { listPendingUserCreations } from '../services/api/userCreation';
+import { listZkChangeRequests } from '../services/api/zookeeperApi';
 import { useAuth } from '../contexts/AuthContext';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../lib/queryKeys';
 import SectionHeader from '../components/common/SectionHeader';
+import ZkChangeApprovals from '../components/zookeeper/ZkChangeApprovals';
 
 interface PendingRequest {
   id: string;
@@ -36,6 +38,13 @@ export const PendingApprovals: React.FC = () => {
   // platform admins (their platform(s)) can approve. Pure group admins cannot.
   const canApproveAccounts =
     !!user?.adminScopes?.superAdmin || (user?.adminScopes?.platforms?.length ?? 0) > 0;
+  // ZooKeeper change reviewers include group admins too (super / ZK platform admin /
+  // group admin of the request's group). The section self-hides when the scoped list
+  // is empty, so it's safe to mount for any admin.
+  const canReviewZk =
+    !!user?.adminScopes?.superAdmin ||
+    (user?.adminScopes?.platforms?.length ?? 0) > 0 ||
+    (user?.adminScopes?.groups?.length ?? 0) > 0;
 
   const { data: requests = [], isLoading } = useQuery<PendingRequest[]>({
     queryKey: queryKeys.pendingRequests(),
@@ -54,12 +63,27 @@ export const PendingApprovals: React.FC = () => {
   // We treat anyone with a row in PENDING as "blocked"; admin must approve user-creation first.
   // Only account reviewers (super + platform admins) can hit the pending endpoint; for a
   // platform admin the rows come back scoped to their platform(s). Skip for group admins.
-  const { data: pendingUserCreations = [] } = useQuery({
+  const { data: pendingUserCreations = [], isLoading: loadingAccounts } = useQuery({
     queryKey: queryKeys.pendingUserCreations(),
     queryFn: listPendingUserCreations,
     enabled: canApproveAccounts,
   });
   const blockedUserIds = new Set(pendingUserCreations.map((r) => r.userId));
+
+  // Mirror ZkChangeApprovals' scoped review list (same query key → shared cache, no extra
+  // round-trip) purely to know whether that queue has anything. Lets the page show one
+  // compact "all caught up" state only when every queue — accounts, access, ZK — is empty.
+  const { data: zkReviewRequests = [], isLoading: loadingZk } = useQuery({
+    queryKey: queryKeys.zkChangeRequests('review'),
+    queryFn: () => listZkChangeRequests('review'),
+    enabled: canReviewZk,
+  });
+
+  const accountCount = canApproveAccounts ? pendingUserCreations.length : 0;
+  const zkCount = canReviewZk ? zkReviewRequests.length : 0;
+  // Don't flash "all caught up" while a secondary queue is still loading.
+  const sectionsLoading = (canApproveAccounts && loadingAccounts) || (canReviewZk && loadingZk);
+  const nothingToReview = !sectionsLoading && requests.length === 0 && accountCount === 0 && zkCount === 0;
 
   // Selection & custom notes state
   const [selectedRequests, setSelectedRequests] = useState<Record<string, boolean>>({});
@@ -205,13 +229,9 @@ export const PendingApprovals: React.FC = () => {
     <div>
       {/* Account-creation approvals — super admins (all platforms) + platform admins
           (their platform's rows). Group admins can't approve account creation. */}
+      {/* User-approvals + ZK sections self-hide when their queue is empty, so they leave
+          no wasted space; the access section below collapses the same way. */}
       {canApproveAccounts && <UserApprovalsTable />}
-
-      <SectionHeader
-        title="Pending Access Approvals"
-        icon={<Icons.CheckSquare size={18} />}
-        meta={`${requests.length} Requests Pending`}
-      />
 
       {/* Success and Error Banners — bulk results stay inline (per-item detail), not toasts */}
       {bulkSuccess && (
@@ -234,16 +254,16 @@ export const PendingApprovals: React.FC = () => {
         </div>
       )}
 
-      {requests.length === 0 ? (
-        <div className="empty-state">
-          <Icons.CheckSquare size={44} className="empty-state-icon" />
-          <h3 className="empty-state-title">Approval Queue Empty</h3>
-          <p className="empty-state-desc">There are currently no access requests waiting to be reviewed. Good job!</p>
-        </div>
-      ) : (
+      {/* Access-approvals section collapses entirely when its queue is empty. */}
+      {requests.length > 0 && (
         <>
+          <SectionHeader
+            title="Pending Access Approvals"
+            icon={<Icons.CheckSquare size={18} />}
+            meta={`${requests.length} Requests Pending`}
+          />
           <div className="table-container">
-            <table className="hermes-table">
+            <table className="hermes-table hermes-table-compact">
               <thead>
                 <tr>
                   <th style={{ width: '90px', textAlign: 'center' }}>
@@ -426,93 +446,93 @@ export const PendingApprovals: React.FC = () => {
             </table>
           </div>
 
-          {/* Bulk Request Footer Panel */}
+          {/* Compact one-line review bar — replaces the old tall panel. Title + count,
+              an inline optional note, and the action buttons all sit on a single row
+              (wraps on narrow screens). Custom per-row notes still take precedence. */}
           {checkedRequestIds.length > 0 && (
-            <div className="bulk-request-panel" style={{ marginTop: '32px' }}>
-              <div className="bulk-request-header">
-                <div className="bulk-request-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <Icons.CheckSquare size={18} style={{ color: 'var(--primary)' }} />
-                  Review {checkedRequestIds.length} Selected Request(s)
-                </div>
-                <button
-                  type="button"
-                  className="btn btn-outline btn-sm"
-                  onClick={() => {
-                    setSelectedRequests({});
-                    setCustomNotes({});
-                  }}
-                >
-                  Clear Selection
-                </button>
-              </div>
-              
-              <div className="bulk-request-body" style={{ gridTemplateColumns: '1fr' }}>
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">
-                    General Review Note / Reason
-                    <span style={{ fontWeight: 'normal', color: 'var(--text-muted)', marginLeft: '6px', fontSize: '12px' }}>
-                      (Applies to selected reviews without custom notes)
-                    </span>
-                  </label>
-                  <textarea
-                    className="form-textarea"
-                    style={{ minHeight: '60px' }}
-                    placeholder="Provide an optional note/reason for review (e.g. Approved per manager request, Rejected due to insufficient explanation)..."
-                    value={generalNote}
-                    onChange={(e) => setGeneralNote(e.target.value)}
-                    disabled={isSubmitting}
-                  />
-                </div>
-              </div>
-              
-              <div className="bulk-request-footer">
-                <div style={{ marginRight: 'auto', fontSize: '13px', color: 'var(--text-muted)' }}>
-                  {(() => {
-                    const customCount = Object.keys(customNotes).filter(id => selectedRequests[id] && customNotes[id]?.trim().length > 0).length;
-                    const defaultCount = checkedRequestIds.length - customCount;
-                    return (
-                      <span>
-                        <strong>{customCount}</strong> request(s) with custom note, <strong>{defaultCount}</strong> using general note.
-                      </span>
-                    );
-                  })()}
-                </div>
-                
-                <div style={{ display: 'flex', gap: '12px' }}>
-                  <button
-                    type="button"
-                    className="btn btn-outline btn-danger-outline"
-                    style={{ gap: '6px' }}
-                    onClick={() => handleBulkReview('REJECTED')}
-                    disabled={isSubmitting}
-                  >
-                    {isSubmitting ? (
-                      <Icons.Loader size={16} className="animate-spin" style={{ animation: 'spin 1s linear infinite' }} />
-                    ) : (
-                      <Icons.XCircle size={16} />
-                    )}
-                    Reject Selected ({checkedRequestIds.length})
-                  </button>
-                  
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    style={{ gap: '6px' }}
-                    onClick={() => handleBulkReview('APPROVED')}
-                    disabled={isSubmitting}
-                  >
-                    {isSubmitting ? (
-                      <Icons.Loader size={16} className="animate-spin" style={{ animation: 'spin 1s linear infinite' }} />
-                    ) : (
-                      <Icons.CheckCircle2 size={16} />
-                    )}
-                    Approve Selected ({checkedRequestIds.length})
-                  </button>
-                </div>
-              </div>
+            <div className="bulk-review-bar">
+              <span className="bulk-review-title">
+                <Icons.CheckSquare size={16} style={{ color: 'var(--primary)' }} />
+                {checkedRequestIds.length} selected
+              </span>
+
+              <input
+                type="text"
+                className="form-input bulk-review-note"
+                placeholder="Optional note/reason — applies to selected requests without a custom note…"
+                value={generalNote}
+                onChange={(e) => setGeneralNote(e.target.value)}
+                disabled={isSubmitting}
+              />
+
+              {(() => {
+                const customCount = Object.keys(customNotes).filter(
+                  (id) => selectedRequests[id] && customNotes[id]?.trim().length > 0,
+                ).length;
+                return customCount > 0 ? (
+                  <span className="bulk-review-meta" title={`${customCount} request(s) use a custom note`}>
+                    {customCount} custom
+                  </span>
+                ) : null;
+              })()}
+
+              <button
+                type="button"
+                className="btn btn-outline btn-sm"
+                onClick={() => {
+                  setSelectedRequests({});
+                  setCustomNotes({});
+                }}
+                disabled={isSubmitting}
+              >
+                Clear
+              </button>
+
+              <button
+                type="button"
+                className="btn btn-outline btn-danger-outline btn-sm"
+                style={{ gap: '6px' }}
+                onClick={() => handleBulkReview('REJECTED')}
+                disabled={isSubmitting}
+              >
+                {isSubmitting ? (
+                  <Icons.Loader size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                ) : (
+                  <Icons.XCircle size={14} />
+                )}
+                Reject ({checkedRequestIds.length})
+              </button>
+
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                style={{ gap: '6px' }}
+                onClick={() => handleBulkReview('APPROVED')}
+                disabled={isSubmitting}
+              >
+                {isSubmitting ? (
+                  <Icons.Loader size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                ) : (
+                  <Icons.CheckCircle2 size={14} />
+                )}
+                Approve ({checkedRequestIds.length})
+              </button>
             </div>
           )}
         </>
+      )}
+
+      {canReviewZk && <ZkChangeApprovals />}
+
+      {/* One compact, professional placeholder when every queue is empty — no big block. */}
+      {nothingToReview && (
+        <div className="empty-state empty-state-compact">
+          <Icons.CheckCircle2 size={22} className="empty-state-icon" style={{ color: 'var(--status-approved-text)' }} />
+          <div>
+            <h3 className="empty-state-title">You're all caught up</h3>
+            <p className="empty-state-desc">No account, access, or config requests are waiting for review.</p>
+          </div>
+        </div>
       )}
     </div>
   );

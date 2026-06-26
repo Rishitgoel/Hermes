@@ -48,6 +48,9 @@ describe('Pages Smoke Tests', () => {
       if (url === '/api/platforms') {
         return { data: [] };
       }
+      if (url === '/api/user-creation-requests/me/all') {
+        return { data: [] };
+      }
       return { data: {} };
     });
   });

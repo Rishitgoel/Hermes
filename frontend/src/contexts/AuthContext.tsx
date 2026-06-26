@@ -48,6 +48,9 @@ export interface UserSession {
   roles: string[];
   userCreation?: UserCreationInfo | null;
   adminScopes?: AdminScopes | null;
+  /** Whether to show the ZooKeeper Config page — true when the user holds an active
+   *  grant on a `platform='zookeeper'` group (computed server-side in /auth/me). */
+  hasZookeeperAccess?: boolean;
 }
 
 /** Simulation-mode mock identities (maps to the Bearer tokens the backend accepts). */

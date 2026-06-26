@@ -736,25 +736,19 @@ export const Groups: React.FC = () => {
                   );
                 })()}
 
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">
-                    General Justification / Reason
-                    <span style={{ fontWeight: 'normal', color: 'var(--text-muted)', marginLeft: '6px', fontSize: '12px' }}>
-                      (Applies to selected groups without custom reasons)
-                    </span>
-                  </label>
+                <div className="form-group form-row" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Justification</label>
                   <textarea
                     className="form-textarea"
-                    style={{ minHeight: '60px' }}
-                    placeholder="Provide a justification of at least 10 characters..."
+                    placeholder="Justification of at least 10 characters (applies to selected groups without a custom reason)..."
                     value={generalReason}
                     onChange={(e) => setGeneralReason(e.target.value)}
                     disabled={isSubmittingBulk}
                   />
                 </div>
-                
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Access Duration</label>
+
+                <div className="form-group form-row" style={{ marginBottom: 0 }}>
+                  <label className="form-label">Duration</label>
                   <select
                     className="form-select"
                     value={selectedDuration}

@@ -44,11 +44,10 @@ export const UserApprovalsTable: React.FC = () => {
 
   const isSubmitting = reviewMutation.isPending;
 
-  if (isLoading) {
-    return (
-      <div style={{ padding: '20px 0', color: 'var(--text-muted)' }}>Loading user approvals…</div>
-    );
-  }
+  // Self-hide when there's nothing to approve (and while loading) so the section never
+  // shows a big empty-state block — the parent renders one compact "all caught up" state
+  // for the whole page instead.
+  if (isLoading || rows.length === 0) return null;
 
   const formatDate = (iso: string | null) => {
     if (!iso) return '—';
@@ -83,16 +82,9 @@ export const UserApprovalsTable: React.FC = () => {
         Approve these <strong>before</strong> any group access request from the same user.
       </p>
 
-      {rows.length === 0 ? (
-        <div className="empty-state">
-          <Icons.UserCheck size={44} className="empty-state-icon" />
-          <h3 className="empty-state-title">No pending users</h3>
-          <p className="empty-state-desc">Every account request has been reviewed.</p>
-        </div>
-      ) : (
-        <div className="table-container">
-          <table className="hermes-table">
-            <thead>
+      <div className="table-container">
+        <table className="hermes-table">
+          <thead>
               <tr>
                 <th>Requester</th>
                 <th style={{ width: '110px' }}>Platform</th>
@@ -221,7 +213,6 @@ export const UserApprovalsTable: React.FC = () => {
             </tbody>
           </table>
         </div>
-      )}
     </div>
   );
 };

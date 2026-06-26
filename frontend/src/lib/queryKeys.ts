@@ -27,6 +27,11 @@ export const queryKeys = {
   // Platform keys with a live provisioning adapter (from the backend registry).
   platforms: () => ['platforms'] as const,
 
+  // ZooKeeper config management
+  zkScope: () => ['zk', 'scope'] as const,
+  zkNodes: (path: string) => ['zk', 'nodes', path] as const,
+  zkChangeRequests: (scope: 'mine' | 'review') => ['zk', 'change-requests', scope] as const,
+
   // Admin Management
   adminPlatforms: () => ['admin', 'platforms'] as const,
   adminUsers: (search: string) => ['admin', 'users', search] as const,

@@ -65,7 +65,7 @@ export interface GroupRecord {
 export interface CreateGroupInput {
   name: string;
   slug: string;
-  description: string;
+  description?: string;
   platform: string;
   icon?: string;
   color?: string;
@@ -73,14 +73,31 @@ export interface CreateGroupInput {
   externalGroupId?: string;
 }
 
-/** Editable subset — slug/platform/externalGroupId are immutable after creation. */
+/**
+ * Editable subset — slug/platform are immutable after creation. externalGroupId is
+ * editable only for platforms whose adapter reconciles existing members (ZooKeeper's
+ * newline-separated path list); the backend rejects it for single-group platforms.
+ */
 export interface UpdateGroupInput {
   name?: string;
   description?: string;
   icon?: string | null;
   color?: string | null;
   tables?: string[];
+  externalGroupId?: string;
   isActive?: boolean;
+}
+
+/**
+ * Summary returned by the backend when an edit to a group's/level's externalGroupId
+ * reconciles existing members (ZooKeeper). null when nothing was reconciled.
+ */
+export interface ReconciliationSummary {
+  addedPaths: string[];
+  removedPaths: string[];
+  updatedPaths: string[];
+  memberCount: number;
+  errors: { member: string; error: string }[];
 }
 
 export interface DeleteGroupResult {
@@ -133,13 +150,19 @@ export async function createGroup(body: CreateGroupInput): Promise<GroupRecord> 
   return res.data as GroupRecord;
 }
 
-export async function updateGroup(groupId: string, body: UpdateGroupInput): Promise<GroupRecord> {
+export async function updateGroup(
+  groupId: string,
+  body: UpdateGroupInput,
+): Promise<GroupRecord & { reconciliation?: ReconciliationSummary | null }> {
   const res = await apiClient.put(`/api/admin/groups/${groupId}`, body);
-  return res.data as GroupRecord;
+  return res.data as GroupRecord & { reconciliation?: ReconciliationSummary | null };
 }
 
-export async function deleteGroup(groupId: string): Promise<DeleteGroupResult> {
-  const res = await apiClient.delete(`/api/admin/groups/${groupId}`);
+// force=false: delete only if the group has no history, else archive (default).
+// force=true: permanently delete the group + its history — backend rejects this
+// if the group still has active members.
+export async function deleteGroup(groupId: string, force = false): Promise<DeleteGroupResult> {
+  const res = await apiClient.delete(`/api/admin/groups/${groupId}`, force ? { params: { force: 'true' } } : undefined);
   return res.data as DeleteGroupResult;
 }
 
@@ -250,9 +273,9 @@ export async function updateGroupLevel(
   groupId: string,
   levelId: string,
   body: Partial<GroupLevelInput>,
-): Promise<GroupLevelRow> {
+): Promise<GroupLevelRow & { reconciliation?: ReconciliationSummary | null }> {
   const res = await apiClient.put(`/api/admin/groups/${groupId}/levels/${levelId}`, body);
-  return res.data as GroupLevelRow;
+  return res.data as GroupLevelRow & { reconciliation?: ReconciliationSummary | null };
 }
 
 export interface DeleteGroupLevelResult {
@@ -265,4 +288,25 @@ export interface DeleteGroupLevelResult {
 export async function deleteGroupLevel(groupId: string, levelId: string): Promise<DeleteGroupLevelResult> {
   const res = await apiClient.delete(`/api/admin/groups/${groupId}/levels/${levelId}`);
   return res.data as DeleteGroupLevelResult;
+}
+
+// Redash maintenance: backfill existing Redash accounts + memberships into Hermes.
+// Rarely-used tool, surfaced in a collapsed disclosure on the Admin Management page.
+export interface RedashImportReport {
+  apply: boolean;
+  mappedGroups: number;
+  cachedUsers: number;
+  usersMatched: number;
+  usersSkippedNoKeycloak: string[];
+  usersSkippedDisabled: string[];
+  accountRequestsCreated: number;
+  grantsCreated: number;
+  grantsAlreadyPresent: number;
+  membershipsUnmapped: string[];
+  levelConflicts: string[];
+}
+
+export async function importRedashMemberships(apply: boolean): Promise<RedashImportReport> {
+  const res = await apiClient.post('/api/admin/import-redash-memberships', { apply });
+  return res.data as RedashImportReport;
 }

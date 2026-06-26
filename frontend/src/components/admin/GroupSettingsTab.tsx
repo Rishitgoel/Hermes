@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../../lib/queryKeys';
 import { useToast } from '../../contexts/ToastContext';
-import { prettyPlatform } from './adminUtils';
+import { prettyPlatform, reconcileToast } from './adminUtils';
 import ConfirmModal from './ConfirmModal';
 import GroupFormModal from './GroupFormModal';
 import { updateGroup, deleteGroup, type ManageableGroup } from '../../services/api/admin';
@@ -27,6 +27,11 @@ export const GroupSettingsTab: React.FC<GroupSettingsTabProps> = ({ group, onDel
   const [showEdit, setShowEdit] = useState(false);
   const [confirmArchive, setConfirmArchive] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmForceDelete, setConfirmForceDelete] = useState(false);
+
+  // Hard delete (incl. history) is only allowed when nobody currently holds active
+  // access — otherwise the backend rejects it. memberCount is the active-grant count.
+  const hasActiveMembers = group.memberCount > 0;
 
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: queryKeys.adminGroups(group.platform) });
@@ -42,6 +47,32 @@ export const GroupSettingsTab: React.FC<GroupSettingsTabProps> = ({ group, onDel
       setConfirmArchive(false);
     },
     onError: (e: any) => toast.error(e.message || 'Failed to update group.'),
+  });
+
+  // ZooKeeper groups map to a newline-separated list of znode paths, editable here.
+  // Saving reconciles existing members onto the new mapping (server-side).
+  const isZk = group.platform === 'zookeeper';
+  const [pathsDraft, setPathsDraft] = useState(group.externalGroupId ?? '');
+  // Resync the draft when the canonical value changes — after a save refetch or a
+  // concurrent admin's edit — so the textarea never shows a stale value or a spurious
+  // dirty state. Edits made before any refetch are preserved (the prop is unchanged then).
+  useEffect(() => {
+    setPathsDraft(group.externalGroupId ?? '');
+  }, [group.externalGroupId]);
+  const pathsDirty = pathsDraft.trim() !== (group.externalGroupId ?? '').trim();
+
+  const pathsMutation = useMutation({
+    mutationFn: () => updateGroup(group.id, { externalGroupId: pathsDraft.trim() }),
+    onSuccess: (res) => {
+      const { ok, message } = reconcileToast(res.reconciliation);
+      if (ok) {
+        toast.success(message, { duration: 8000 });
+      } else {
+        toast.error(message, { duration: 9000 });
+      }
+      refresh();
+    },
+    onError: (e: any) => toast.error(e.message || 'Failed to save paths.'),
   });
 
   const deleteMutation = useMutation({
@@ -63,6 +94,18 @@ export const GroupSettingsTab: React.FC<GroupSettingsTabProps> = ({ group, onDel
     onError: (e: any) => toast.error(e.message || 'Failed to delete group.'),
   });
 
+  // Permanent delete including history (force) — backend gates on no active members.
+  const forceDeleteMutation = useMutation({
+    mutationFn: () => deleteGroup(group.id, true),
+    onSuccess: () => {
+      toast.success(`Group "${group.name}" permanently deleted, including its history.`);
+      refresh();
+      setConfirmForceDelete(false);
+      onDeleted();
+    },
+    onError: (e: any) => toast.error(e.message || 'Failed to delete group.'),
+  });
+
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
@@ -77,7 +120,7 @@ export const GroupSettingsTab: React.FC<GroupSettingsTabProps> = ({ group, onDel
         <Row label="Description">{group.description || '—'}</Row>
         <Row label="Platform">{prettyPlatform(group.platform)}</Row>
         <Row label="Slug">{group.slug}</Row>
-        <Row label="External Group ID">{group.externalGroupId || '—'}</Row>
+        {!isZk && <Row label="External Group ID">{group.externalGroupId || '—'}</Row>}
         <Row label="Tables">{group.tables.length ? group.tables.join(', ') : '—'}</Row>
         <Row label="Status">
           {group.isActive ? (
@@ -87,6 +130,46 @@ export const GroupSettingsTab: React.FC<GroupSettingsTabProps> = ({ group, onDel
           )}
         </Row>
       </div>
+
+      {/* ZooKeeper: editable multi-path mapping. Each line is one znode path with
+          optional #perms; saving reconciles current members onto the new set. */}
+      {isZk && (
+        <div style={{ marginBottom: '20px' }}>
+          <div className="admin-section-label" style={{ marginBottom: '6px' }}>ZooKeeper Paths</div>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.4, marginBottom: '8px' }}>
+            One znode path per line, optional <code>#perms</code> (c/d/r/w/a) — e.g.{' '}
+            <code>/hermes/credit-card#cdrw</code>. Saving grants new paths to every current member and
+            removes any you drop.
+          </div>
+          <textarea
+            value={pathsDraft}
+            onChange={(e) => setPathsDraft(e.target.value)}
+            rows={Math.max(3, pathsDraft.split('\n').length + 1)}
+            spellCheck={false}
+            placeholder={'/hermes/credit-card#cdrw\n/hermes/shared-config#r'}
+            style={{
+              width: '100%',
+              fontFamily: 'monospace',
+              fontSize: '12px',
+              padding: '8px',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--border)',
+              resize: 'vertical',
+              boxSizing: 'border-box',
+            }}
+          />
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              disabled={!pathsDirty || pathsMutation.isPending || pathsDraft.trim().length === 0}
+              onClick={() => pathsMutation.mutate()}
+            >
+              {pathsMutation.isPending ? 'Saving…' : 'Save paths'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Danger zone: archive/restore + permanent delete */}
       <div style={{ border: '1px solid var(--status-rejected-text)', borderRadius: 'var(--radius-md)', padding: '14px', background: 'var(--status-rejected-bg)' }}>
@@ -120,6 +203,24 @@ export const GroupSettingsTab: React.FC<GroupSettingsTabProps> = ({ group, onDel
               onClick={() => setConfirmDelete(true)}
             >
               Delete permanently
+            </button>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.4 }}>
+              Permanently delete <strong>including its history</strong> (access + request records).
+              {hasActiveMembers
+                ? ` Blocked: ${group.memberCount} active member(s) — revoke their access first.`
+                : ' Audit log entries are kept. This cannot be undone.'}
+            </div>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              style={{ flexShrink: 0, color: 'white', background: 'var(--status-rejected-text)', borderColor: 'var(--status-rejected-text)' }}
+              disabled={forceDeleteMutation.isPending || hasActiveMembers}
+              title={hasActiveMembers ? 'Revoke all active members before deleting.' : undefined}
+              onClick={() => setConfirmForceDelete(true)}
+            >
+              Delete with history
             </button>
           </div>
         </div>
@@ -158,6 +259,17 @@ export const GroupSettingsTab: React.FC<GroupSettingsTabProps> = ({ group, onDel
         message={`Permanently delete "${group.name}" and its backing platform group? If the group has any history (members or requests, past or present) it will be archived instead. This cannot be undone.`}
         onConfirm={() => deleteMutation.mutate()}
         onClose={() => setConfirmDelete(false)}
+      />
+
+      <ConfirmModal
+        isOpen={confirmForceDelete}
+        title="Delete group with history"
+        danger
+        confirmLabel="Delete with history"
+        loading={forceDeleteMutation.isPending}
+        message={`Permanently delete "${group.name}", its backing platform group, and ALL of its access + request history? This is only allowed because no one currently holds active access. Audit log entries are preserved. This cannot be undone.`}
+        onConfirm={() => forceDeleteMutation.mutate()}
+        onClose={() => setConfirmForceDelete(false)}
       />
     </div>
   );

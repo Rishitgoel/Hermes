@@ -63,6 +63,7 @@ apiClient.interceptors.response.use(
     
     if (resData && typeof resData === 'object' && 'success' in resData) {
       if (resData.success) {
+        (response as unknown as { metadata?: unknown }).metadata = resData.metadata;
         return { ...response, data: resData.data };
       } else {
         // If success: false is returned inside a 200 OK

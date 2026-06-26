@@ -88,6 +88,14 @@ export const PLATFORMS: PlatformMetadata[] = [
     iconName: 'Radio',
     color: '#112340',
   },
+  {
+    id: 'zookeeper',
+    name: 'ZooKeeper',
+    fullName: 'Apache ZooKeeper',
+    description: 'Distributed coordination service — per-znode ACL access with read/write permission tiers.',
+    iconName: 'Network',
+    color: '#326CE5',
+  },
 ];
 
 /** Friendly display name for a platform id (falls back to a capitalized id). */

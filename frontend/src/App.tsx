@@ -15,6 +15,7 @@ import MyRequests from './pages/MyRequests';
 import PendingApprovals from './pages/PendingApprovals';
 import AuditLog from './pages/AuditLog';
 import AdminManagement from './pages/AdminManagement';
+import ZookeeperConfig from './pages/ZookeeperConfig';
 
 import './styles/global.css';
 
@@ -59,6 +60,15 @@ export const App: React.FC = () => {
                       }
                     >
                       <AdminManagement />
+                    </ProtectedRoute>
+                  }
+                />
+
+                <Route
+                  path="zookeeper"
+                  element={
+                    <ProtectedRoute allowIf={(u) => !!u.hasZookeeperAccess}>
+                      <ZookeeperConfig />
                     </ProtectedRoute>
                   }
                 />

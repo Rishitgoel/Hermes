@@ -175,11 +175,11 @@ export const AccessRequestModal: React.FC<AccessRequestModalProps> = ({
           </div>
         )}
 
-        <div className="form-group">
-          <label className="form-label">Justification / Reason</label>
+        <div className="form-group form-row">
+          <label className="form-label">Justification</label>
           <textarea
             className="form-textarea"
-            placeholder="Explain why you need access to this group (e.g. Q3 Growth analysis campaign)..."
+            placeholder="Explain why you need access (e.g. Q3 Growth analysis campaign)..."
             value={justification}
             onChange={(e) => setJustification(e.target.value)}
             disabled={isSubmitting}
@@ -190,8 +190,8 @@ export const AccessRequestModal: React.FC<AccessRequestModalProps> = ({
           </span>
         </div>
 
-        <div className="form-group">
-          <label className="form-label">Access Duration</label>
+        <div className="form-group form-row">
+          <label className="form-label">Duration</label>
           <select
             className="form-select"
             value={duration}

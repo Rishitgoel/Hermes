@@ -112,8 +112,8 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({ group, existingM
               </div>
             )}
 
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <label className="form-label">Access Duration</label>
+            <div className="form-group form-row" style={{ marginBottom: 0 }}>
+              <label className="form-label">Duration</label>
               <select
                 className="form-select"
                 value={duration}

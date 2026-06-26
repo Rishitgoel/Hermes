@@ -3,11 +3,11 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useNotifications, Notification } from '../../contexts/NotificationContext';
 import { getPageTitle } from '../../lib/routeTitles';
-import { Bell, Moon, Sun } from 'lucide-react';
+import { Bell, Moon, Sun, X } from 'lucide-react';
 
 export const TopBar: React.FC = () => {
   const { user } = useAuth();
-  const { notifications, unreadCount, markAsRead, markAllRead } = useNotifications();
+  const { notifications, unreadCount, markAsRead, markAllRead, dismiss, clearAll } = useNotifications();
   const location = useLocation();
   const navigate = useNavigate();
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -118,11 +118,18 @@ export const TopBar: React.FC = () => {
             <div className="notification-dropdown">
               <div className="notification-header">
                 <h4>Notifications</h4>
-                {unreadCount > 0 && (
-                  <button className="mark-all-read-btn" onClick={markAllRead}>
-                    Mark all read
-                  </button>
-                )}
+                <div style={{ display: 'flex', gap: '12px' }}>
+                  {unreadCount > 0 && (
+                    <button className="mark-all-read-btn" onClick={markAllRead}>
+                      Mark all read
+                    </button>
+                  )}
+                  {notifications.length > 0 && (
+                    <button className="mark-all-read-btn" onClick={clearAll}>
+                      Clear all
+                    </button>
+                  )}
+                </div>
               </div>
               <div className="notification-list">
                 {notifications.length === 0 ? (
@@ -130,12 +137,23 @@ export const TopBar: React.FC = () => {
                     No notifications yet.
                   </div>
                 ) : (
-                  notifications.map((notif) => (
-                    <div 
-                      key={notif.id} 
+                  notifications.slice(0, 20).map((notif) => (
+                    <div
+                      key={notif.id}
                       className={`notification-item ${!notif.isRead ? 'unread' : ''}`}
                       onClick={() => handleNotificationClick(notif)}
                     >
+                      <button
+                        className="notification-dismiss-btn"
+                        aria-label="Dismiss notification"
+                        title="Dismiss"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          dismiss(notif.id);
+                        }}
+                      >
+                        <X size={14} />
+                      </button>
                       <span className="notification-item-title">{notif.title}</span>
                       <span className="notification-item-msg">{notif.message}</span>
                       <span className="notification-item-time">{formatTime(notif.createdAt)}</span>

@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import * as Icons from 'lucide-react';
 import Modal from '../common/Modal';
 import { queryKeys } from '../../lib/queryKeys';
 import { prettyPlatform, slugify } from './adminUtils';
@@ -14,9 +13,12 @@ import {
 } from '../../services/api/admin';
 
 /**
- * Create or edit a group. On create the admin picks the platform and (optionally) a
- * backing external group id — blank auto-creates one via the platform adapter. On
- * edit, slug/platform/externalGroupId are locked (immutable; see admin controller).
+ * Create or edit a group. The form is intentionally minimal: Name + Platform +
+ * (optional) backing external group id on create; Name + Description on edit. The
+ * slug is auto-derived from the name (never asked) and description is optional.
+ * Icon / colour are derived for display (see groupIconName), so they aren't edited
+ * here. On edit, slug/platform/externalGroupId are locked (immutable; see admin
+ * controller).
  */
 interface GroupFormModalProps {
   mode: 'create' | 'edit';
@@ -27,8 +29,6 @@ interface GroupFormModalProps {
   onSaved: (message: string, group: GroupRecord) => void;
   onError: (message: string) => void;
 }
-
-const DEFAULT_COLOR = '#6366f1';
 
 export const GroupFormModal: React.FC<GroupFormModalProps> = ({
   mode,
@@ -43,17 +43,12 @@ export const GroupFormModal: React.FC<GroupFormModalProps> = ({
   const isEdit = mode === 'edit';
 
   const [name, setName] = useState(group?.name ?? '');
-  const [slug, setSlug] = useState(group?.slug ?? '');
-  // On edit the slug is fixed, so treat it as "touched" (don't auto-rewrite).
-  const [slugTouched, setSlugTouched] = useState(isEdit);
   const [platform, setPlatform] = useState(group?.platform ?? defaultPlatform ?? platforms[0] ?? '');
   const [description, setDescription] = useState(group?.description ?? '');
-  const [icon, setIcon] = useState(group?.icon ?? '');
-  const [color, setColor] = useState(group?.color ?? DEFAULT_COLOR);
-  const [tablesText, setTablesText] = useState((group?.tables ?? []).join(', '));
   const [externalGroupId, setExternalGroupId] = useState('');
 
-  const parseTables = (s: string) => s.split(/[,\n]/).map((t) => t.trim()).filter(Boolean);
+  // Slug is never asked — it's derived from the name on create (immutable after).
+  const derivedSlug = slugify(name);
 
   const saveMutation = useMutation({
     mutationFn: (): Promise<GroupRecord> => {
@@ -61,20 +56,14 @@ export const GroupFormModal: React.FC<GroupFormModalProps> = ({
         const body: UpdateGroupInput = {
           name: name.trim(),
           description: description.trim(),
-          icon: icon.trim() || null,
-          color: color.trim() || null,
-          tables: parseTables(tablesText),
         };
         return updateGroup(group.id, body);
       }
       const body: CreateGroupInput = {
         name: name.trim(),
-        slug: slug.trim(),
-        description: description.trim(),
+        slug: derivedSlug,
+        description: description.trim() || undefined,
         platform,
-        icon: icon.trim() || undefined,
-        color: color.trim() || undefined,
-        tables: parseTables(tablesText),
         externalGroupId: externalGroupId.trim() || undefined,
       };
       return createGroup(body);
@@ -91,13 +80,9 @@ export const GroupFormModal: React.FC<GroupFormModalProps> = ({
     onError: (e: any) => onError(e?.message || 'Failed to save group.'),
   });
 
-  const slugValid = /^[a-z0-9-]+$/.test(slug.trim());
+  // On create the name must yield a valid (non-empty) slug; on edit only the name matters.
   const canSave =
-    name.trim().length > 0 &&
-    description.trim().length > 0 &&
-    (isEdit || (slugValid && platform.length > 0));
-
-  const LucideIcon = (Icons as any)[icon] || Icons.Layers;
+    name.trim().length > 0 && (isEdit || (derivedSlug.length > 0 && platform.length > 0));
 
   return (
     <Modal
@@ -127,30 +112,12 @@ export const GroupFormModal: React.FC<GroupFormModalProps> = ({
             className="form-input"
             value={name}
             placeholder="Credit Card"
-            onChange={(e) => {
-              const v = e.target.value;
-              setName(v);
-              if (!isEdit && !slugTouched) setSlug(slugify(v));
-            }}
+            onChange={(e) => setName(e.target.value)}
             autoFocus
           />
-        </div>
-
-        <div className="form-group" style={{ marginBottom: 0 }}>
-          <label className="form-label">Slug</label>
-          <input
-            className="form-input"
-            value={slug}
-            placeholder="credit-card"
-            disabled={isEdit}
-            onChange={(e) => {
-              setSlugTouched(true);
-              setSlug(e.target.value);
-            }}
-          />
-          {isEdit && (
+          {!isEdit && derivedSlug && (
             <div style={{ fontSize: '11px', color: 'var(--text-light)', marginTop: '4px' }}>
-              Slug can't be changed after creation.
+              Slug: <code>{derivedSlug}</code> (auto-generated, fixed after creation)
             </div>
           )}
         </div>
@@ -171,34 +138,8 @@ export const GroupFormModal: React.FC<GroupFormModalProps> = ({
           )}
         </div>
 
-        <div className="form-group" style={{ marginBottom: 0 }}>
-          <label className="form-label">Color</label>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <input
-              type="color"
-              value={color || DEFAULT_COLOR}
-              onChange={(e) => setColor(e.target.value)}
-              style={{ width: '42px', height: '38px', padding: 0, border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', background: 'none' }}
-            />
-            <input className="form-input" value={color} placeholder="#FF9900" onChange={(e) => setColor(e.target.value)} style={{ flex: 1 }} />
-          </div>
-        </div>
-
-        <div className="form-group" style={{ marginBottom: 0 }}>
-          <label className="form-label">Icon (Lucide name)</label>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <div
-              className="group-icon-box"
-              style={{ width: '38px', height: '38px', borderRadius: '8px', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-            >
-              <LucideIcon size={18} style={{ color: color || 'var(--primary)' }} />
-            </div>
-            <input className="form-input" value={icon} placeholder="CreditCard" onChange={(e) => setIcon(e.target.value)} style={{ flex: 1 }} />
-          </div>
-        </div>
-
         {!isEdit && (
-          <div className="form-group" style={{ marginBottom: 0 }}>
+          <div className="form-group" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
             <label className="form-label">External Group ID — optional</label>
             <input
               className="form-input"
@@ -213,7 +154,7 @@ export const GroupFormModal: React.FC<GroupFormModalProps> = ({
         )}
 
         <div className="form-group" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
-          <label className="form-label">Description</label>
+          <label className="form-label">Description — optional</label>
           <input
             className="form-input"
             value={description}
@@ -221,21 +162,11 @@ export const GroupFormModal: React.FC<GroupFormModalProps> = ({
             onChange={(e) => setDescription(e.target.value)}
           />
         </div>
-
-        <div className="form-group" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
-          <label className="form-label">Tables (comma-separated)</label>
-          <input
-            className="form-input"
-            value={tablesText}
-            placeholder="card_transactions, billing_statements"
-            onChange={(e) => setTablesText(e.target.value)}
-          />
-        </div>
       </div>
 
-      {!isEdit && slug.trim() && !slugValid && (
+      {!isEdit && name.trim() && !derivedSlug && (
         <div style={{ fontSize: '11px', color: 'var(--status-rejected-text)', marginTop: '8px' }}>
-          Slug must be lowercase alphanumeric with hyphens.
+          Name must contain letters or numbers to generate a slug.
         </div>
       )}
     </Modal>

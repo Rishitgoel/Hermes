@@ -19,6 +19,8 @@ interface NotificationContextType {
   fetchNotifications: () => Promise<void>;
   markAsRead: (id: string) => Promise<void>;
   markAllRead: () => Promise<void>;
+  dismiss: (id: string) => Promise<void>;
+  clearAll: () => Promise<void>;
 }
 
 const NotificationContext = createContext<NotificationContextType | undefined>(undefined);
@@ -65,6 +67,29 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       setUnreadCount(0);
     } catch (error) {
       console.error('Failed to mark all notifications as read:', error);
+    }
+  };
+
+  const dismiss = async (id: string) => {
+    try {
+      await apiClient.delete(`/api/notifications/${id}`);
+      setNotifications((prev) => {
+        const target = prev.find((n) => n.id === id);
+        if (target && !target.isRead) setUnreadCount((c) => Math.max(0, c - 1));
+        return prev.filter((n) => n.id !== id);
+      });
+    } catch (error) {
+      console.error('Failed to dismiss notification:', error);
+    }
+  };
+
+  const clearAll = async () => {
+    try {
+      await apiClient.delete('/api/notifications');
+      setNotifications([]);
+      setUnreadCount(0);
+    } catch (error) {
+      console.error('Failed to clear notifications:', error);
     }
   };
 
@@ -153,6 +178,8 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
         fetchNotifications,
         markAsRead,
         markAllRead,
+        dismiss,
+        clearAll,
       }}
     >
       {children}

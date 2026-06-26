@@ -103,6 +103,11 @@ export const UserPicker: React.FC<UserPickerProps> = ({
 
   const users = usersQuery.data ?? [];
   const isDisabled = (u: AdminUser) => disabledIds?.has(u.userId) ?? false;
+  // The backend caps user search at 20 results (searchUsers `take: 20`). When we
+  // get exactly that many, more users likely exist but are hidden — prompt the
+  // user to narrow with a search term rather than silently truncating.
+  const SEARCH_CAP = 20;
+  const capped = users.length >= SEARCH_CAP;
 
   // Keep the highlighted row scrolled into view as it moves.
   useEffect(() => {
@@ -173,6 +178,11 @@ export const UserPicker: React.FC<UserPickerProps> = ({
         >
           {users.length} {users.length === 1 ? 'user' : 'users'}
           {debouncedSearch ? ' matched' : ''}
+          {capped && (
+            <span style={{ color: 'var(--text-muted)', textTransform: 'none', letterSpacing: 0, fontWeight: 500 }}>
+              {' '}· showing first {SEARCH_CAP}, type to refine
+            </span>
+          )}
         </div>
       )}
 

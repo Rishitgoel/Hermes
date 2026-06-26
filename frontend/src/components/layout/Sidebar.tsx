@@ -12,6 +12,7 @@ import {
   CheckSquare,
   History,
   ShieldCheck,
+  Network,
   LogOut,
   Sparkles
 } from 'lucide-react';
@@ -119,6 +120,16 @@ export const Sidebar: React.FC = () => {
           >
             <ShieldCheck size={20} />
             <span>Admin Management</span>
+          </NavLink>
+        )}
+
+        {user?.hasZookeeperAccess && (
+          <NavLink
+            to="/zookeeper"
+            className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+          >
+            <Network size={20} />
+            <span>ZooKeeper Config</span>
           </NavLink>
         )}
 

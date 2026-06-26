@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../../lib/queryKeys';
 import { useToast } from '../../contexts/ToastContext';
-import { prettyPlatform, slugify } from './adminUtils';
+import { prettyPlatform, slugify, reconcileToast } from './adminUtils';
 import { SkeletonRows } from '../common/Skeleton';
 import ConfirmModal from './ConfirmModal';
 import {
@@ -31,6 +31,9 @@ export const GroupLevelsTab: React.FC<GroupLevelsTabProps> = ({ group }) => {
   // Auto-fill slug from name until the user types a slug by hand.
   const [slugTouched, setSlugTouched] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<GroupLevelRow | null>(null);
+  // ZooKeeper external ids are a newline-separated list of znode paths, so the field
+  // is a textarea there (a single-line input everywhere else).
+  const isZk = group.platform === 'zookeeper';
 
   const levelsQuery = useQuery({
     queryKey: queryKeys.adminGroupLevels(group.id),
@@ -63,8 +66,18 @@ export const GroupLevelsTab: React.FC<GroupLevelsTabProps> = ({ group }) => {
       };
       return editing ? updateGroupLevel(group.id, editing.id, body) : createGroupLevel(group.id, body);
     },
-    onSuccess: () => {
-      toast.success(editing ? 'Level updated.' : 'Level created.');
+    onSuccess: (res: any) => {
+      // When editing a ZooKeeper level's paths, the backend reconciles existing members
+      // and returns a summary — surface added/removed/failed counts (and any per-member
+      // ACL failures) instead of swallowing them, exactly like the group Settings tab.
+      const reconciliation = editing ? res?.reconciliation : null;
+      if (reconciliation) {
+        const { ok, message } = reconcileToast(reconciliation);
+        if (ok) toast.success(message, { duration: 8000 });
+        else toast.error(message, { duration: 9000 });
+      } else {
+        toast.success(editing ? 'Level updated.' : 'Level created.');
+      }
       resetForm();
       invalidate();
     },
@@ -230,18 +243,39 @@ export const GroupLevelsTab: React.FC<GroupLevelsTabProps> = ({ group }) => {
               />
             </div>
             <div className="form-group" style={{ marginBottom: 0 }}>
-              <label className="form-label">External Group ID ({prettyPlatform(group.platform)}) — optional</label>
-              <input
-                className="form-input"
-                value={form.externalGroupId ?? ''}
-                placeholder={editing ? '1043' : 'leave blank to auto-create'}
-                onChange={(e) => setForm((f) => ({ ...f, externalGroupId: e.target.value }))}
-              />
-              {!editing && (
-                <div style={{ fontSize: '11px', color: 'var(--text-light)', marginTop: '4px', lineHeight: 1.4 }}>
-                  Blank → Hermes creates a new {prettyPlatform(group.platform)} group. Paste an ID to link an existing one.
-                </div>
+              <label className="form-label">
+                {isZk ? 'ZooKeeper Paths' : `External Group ID (${prettyPlatform(group.platform)})`} — optional
+              </label>
+              {isZk ? (
+                <textarea
+                  className="form-input"
+                  value={form.externalGroupId ?? ''}
+                  rows={Math.max(2, (form.externalGroupId ?? '').split('\n').length + 1)}
+                  spellCheck={false}
+                  placeholder={editing ? '/hermes/credit-card#cdrw\n/hermes/shared#r' : 'leave blank to auto-create one znode'}
+                  onChange={(e) => setForm((f) => ({ ...f, externalGroupId: e.target.value }))}
+                  style={{ fontFamily: 'monospace', resize: 'vertical' }}
+                />
+              ) : (
+                <input
+                  className="form-input"
+                  value={form.externalGroupId ?? ''}
+                  placeholder={editing ? '1043' : 'leave blank to auto-create'}
+                  onChange={(e) => setForm((f) => ({ ...f, externalGroupId: e.target.value }))}
+                />
               )}
+              <div style={{ fontSize: '11px', color: 'var(--text-light)', marginTop: '4px', lineHeight: 1.4 }}>
+                {isZk ? (
+                  <>
+                    One znode path per line, optional <code>#perms</code> (c/d/r/w/a).
+                    {editing
+                      ? ' Saving updates every current member of this level.'
+                      : ' Blank → Hermes creates one new znode.'}
+                  </>
+                ) : !editing ? (
+                  <>Blank → Hermes creates a new {prettyPlatform(group.platform)} group. Paste an ID to link an existing one.</>
+                ) : null}
+              </div>
             </div>
             <div className="form-group" style={{ marginBottom: 0 }}>
               <label className="form-label">Rank (higher = more senior)</label>
