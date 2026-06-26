@@ -37,4 +37,16 @@ router.put('/:id/read', authenticateToken, (req: Request, res: Response, next: N
   controller.markAsRead(req, res, next).catch(next);
 });
 
+// Clear all of the user's notifications. Registered before '/:id' so the bare
+// path isn't captured by the param route.
+router.delete('/', authenticateToken, (req: Request, res: Response, next: NextFunction) => {
+  const controller = new NotificationController(req, res, next);
+  controller.clearAll(req, res, next).catch(next);
+});
+
+router.delete('/:id', authenticateToken, (req: Request, res: Response, next: NextFunction) => {
+  const controller = new NotificationController(req, res, next);
+  controller.dismissNotification(req, res, next).catch(next);
+});
+
 export default router;

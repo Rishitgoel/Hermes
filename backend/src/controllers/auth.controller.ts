@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import BaseController from './base.controller';
+import prisma from '../config/prisma';
 import userCreationService from '../services/user-creation.service';
 import { computeAdminScopes, AdminScopes } from '../utils/authz';
 import logger from '../utils/logger';
@@ -58,8 +59,23 @@ export class AuthController extends BaseController {
         logger.error({ err: err.message, userId: this.user.id }, 'computeAdminScopes failed in /auth/me');
       }
 
+      // Whether to show the ZooKeeper Config page: gated on ZooKeeper group membership
+      // (an active grant on a `platform='zookeeper'` group). Admins are members too —
+      // they hold a grant on a ZK group like anyone. Wrapped so a failure never blocks
+      // /auth/me. (Pure ZK admins review change requests from Pending Approvals, which
+      // has its own admin gate.)
+      let hasZookeeperAccess = false;
+      try {
+        hasZookeeperAccess =
+          (await prisma.userAccess.count({
+            where: { userId: this.user.id, isActive: true, group: { platform: 'zookeeper' } },
+          })) > 0;
+      } catch (err: any) {
+        logger.error({ err: err.message, userId: this.user.id }, 'hasZookeeperAccess check failed in /auth/me');
+      }
+
       this.sendResponse(
-        { ...this.user, userCreation, adminScopes },
+        { ...this.user, userCreation, adminScopes, hasZookeeperAccess },
         'Session authenticated successfully',
       );
     } catch (error) {

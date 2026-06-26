@@ -13,6 +13,7 @@ import auditRouter from './routes/audit.route';
 import adminRouter from './routes/admin.route';
 import userCreationRouter from './routes/user-creation.route';
 import platformRouter from './routes/platform.route';
+import zookeeperRouter from './routes/zookeeper.route';
 
 import config from './config/config';
 import prisma from './config/prisma';
@@ -108,6 +109,7 @@ app.use('/api/audit', auditRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/user-creation-requests', userCreationRouter);
 app.use('/api/platforms', platformRouter);
+app.use('/api/zookeeper', zookeeperRouter);
 
 // Fallbacks
 app.use(notFoundHandler);

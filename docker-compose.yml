@@ -1,21 +1,52 @@
 services:
-  # postgres:
-  #   image: postgres:15-alpine
-  #   container_name: hermes_postgres
-  #   environment:
-  #     POSTGRES_USER: ${POSTGRES_USER:-hermes_user}
-  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hermes_pass}
-  #     POSTGRES_DB: ${POSTGRES_DB:-hermes}
-  #   ports:
-  #     - '15433:5432'
-  #   volumes:
-  #     - postgres_data:/var/lib/postgresql/data
-  #   restart: always
-  #   healthcheck:
-  #     test: ['CMD-SHELL', 'pg_isready -U hermes_user -d hermes']
-  #     interval: 10s
-  #     timeout: 5s
-  #     retries: 5
+  postgres:
+    image: postgres:15-alpine
+    container_name: hermes_postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-hermes_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hermes_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-hermes}
+    ports:
+      - '15433:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: always
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U hermes_user -d hermes']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── ZooKeeper (the `zookeeper` provisioning adapter, live mode) ──
+  # Single-node ensemble for local dev. Hermes manages per-znode digest ACLs under
+  # ZOOKEEPER_ROOT_PATH (default /hermes). Only needed when ZOOKEEPER_SIMULATION=false;
+  # with the flag on (or no connect string) the backend uses its in-process mock and
+  # this container can stay down. `ruok` is whitelisted so the healthcheck can probe it.
+  zookeeper:
+    image: zookeeper:3.9
+    container_name: hermes_zookeeper
+    ports:
+      - '2181:2181'
+    environment:
+      ZOO_STANDALONE_ENABLED: 'true'
+      ZOO_4LW_COMMANDS_WHITELIST: 'ruok,srvr,mntr,conf,stat'
+    restart: always
+    healthcheck:
+      test: ['CMD-SHELL', 'zkServer.sh status']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  zoonavigator:
+    image: elkozmon/zoonavigator:latest
+    container_name: hermes_zoonavigator
+    ports:
+      - '9001:9000'
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    restart: always
 
   keycloak:
     image: quay.io/keycloak/keycloak:24.0
@@ -157,5 +188,5 @@ services:
     restart: always
 
 volumes:
-  # postgres_data:
+  postgres_data:
   redash_postgres_data:

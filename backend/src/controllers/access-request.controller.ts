@@ -5,7 +5,6 @@ import accessWorkflowService from '../services/access-workflow.service';
 import {
   createRequestSchema,
   reviewRequestSchema,
-  changeLevelSchema,
   renewRequestSchema,
   createRequestsBulkSchema,
   reviewRequestsBulkSchema,
@@ -136,47 +135,6 @@ export class AccessRequestController extends BaseController {
       this.sendResponse({ reviewed, failed }, message);
     } catch (error) {
       this.handleError(error, 'Failed to review access requests');
-    }
-  }
-
-  // POST /api/access-requests/change-level
-  // Change the level the caller already holds in a group (promote/demote). The
-  // service decides, by level rank, whether this is an instant self-service
-  // demotion or a gated (admin-approval) promotion — and keeps the user on exactly
-  // one level per group either way.
-  async changeLevel(req: Request, res: Response, next: NextFunction): Promise<void> {
-    try {
-      const validated = this.validateWithZod(changeLevelSchema, this.req.body);
-      if (!validated.success) return;
-
-      const userId = this.getUserId();
-      if (!userId) return;
-
-      const requester = {
-        id: userId,
-        username: this.user!.username,
-        email: this.user!.email,
-      };
-
-      const { groupId, levelId, justification, duration } = validated.data;
-
-      // No admin guard here: an admin holding a real grant changes levels like any
-      // member (the service itself rejects callers with no active grant).
-      const result = await accessWorkflowService.changeLevel(
-        requester,
-        groupId,
-        levelId,
-        justification,
-        duration
-      );
-
-      const message =
-        result.kind === 'instant'
-          ? 'Your level was changed and applied immediately.'
-          : 'Level change request submitted for approval.';
-      this.sendResponse(result, message, result.kind === 'instant' ? 200 : 201);
-    } catch (error) {
-      this.handleError(error, 'Failed to change level');
     }
   }
 

@@ -15,6 +15,14 @@ router.post('/reconcile', authenticateToken, requireRole(['hermes_super_admin'])
   controller.triggerReconcile(req, res, next).catch(next);
 });
 
+// Redash maintenance: backfill existing Redash accounts + memberships into Hermes
+// (super admin only). Rarely used; surfaced in a collapsed disclosure in the UI.
+router.post('/import-redash-memberships', authenticateToken, requireRole(['hermes_super_admin']), (req: Request, res: Response, next: NextFunction) => {
+  const controller = new AdminController(req, res, next);
+  controller.importRedashMemberships(req, res, next).catch(next);
+});
+
+
 // ── Admin Management (three-tier: super → platform → group) ─────────────────
 // All routes are authenticated; fine-grained tier checks live in the controller
 // (the tiers don't map cleanly onto a single blanket role, so requireRole can't

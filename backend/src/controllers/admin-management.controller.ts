@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import BaseController from './base.controller';
 import prisma from '../config/prisma';
 import provisioningRegistry from '../services/provisioning.registry';
+import type { ReconcileMembersResult } from '../services/provisioner.interface';
 import keycloakAdminService from '../services/keycloak-admin.service';
 import accessWorkflowService from '../services/access-workflow.service';
 import {
@@ -343,6 +344,10 @@ export class AdminManagementController extends BaseController {
       //  - otherwise auto-create one via the adapter (named after the group) and
       //    roll it back if the Hermes insert then fails.
       const adapter = provisioningRegistry.get(platform);
+      // Validate a pasted id against the platform's format before doing any work, so a
+      // malformed value (e.g. a ZooKeeper path missing its leading "/") is rejected up
+      // front instead of being saved and then breaking every future provision.
+      if (data.externalGroupId) adapter.validateExternalGroupId?.(data.externalGroupId);
       let externalGroupId = data.externalGroupId ?? null;
       let autoCreatedExternalGroupId: string | null = null;
       if (!externalGroupId && adapter.createExternalGroup) {
@@ -404,16 +409,113 @@ export class AdminManagementController extends BaseController {
     }
   }
 
+  /**
+   * For each of `emails`, collect the external ids of their OTHER active grants on
+   * `platform` (any group except `excludeGroupId`). Handed to `reconcileMembers` as
+   * each member's `retainExternalGroupIds` so a multi-target adapter (ZooKeeper) never
+   * strips a path the member still legitimately holds through a different group/level.
+   * One query for the whole member set; returns email → external-id list.
+   */
+  private async collectMemberRetainExternalIds(
+    emails: string[],
+    platform: string,
+    excludeGroupId: string,
+  ): Promise<Map<string, string[]>> {
+    return accessWorkflowService.collectRetainedExternalGroupIds({
+      keys: emails,
+      platform,
+      keyType: 'email',
+      excludeGroupId,
+    });
+  }
+
+  /**
+   * Shared by updateGroup / updateGroupLevel: after a group's or level's `externalGroupId`
+   * changes, reconcile its existing members (`memberWhere`) onto the new mapping via the
+   * platform adapter, then write the GROUP_PATHS_RECONCILED audit row. Returns the
+   * reconciliation summary, or null when the adapter can't reconcile (single-target
+   * platforms leave members in place). Best-effort: the new config is already persisted as
+   * the source of truth, so per-member failures come back inside the summary, not thrown.
+   */
+  private async reconcileExternalGroupChange(opts: {
+    groupId: string;
+    platform: string;
+    memberWhere: { groupId: string; levelId: string | null };
+    oldExternalGroupId: string | null;
+    newExternalGroupId: string | null;
+    auditExtra?: Record<string, unknown>;
+  }): Promise<ReconcileMembersResult | null> {
+    const adapter = provisioningRegistry.tryGet(opts.platform);
+
+    let reconciliation: ReconcileMembersResult | null = null;
+    if (adapter?.reconcileMembers) {
+      const members = await prisma.userAccess.findMany({
+        where: { ...opts.memberWhere, isActive: true, externalUserId: { not: null } },
+        select: { userEmail: true, userName: true, externalUserId: true },
+      });
+      const retainByEmail = await this.collectMemberRetainExternalIds(
+        members.map((m) => m.userEmail),
+        opts.platform,
+        opts.groupId,
+      );
+      reconciliation = await adapter.reconcileMembers({
+        oldExternalGroupId: opts.oldExternalGroupId,
+        newExternalGroupId: opts.newExternalGroupId,
+        members: members.map((m) => ({
+          email: m.userEmail,
+          name: m.userName,
+          externalUserId: m.externalUserId!,
+          retainExternalGroupIds: retainByEmail.get(m.userEmail) ?? [],
+        })),
+      });
+    }
+
+    await prisma.auditEntry.create({
+      data: {
+        action: 'GROUP_PATHS_RECONCILED',
+        performerId: this.user!.id,
+        performerName: this.user!.username,
+        groupId: opts.groupId,
+        details: {
+          platform: opts.platform,
+          oldExternalGroupId: opts.oldExternalGroupId,
+          newExternalGroupId: opts.newExternalGroupId,
+          ...(opts.auditExtra ?? {}),
+          ...(reconciliation ?? {}),
+        },
+      },
+    });
+
+    return reconciliation;
+  }
+
   // PUT /api/admin/groups/:groupId — edit presentational fields + archive/restore.
   async updateGroup(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       if (!this.getUserId()) return;
       const groupId = String(req.params.groupId);
-      await this.authorizeGroupManagement(groupId);
+      const existing = await this.authorizeGroupManagement(groupId);
 
       const validated = this.validateWithZod(updateGroupSchema, this.req.body);
       if (!validated.success) return;
       const data = validated.data;
+
+      // externalGroupId is editable ONLY for adapters that can reconcile existing
+      // members onto the new mapping (ZooKeeper's multi-path list). For a single-group
+      // platform (Redash/AWS) it stays immutable — swapping it would orphan members.
+      const adapter = provisioningRegistry.tryGet(existing.platform);
+      const externalGroupIdChanged =
+        data.externalGroupId !== undefined && data.externalGroupId !== existing.externalGroupId;
+      if (externalGroupIdChanged && !adapter?.reconcileMembers) {
+        throw new ValidationError(
+          `The external group mapping is immutable for the "${existing.platform}" platform.`,
+        );
+      }
+      // Validate the new id against the platform's format before persisting, so a
+      // malformed value can't be saved (and then break reconciliation + every provision).
+      if (externalGroupIdChanged && data.externalGroupId) {
+        adapter?.validateExternalGroupId?.(data.externalGroupId);
+      }
 
       let group;
       try {
@@ -426,6 +528,7 @@ export class AdminManagementController extends BaseController {
             ...(data.color !== undefined ? { color: data.color } : {}),
             ...(data.tables !== undefined ? { tables: data.tables } : {}),
             ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
+            ...(externalGroupIdChanged ? { externalGroupId: data.externalGroupId } : {}),
           },
         });
       } catch (err: any) {
@@ -445,7 +548,21 @@ export class AdminManagementController extends BaseController {
         },
       });
 
-      this.sendResponse(group, 'Group updated successfully');
+      // If the external mapping changed, reconcile existing LEVEL-LESS members onto it
+      // (members holding a level are bound to that level's own externalGroupId, not the
+      // group's) + record GROUP_PATHS_RECONCILED — both via the shared helper.
+      let reconciliation: ReconcileMembersResult | null = null;
+      if (externalGroupIdChanged) {
+        reconciliation = await this.reconcileExternalGroupChange({
+          groupId,
+          platform: group.platform,
+          memberWhere: { groupId, levelId: null },
+          oldExternalGroupId: existing.externalGroupId,
+          newExternalGroupId: group.externalGroupId,
+        });
+      }
+
+      this.sendResponse({ ...group, reconciliation }, 'Group updated successfully');
     } catch (error) {
       this.handleError(error, 'Failed to update group');
     }
@@ -462,6 +579,64 @@ export class AdminManagementController extends BaseController {
       if (!this.getUserId()) return;
       const groupId = String(req.params.groupId);
       const group = await this.authorizeGroupManagement(groupId);
+      const force = req.query.force === 'true' || (req.body as { force?: boolean })?.force === true;
+
+      // Force delete: permanently remove the group AND its historical access/request
+      // rows, even when it has history — but ONLY when nobody currently holds active
+      // access, so we never strand a live platform grant with no Hermes record. Audit
+      // entries survive (groupId there is a plain column, not an FK). GroupLevel and
+      // GroupAdmin are removed by the group's onDelete: Cascade.
+      if (force) {
+        // Run active count check inside the transaction to prevent races where a user access row
+        // is created between checking the count and performing the deletes.
+        await prisma.$transaction(async (tx) => {
+          const activeCount = await tx.userAccess.count({ where: { groupId, isActive: true } });
+          if (activeCount > 0) {
+            throw new ConflictError(
+              `Group has ${activeCount} active member(s). Revoke their access (or wait for it to expire) before deleting permanently.`,
+            );
+          }
+          // Order matters: clear rows that FK-reference the group/levels (Restrict)
+          // before deleting the group, which then cascades its levels and admins.
+          await tx.userAccess.deleteMany({ where: { groupId } });
+          await tx.accessRequest.deleteMany({ where: { groupId } });
+          await tx.group.delete({ where: { id: groupId } });
+        });
+
+        // Best-effort removal of the backing platform group — no active member is
+        // affected. Don't fail the delete on a cleanup error.
+        if (group.externalGroupId) {
+          const adapter = provisioningRegistry.tryGet(group.platform);
+          if (adapter?.deleteExternalGroup) {
+            try {
+              await adapter.deleteExternalGroup(group.externalGroupId);
+            } catch (cleanupErr: any) {
+              logger.warn(
+                { externalGroupId: group.externalGroupId, error: cleanupErr.message },
+                'Group force-deleted but failed to remove its backing platform group',
+              );
+            }
+          }
+        }
+
+        await prisma.auditEntry.create({
+          data: {
+            action: 'GROUP_DELETED',
+            performerId: this.user!.id,
+            performerName: this.user!.username,
+            groupId,
+            details: {
+              name: group.name,
+              slug: group.slug,
+              platform: group.platform,
+              externalGroupId: group.externalGroupId,
+              forced: true,
+            },
+          },
+        });
+        this.sendResponse({ id: groupId, deleted: true }, 'Group permanently deleted, including its history.');
+        return;
+      }
 
       let [requestCount, accessCount] = await Promise.all([
         prisma.accessRequest.count({ where: { groupId } }),
@@ -493,9 +668,7 @@ export class AdminManagementController extends BaseController {
         // Best-effort removal of the backing platform group — no one is affected
         // (the group had no members or requests). Don't fail the delete on cleanup error.
         if (group.externalGroupId) {
-          const adapter = provisioningRegistry.has(group.platform)
-            ? provisioningRegistry.get(group.platform)
-            : null;
+          const adapter = provisioningRegistry.tryGet(group.platform);
           if (adapter?.deleteExternalGroup) {
             try {
               await adapter.deleteExternalGroup(group.externalGroupId);
@@ -966,9 +1139,9 @@ export class AdminManagementController extends BaseController {
       //    then sets that group's data-source permissions on the platform itself.
       let externalGroupId = data.externalGroupId ?? null;
       let autoCreatedExternalGroupId: string | null = null;
-      const adapter = provisioningRegistry.has(group.platform)
-        ? provisioningRegistry.get(group.platform)
-        : null;
+      const adapter = provisioningRegistry.tryGet(group.platform);
+      // Reject a malformed pasted id (e.g. a bad ZooKeeper path) before persisting.
+      if (data.externalGroupId) adapter?.validateExternalGroupId?.(data.externalGroupId);
       if (!externalGroupId && adapter?.createExternalGroup) {
         const created = await adapter.createExternalGroup(`${group.name} — ${data.name}`);
         externalGroupId = created.externalGroupId;
@@ -1047,6 +1220,16 @@ export class AdminManagementController extends BaseController {
       if (!validated.success) return;
       const data = validated.data;
 
+      // Validate a changed externalGroupId against the platform's format BEFORE persisting,
+      // so a malformed paste can't be saved and then break reconciliation + every future
+      // provision of this level.
+      if (data.externalGroupId !== undefined && data.externalGroupId !== existing.externalGroupId) {
+        const validateAdapter = provisioningRegistry.has(group.platform)
+          ? provisioningRegistry.get(group.platform)
+          : null;
+        if (data.externalGroupId) validateAdapter?.validateExternalGroupId?.(data.externalGroupId);
+      }
+
       let level;
       try {
         level = await prisma.groupLevel.update({
@@ -1068,6 +1251,9 @@ export class AdminManagementController extends BaseController {
         throw err;
       }
 
+      const externalGroupIdChanged =
+        data.externalGroupId !== undefined && data.externalGroupId !== existing.externalGroupId;
+
       await prisma.auditEntry.create({
         data: {
           action: 'GROUP_LEVEL_UPDATED',
@@ -1079,12 +1265,28 @@ export class AdminManagementController extends BaseController {
             slug: level.slug,
             platform: group.platform,
             changed: Object.keys(data),
-            externalGroupIdChanged: data.externalGroupId !== undefined && data.externalGroupId !== existing.externalGroupId,
+            externalGroupIdChanged,
           },
         },
       });
 
-      this.sendResponse(level, 'Level updated successfully');
+      // Reconcile this level's existing members onto the new mapping (ZooKeeper's
+      // multi-path list) + record GROUP_PATHS_RECONCILED via the shared helper. Adapters
+      // without the hook (Redash/AWS) leave members in place, matching the existing
+      // "editing a level doesn't migrate members" rule.
+      let reconciliation: ReconcileMembersResult | null = null;
+      if (externalGroupIdChanged) {
+        reconciliation = await this.reconcileExternalGroupChange({
+          groupId,
+          platform: group.platform,
+          memberWhere: { groupId, levelId },
+          oldExternalGroupId: existing.externalGroupId,
+          newExternalGroupId: level.externalGroupId,
+          auditExtra: { levelId: level.id },
+        });
+      }
+
+      this.sendResponse({ ...level, reconciliation }, 'Level updated successfully');
     } catch (error) {
       this.handleError(error, 'Failed to update level');
     }

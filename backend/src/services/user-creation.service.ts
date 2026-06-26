@@ -365,7 +365,7 @@ export class UserCreationService {
       // link in metadata; if so the user must finish setup, otherwise the account
       // is ready immediately.
       const adapter = provisioningRegistry.get(row.platform);
-      const inviteResult = await adapter.inviteUser(row.userEmail, row.userName);
+      const inviteResult = await adapter.inviteUser(row.userEmail, row.userName, row.userId);
       const externalUserId = inviteResult.externalUserId;
       const inviteLink = (inviteResult.metadata?.inviteLink as string | undefined) ?? null;
 
@@ -407,6 +407,9 @@ export class UserCreationService {
             userEmail: completed.userEmail,
             externalUserId,
             platform: completed.platform,
+            // Per-completion data for the adapter's onboarding message (e.g. ZooKeeper's
+            // one-time digest credential). Not persisted; the bus logs only the event type.
+            onboardingDetails: inviteResult.metadata,
           },
           timestamp: new Date(),
         });

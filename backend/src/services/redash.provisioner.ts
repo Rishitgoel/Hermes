@@ -83,7 +83,7 @@ export class RedashProvisioner implements PlatformAdapter {
   }
 
   /** Look up whether a user exists on Redash, using the local cache. */
-  async checkUserStatus(email: string): Promise<PlatformUserStatus> {
+  async checkUserStatus(email: string, _userId?: string): Promise<PlatformUserStatus> {
     const cached = await prisma.platformExternalUser.findUnique({
       where: { platform_email: { platform: PLATFORM, email: email.toLowerCase() } },
     });
@@ -154,11 +154,13 @@ export class RedashProvisioner implements PlatformAdapter {
   }
 
   /**
-   * Redash's built-in groups ("default" — every user, "admin" — instance admins)
-   * must never surface as requestable Hermes groups.
+   * Nothing is reserved on Redash. The built-in groups ("default" — every user,
+   * "admin" — instance admins) are intentionally imported as ordinary Hermes
+   * groups so they show up in the sync; the admin archives them by hand rather
+   * than having the reconciler hide them automatically.
    */
-  isReservedExternalGroup(group: { externalId: string; name: string; type?: string | null }): boolean {
-    return group.type === 'builtin';
+  isReservedExternalGroup(_group: { externalId: string; name: string; type?: string | null }): boolean {
+    return false;
   }
 
   /** Onboarding nudge shown once a user's Redash account is fully set up. */

@@ -35,6 +35,7 @@ model Group {
   accessRequests   AccessRequest[]
   userAccesses     UserAccess[]
   levels           GroupLevel[]
+  zookeeperChangeRequests ZookeeperChangeRequest[]
 
   @@unique([platform, name])
   @@map("groups")
@@ -344,6 +345,59 @@ model PlatformExternalGroup {
 }
 
 // ══════════════════════════════════════════
+// ZOOKEEPER CONFIGURATION CHANGE REQUESTS
+//
+// Approval-only config management for ZooKeeper: a user stages draft changes to
+// znode data (under paths their grant covers, with write perms) and submits them
+// as a request; an admin approves; only then are they applied via Hermes' admin
+// connection. Apply is synchronous on approval, so there is no resting APPROVED
+// state — the transient is APPLYING, terminals are APPLIED / APPLY_FAILED / REJECTED.
+// ══════════════════════════════════════════
+
+model ZookeeperChangeRequest {
+  id             String           @id @default(uuid())
+  requesterId    String           @map("requester_id")
+  requesterName  String           @map("requester_name")
+  requesterEmail String           @map("requester_email")
+  // Primary group (first of groupIds) — kept for the FK/relation + simple display.
+  groupId        String?          @map("group_id")
+  // Every group whose paths this request touches. Changes can span several of the
+  // user's groups; the request is routed to (and reviewable by) the admins of all of
+  // them. Used for notify + the reviewer's pending-list filter (hasSome).
+  groupIds       String[]         @map("group_ids")
+  status         ZkChangeStatus   @default(PENDING)
+
+  // Array of changes, each: { path, action, oldValue, newValue, groupId, groupName,
+  //   decision?: "APPROVED"|"REJECTED", applied?, error? }
+  // action: "SET" | "CREATE" | "DELETE" | "CLEAR"
+  // Reviewers decide each change independently; applyApproved writes the approved ones
+  // and marks the rest rejected. `applied`/`error`/`decision` are written back on review.
+  changes        Json
+
+  justification  String?
+
+  // Review fields (same pattern as AccessRequest)
+  reviewerId     String?          @map("reviewer_id")
+  reviewerName   String?          @map("reviewer_name")
+  reviewNote     String?          @map("review_note")
+  reviewedAt     DateTime?        @map("reviewed_at")
+
+  // Execution result
+  applyError     String?          @map("apply_error")   // first/summary error when APPLY_FAILED
+  appliedAt      DateTime?        @map("applied_at")
+
+  createdAt      DateTime         @default(now()) @map("created_at")
+  updatedAt      DateTime         @updatedAt @map("updated_at")
+
+  group          Group?           @relation(fields: [groupId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@index([requesterId])
+  @@index([groupId])   // admin listing filters by the groups they can review
+  @@map("zookeeper_change_requests")
+}
+
+// ══════════════════════════════════════════
 // ENUMS
 // ══════════════════════════════════════════
 
@@ -377,4 +431,13 @@ enum UserCreationStatus {
   REJECTED          // Admin rejected; cascade-rejects the user's pending group requests
   AWAITING_SETUP    // Redash invite sent; waiting for the user to click the link and complete signup
   COMPLETED         // User exists on Redash; externalUserId recorded; any WAITING_FOR_SETUP group requests auto-provisioned
+}
+
+enum ZkChangeStatus {
+  PENDING            // Submitted; awaiting admin review
+  APPLYING           // Review accepted; apply is in flight (transient)
+  APPLIED            // Every change approved and applied (terminal)
+  PARTIALLY_APPLIED  // Some changes approved+applied, others rejected (terminal)
+  APPLY_FAILED       // One or more APPROVED changes failed to apply (retryable)
+  REJECTED           // Every change rejected (terminal)
 }

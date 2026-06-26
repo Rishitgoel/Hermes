@@ -362,10 +362,10 @@ export class AccessWorkflowService {
 
   /**
    * Persist a PENDING access request + its REQUEST_CREATED audit row, and notify
-   * admins. Shared by the first-time request flow (createRequest) and the gated
-   * (promotion) branch of a level change (changeLevel). Both produce an identical
-   * "awaiting admin review" request — the only difference upstream is the guard
-   * logic that decides whether a request is allowed.
+   * admins. Shared by the first-time request flow (createRequest) and renewals
+   * (requestRenewal). Both produce an identical "awaiting admin review" request —
+   * the only difference upstream is the guard logic that decides whether a request
+   * is allowed.
    */
   private async _persistPendingRequest(
     requester: { id: string; username: string; email: string },
@@ -436,8 +436,8 @@ export class AccessWorkflowService {
   /**
    * Persist a self-reviewed (instant) access request in PROVISIONING + its
    * REQUEST_CREATED audit row, returned with group+level included (ready for
-   * _provision, no re-fetch). Shared by the self-service demotion branch of
-   * changeLevel, adminSetMemberLevel, and adminAddMember — all create an
+   * _provision, no re-fetch). Shared by adminSetMemberLevel and adminAddMember —
+   * both create an
    * immediately-provisioned request whose reviewer is the performer; only the
    * copy/audit details differ. `level` is null for a level-less group's grant.
    */
@@ -450,15 +450,8 @@ export class AccessWorkflowService {
     duration: AccessDuration;
     reviewNote: string;
     auditDetails: Record<string, unknown>;
-    /**
-     * When set (null = permanent), use this exact expiry instead of recomputing a
-     * fresh window from `duration`. Self-service demotion passes the current
-     * grant's expiresAt so demoting can't reset (extend) the remaining time.
-     */
-    expiresAtOverride?: Date | null;
   }): Promise<AccessRequestWithGroup> {
-    const expiresAt =
-      opts.expiresAtOverride !== undefined ? opts.expiresAtOverride : this.calculateExpiry(opts.duration);
+    const expiresAt = this.calculateExpiry(opts.duration);
     const created = await prisma.accessRequest.create({
       data: {
         groupId: opts.groupId,
@@ -498,120 +491,6 @@ export class AccessWorkflowService {
     });
 
     return created;
-  }
-
-  /**
-   * Change the level a user already holds in a group (promote or demote). The user
-   * keeps exactly one active grant per group — this resolves to a swap, never an
-   * extra grant.
-   *
-   * Direction is decided server-side by level `rank` (higher = more senior):
-   *   - demotion  (target rank < current rank): self-service — provisioned
-   *     immediately. Lowering your own access carries no escalation risk.
-   *   - promotion / lateral (target rank ≥ current, or coming from a level-less
-   *     grant): goes through the normal request → admin approval flow. The current
-   *     level stays active until an admin approves; the swap happens at provision.
-   *
-   * Returns `kind: 'instant'` with the provisioned request, or `kind: 'request'`
-   * with the new PENDING request, so the caller can tell the user what happened.
-   */
-  async changeLevel(
-    requester: { id: string; username: string; email: string },
-    groupId: string,
-    levelId: string,
-    justification: string,
-    duration: AccessDuration,
-  ): Promise<{ kind: 'instant' | 'request'; request: AccessRequest }> {
-    const group = await prisma.group.findUnique({ where: { id: groupId } });
-    if (!group) throw new NotFoundError('Group not found');
-
-    const activeLevels = await prisma.groupLevel.findMany({
-      where: { groupId, isActive: true },
-    });
-    if (activeLevels.length === 0) {
-      throw new ValidationError('This group has no levels to switch between.');
-    }
-
-    const targetLevel = activeLevels.find((l) => l.id === levelId) ?? null;
-    if (!targetLevel) throw new ValidationError('Invalid or inactive level for this group.');
-    // A level must be backed by its own external group, same rule as createRequest.
-    if (!targetLevel.externalGroupId) {
-      throw new ValidationError('This level is not fully configured yet (no backing platform group). Please contact an admin.');
-    }
-
-    // The user must already hold active access to this group — otherwise there is
-    // nothing to change; they should request access the normal way first.
-    const currentAccess = await prisma.userAccess.findFirst({
-      where: { userId: requester.id, groupId, isActive: true },
-      include: { level: true },
-    });
-    if (!currentAccess) {
-      throw new ConflictError('You do not have active access to this group, so there is no level to change. Request access first.');
-    }
-    if (currentAccess.levelId === targetLevel.id) {
-      throw new ConflictError('You already hold this level for this group.');
-    }
-
-    // One open request per group — block if a previous request is still in flight.
-    const pendingRequest = await prisma.accessRequest.findFirst({
-      where: {
-        requesterId: requester.id,
-        groupId,
-        status: { in: [RequestStatus.PENDING, RequestStatus.WAITING_FOR_SETUP] },
-      },
-    });
-    if (pendingRequest) {
-      throw new ConflictError('You already have a pending request for this group. Wait for it to be reviewed before changing your level.');
-    }
-
-    // A move to a strictly lower rank is a demotion (instant). A level-less current
-    // grant has no rank to compare against, so it is treated as a promotion (gated).
-    const currentRank = currentAccess.level?.rank ?? Number.NEGATIVE_INFINITY;
-    const isDemotion = currentAccess.levelId != null && targetLevel.rank < currentRank;
-
-    if (!isDemotion) {
-      // Promotion / lateral move → gated request, current level kept until approved.
-      const request = await this._persistPendingRequest(requester, group, targetLevel, justification, duration);
-      return { kind: 'request', request };
-    }
-
-    // Demotion → provision immediately. Carry the CURRENT grant's duration label
-    // AND its exact expiresAt over, ignoring the client-supplied duration: a
-    // demotion is self-service precisely because lowering your level carries no
-    // escalation risk, but recomputing a fresh window from `duration` would let a
-    // user extend their own remaining time (e.g. a 3-month grant expiring tomorrow
-    // → demote → fresh 3 months) with no review. The expiry must not move at all.
-    let demotionDuration: AccessDuration = AccessDuration.PERMANENT;
-    if (currentAccess.accessRequestId) {
-      const orig = await prisma.accessRequest.findUnique({
-        where: { id: currentAccess.accessRequestId },
-        select: { duration: true },
-      });
-      if (orig) demotionDuration = orig.duration;
-    }
-
-    const fullRequest = await this._persistSelfReviewedRequest({
-      performer: { id: requester.id, username: requester.username },
-      target: { id: requester.id, name: requester.username, email: requester.email },
-      groupId,
-      level: targetLevel,
-      justification,
-      duration: demotionDuration,
-      expiresAtOverride: currentAccess.expiresAt,
-      reviewNote: 'Self-service demotion (applied immediately)',
-      auditDetails: {
-        selfDemotion: true,
-        fromLevelId: currentAccess.levelId,
-        fromLevelName: currentAccess.level?.name ?? null,
-      },
-    });
-    const provisioned = await this._provision(
-      fullRequest,
-      { id: requester.id, name: requester.username },
-      undefined,
-      { expiresAtOverride: currentAccess.expiresAt },
-    );
-    return { kind: 'instant', request: provisioned };
   }
 
   /**
@@ -986,19 +865,82 @@ export class AccessWorkflowService {
     return group.platform.toLowerCase();
   }
 
+  /**
+   * The external-group mapping of every OTHER active grant `userId` holds on `platform`
+   * (excluding the grant `excludeUserAccessId` being removed), newline-joined. Passed as
+   * `retainExternalGroupId` to a revoke/expire deprovision so a multi-target adapter
+   * (ZooKeeper, whose externalGroupId is a list of znode paths) does NOT strip a path the
+   * user still legitimately accesses through a different group. Single-target adapters
+   * (Redash/AWS) ignore the hint, and their group ids never overlap anyway, so it's a
+   * safe no-op there. Returns undefined when there are no other grants.
+   */
+  async collectRetainedExternalGroupIds(args: {
+    keys: string[];
+    platform: string;
+    keyType: 'email' | 'userId';
+    excludeGroupId?: string;
+    excludeUserAccessIds?: string[];
+  }): Promise<Map<string, string[]>> {
+    const { keys, platform, keyType, excludeGroupId, excludeUserAccessIds } = args;
+    const keyField = keyType === 'email' ? 'userEmail' : 'userId';
+    const others = await prisma.userAccess.findMany({
+      where: {
+        [keyField]: { in: keys },
+        isActive: true,
+        group: { platform },
+        ...(excludeGroupId ? { groupId: { not: excludeGroupId } } : {}),
+        ...(excludeUserAccessIds ? { id: { notIn: excludeUserAccessIds } } : {}),
+      },
+      include: { group: true, level: true },
+    });
+    const byKey = new Map<string, string[]>();
+    for (const k of keys) {
+      byKey.set(k, []);
+    }
+    for (const a of others) {
+      const externalId = a.level?.externalGroupId ?? a.group.externalGroupId;
+      if (!externalId) continue;
+      const key = keyType === 'email' ? a.userEmail : a.userId;
+      const list = byKey.get(key) ?? [];
+      list.push(externalId);
+      byKey.set(key, list);
+    }
+    return byKey;
+  }
+
+  private async collectRetainedExternalGroupId(
+    userId: string,
+    platform: string,
+    excludeUserAccessId: string,
+  ): Promise<string | undefined> {
+    const map = await this.collectRetainedExternalGroupIds({
+      keys: [userId],
+      platform,
+      keyType: 'userId',
+      excludeUserAccessIds: [excludeUserAccessId],
+    });
+    const ids = map.get(userId) ?? [];
+    return ids.length ? ids.join('\n') : undefined;
+  }
+
+  private async deprovisionWithRetain(
+    userId: string,
+    platform: string,
+    userAccessId: string,
+    externalUserId: string,
+    externalGroupId: string,
+  ): Promise<void> {
+    const provisioner = provisioningRegistry.get(platform);
+    const retainExternalGroupId = provisioner.reconcileMembers
+      ? await this.collectRetainedExternalGroupId(userId, platform, userAccessId)
+      : undefined;
+    await provisioner.deprovision({ externalUserId, externalGroupId, retainExternalGroupId });
+  }
+
   private async _provision(
     request: AccessRequestWithGroup,
     performer: { id: string; name: string },
     note?: string,
-    opts?: {
-      /**
-       * When set (null = permanent), grant exactly this expiry instead of
-       * recomputing a fresh window from the request's duration. Used by the
-       * self-service demotion path, which must preserve the current grant's
-       * remaining time (recomputing would let a user extend their own expiry).
-       */
-      expiresAtOverride?: Date | null;
-    },
   ) {
     logger.info(`Starting provisioning for request ${request.id}...`);
 
@@ -1032,6 +974,7 @@ export class AccessWorkflowService {
       const result = await provisioner.provision({
         email: request.requesterEmail,
         name: request.requesterName,
+        userId: request.requesterId,
         externalGroupId,
         metadata: { groupSlug: request.group.slug, levelSlug: request.level?.slug ?? null },
       });
@@ -1040,11 +983,9 @@ export class AccessWorkflowService {
 
       // Recompute expiry at provision time using the request's duration. Using the
       // value stored on AccessRequest (computed at request-create time) means a
-      // 1-day request approved 3 days later would expire immediately. The demotion
-      // path overrides this: it carries the current grant's expiry over unchanged.
+      // 1-day request approved 3 days later would expire immediately.
       const grantedAt = new Date();
-      const expiresAt =
-        opts?.expiresAtOverride !== undefined ? opts.expiresAtOverride : this.calculateExpiry(request.duration);
+      const expiresAt = this.calculateExpiry(request.duration);
 
       // A pre-existing active grant created by a DIFFERENT (older) request means this
       // request is meant to replace it → swap (atomically deactivate the old grant +
@@ -1304,14 +1245,32 @@ export class AccessWorkflowService {
     });
 
     // Post-commit, best-effort (never rolls back the committed swap): remove the user
-    // from the OLD level's external group on the platform. Skip if both levels
-    // resolve to the same external group (that would undo the provision we just did).
+    // from the OLD level's external group on the platform. `retainExternalGroupId`
+    // tells a multi-target adapter (ZooKeeper) to KEEP any target the NEW mapping still
+    // grants, so swapping into a level that shares paths never strips a shared path
+    // (the new provision above already re-applied its perms). The old===new guard still
+    // short-circuits a same-level renewal for single-target adapters (which ignore the
+    // hint and would otherwise drop the one shared group).
     let oldDeprovisionError: string | null = null;
     if (existingGrant.externalUserId && oldExternalGroupId && oldExternalGroupId !== newExternalGroupId) {
+      // Keep every target the user still legitimately holds after the swap: the NEW
+      // mapping (this group's new level) AND every OTHER active grant on this platform —
+      // so a shared ZooKeeper znode path held via a DIFFERENT group is not stripped.
+      // (Mirrors revoke/expire; a no-op for single-target adapters, which ignore the hint.)
+      // Without the cross-group union, swapping a level in one group would silently revoke
+      // a path another group still grants. We exclude the just-created grant from the
+      // query (it's the new mapping, added explicitly) and the old grant is already
+      // deactivated above, so the query returns only the user's OTHER groups. Skip the
+      // query for single-target adapters (no reconcileMembers) — they ignore the hint.
+      const crossGroupRetain = provisioner.reconcileMembers
+        ? await this.collectRetainedExternalGroupId(request.requesterId, platform, newAccess.id)
+        : undefined;
+      const retainExternalGroupId = [newExternalGroupId, crossGroupRetain].filter(Boolean).join('\n');
       try {
         await provisioner.deprovision({
           externalUserId: existingGrant.externalUserId,
           externalGroupId: oldExternalGroupId,
+          retainExternalGroupId,
         });
       } catch (err: any) {
         oldDeprovisionError = err.message;
@@ -1582,19 +1541,7 @@ export class AccessWorkflowService {
     const externalGroupId = access.level?.externalGroupId ?? access.group.externalGroupId;
     const platform = this.requirePlatform(access.group);
 
-    if (externalUserId && externalGroupId) {
-      try {
-        const provisioner = provisioningRegistry.get(platform);
-        await provisioner.deprovision({ externalUserId, externalGroupId });
-      } catch (err: any) {
-        logger.error(`Failed to deprovision user from platform ${platform} during revocation of ${userAccessId}:`, err.message);
-        if (!force) {
-          throw err;
-        }
-      }
-    }
-
-    // 2. Disable UserAccess entry
+    // 1. Disable UserAccess entry FIRST
     const updatedAccess = await prisma.userAccess.update({
       where: { id: userAccessId },
       data: {
@@ -1602,6 +1549,25 @@ export class AccessWorkflowService {
         revokedAt: new Date(),
       },
     });
+
+    if (externalUserId && externalGroupId) {
+      try {
+        await this.deprovisionWithRetain(access.userId, platform, userAccessId, externalUserId, externalGroupId);
+      } catch (err: any) {
+        logger.error(`Failed to deprovision user from platform ${platform} during revocation of ${userAccessId}:`, err.message);
+        if (!force) {
+          // Revert deactivation on failure
+          await prisma.userAccess.update({
+            where: { id: userAccessId },
+            data: {
+              isActive: true,
+              revokedAt: null,
+            },
+          });
+          throw err;
+        }
+      }
+    }
 
     // 3. Update Request status to REVOKED
     if (access.accessRequestId) {
@@ -1655,16 +1621,22 @@ export class AccessWorkflowService {
 
     logger.info(`Expiring temporary access grant ${userAccessId} for user ${access.userName} in group ${access.group.name}...`);
 
-    // 1. Remove from platform Group — resolve via the granted level (falls back to
-    // the group for legacy/level-less grants), matching _provision's target.
     const externalUserId = access.externalUserId;
     const externalGroupId = access.level?.externalGroupId ?? access.group.externalGroupId;
     const platform = this.requirePlatform(access.group);
 
+    // 1. Disable UserAccess entry FIRST
+    await prisma.userAccess.update({
+      where: { id: userAccessId },
+      data: {
+        isActive: false,
+        revokedAt: new Date(),
+      },
+    });
+
     if (externalUserId && externalGroupId) {
       try {
-        const provisioner = provisioningRegistry.get(platform);
-        await provisioner.deprovision({ externalUserId, externalGroupId });
+        await this.deprovisionWithRetain(access.userId, platform, userAccessId, externalUserId, externalGroupId);
       } catch (err: any) {
         const attempts = access.expiryAttempts + 1;
         logger.error(
@@ -1673,10 +1645,15 @@ export class AccessWorkflowService {
         );
 
         if (attempts < MAX_EXPIRY_ATTEMPTS) {
-          // Record the failure; the grant stays active so the next cron run retries.
+          // Revert deactivation and record the failure; the grant stays active so the next cron run retries.
           await prisma.userAccess.update({
             where: { id: userAccessId },
-            data: { expiryAttempts: attempts, lastExpiryError: err.message },
+            data: {
+              isActive: true,
+              revokedAt: null,
+              expiryAttempts: attempts,
+              lastExpiryError: err.message,
+            },
           });
           throw err; // surfaced per-grant by the scheduler's allSettled logging
         }
@@ -1689,15 +1666,6 @@ export class AccessWorkflowService {
         return;
       }
     }
-
-    // 2. Disable UserAccess entry
-    await prisma.userAccess.update({
-      where: { id: userAccessId },
-      data: {
-        isActive: false,
-        revokedAt: new Date(),
-      },
-    });
 
     // 3. Update request status to EXPIRED
     if (access.accessRequestId) {

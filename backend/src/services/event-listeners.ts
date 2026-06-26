@@ -1,5 +1,6 @@
 import eventBus from './event-bus';
 import notificationService from './notification.service';
+import { ensureDefaultGroupMembership } from './default-membership.service';
 import logger from '../utils/logger';
 
 export function registerEventListeners(): void {
@@ -74,7 +75,8 @@ export function registerEventListeners(): void {
     }
   });
 
-  // Group access request approved but waiting for the user to finish Redash setup.
+  // Group access request approved but waiting for the user to finish platform setup
+  // (fires for any platform whose invite needs a setup step — e.g. Redash).
   eventBus.on('access.queued-for-setup', async (event) => {
     try {
       const { requesterId, groupName, reviewerName, platform } = event.payload as any;
@@ -114,10 +116,42 @@ export function registerEventListeners(): void {
 
   eventBus.on('user-creation.completed', async (event) => {
     try {
-      const { userId, userEmail, platform } = event.payload as any;
-      await notificationService.notifyUserCreationCompleted(userId, userEmail, platform);
+      const { userId, userEmail, platform, onboardingDetails } = event.payload as any;
+      await notificationService.notifyUserCreationCompleted(userId, userEmail, platform, onboardingDetails);
     } catch (err: any) {
       logger.error('Failed to notify user-creation.completed event:', err.message);
+    }
+  });
+
+  // Mirror the platform's automatic built-in "default" group membership into Hermes
+  // when an account is created, so newly-created users stay uniform with the users
+  // backfilled by the membership import. Separate listener so a grant failure never
+  // blocks the completion notification (and vice versa). No-op off Redash.
+  eventBus.on('user-creation.completed', async (event) => {
+    try {
+      const { userId, userName, userEmail, externalUserId, platform } = event.payload as any;
+      await ensureDefaultGroupMembership(platform, { userId, userName, userEmail, externalUserId });
+    } catch (err: any) {
+      logger.error('Failed to grant default group membership on user-creation.completed:', err.message);
+    }
+  });
+
+  // ZooKeeper config change lifecycle
+  eventBus.on('zk-change.submitted', async (event) => {
+    try {
+      const { requestId, groupIds, groupNames, requesterName, justification, changeCount } = event.payload as any;
+      await notificationService.notifyZkChangeRequestCreated(requestId, groupIds, groupNames, requesterName, justification, changeCount);
+    } catch (err: any) {
+      logger.error('Failed to notify zk-change.submitted event:', err.message);
+    }
+  });
+
+  eventBus.on('zk-change.reviewed', async (event) => {
+    try {
+      const { requesterId, requesterEmail, groupNames, reviewerName, note, approved, rejected, status } = event.payload as any;
+      await notificationService.notifyZkChangeRequestReviewed(requesterId, requesterEmail, groupNames, status, reviewerName, note, approved, rejected);
+    } catch (err: any) {
+      logger.error('Failed to notify zk-change.reviewed event:', err.message);
     }
   });
 

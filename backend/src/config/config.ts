@@ -139,6 +139,28 @@ export const config = {
     },
   },
 
+  zookeeper: {
+    // The `zookeeper` provisioning adapter. Access is per-znode ACLs (digest scheme):
+    // a Hermes group is a znode path, a level is "<path>#<perms>", and a user's
+    // identity is a minted digest credential. Lazy getters (see keycloak/redash
+    // notes): connectString/adminAuth may arrive from AWS Secrets Manager after import.
+    //
+    // The ensemble connect string, e.g. "zk-0:2181,zk-1:2181". Unset locally ⇒ sim.
+    get connectString() { return process.env.ZOOKEEPER_CONNECT_STRING || ''; },
+    // Root znode path Hermes creates its backing group nodes under.
+    get rootPath() { return process.env.ZOOKEEPER_ROOT_PATH || '/hermes'; },
+    // The super-digest "user:password" Hermes authenticates as to setACL on the
+    // target znodes (needs ADMIN there). Secret-backed — must stay a lazy getter.
+    get adminAuth() { return process.env.ZOOKEEPER_ADMIN_AUTH; },
+    // Simulate (in-process mock, no real ZooKeeper) when explicitly requested, or
+    // whenever no connect string is configured (so a half-configured env can never
+    // accidentally hit a real ensemble). INDEPENDENT of the other simulation flags.
+    // Going live needs ZOOKEEPER_SIMULATION=false + a connect string + a wired client.
+    get isSimulation() {
+      return process.env.ZOOKEEPER_SIMULATION === 'true' || !this.connectString;
+    },
+  },
+
   frontend: {
     url: process.env.FRONTEND_URL || 'http://localhost:5173',
     allowedOrigins: (process.env.ALLOWED_ORIGINS || 'http://localhost:5173,http://localhost:5174')

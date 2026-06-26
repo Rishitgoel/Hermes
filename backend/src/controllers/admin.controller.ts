@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import BaseController from './base.controller';
 import syncService from '../services/sync.service';
 import adminReconciliationService from '../services/admin-reconciliation.service';
+import { importRedashMemberships } from '../services/redash-import.service';
 import prisma from '../config/prisma';
 import { AuthorizationError } from '../utils/errors';
 import { isSuperAdmin } from '../utils/authz';
@@ -80,6 +81,53 @@ export class AdminController extends BaseController {
       );
     } catch (error) {
       this.handleError(error, 'Admin reconciliation failed');
+    }
+  }
+
+  // POST /api/admin/import-redash-memberships  body: { apply?: boolean }
+  // Maintenance tool (super admin only): backfill existing Redash accounts +
+  // memberships into Hermes so users keep access they already have. Dry-run unless
+  // apply === true. Idempotent. Surfaced in a collapsed disclosure in the UI.
+  async importRedashMemberships(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const userId = this.getUserId();
+      if (!userId) return;
+
+      if (!isSuperAdmin(this.user!)) {
+        throw new AuthorizationError('Only super admins can import Redash memberships');
+      }
+
+      const apply = req.body?.apply === true;
+      logger.info(
+        `Super admin ${this.user!.username} triggered Redash membership import${apply ? ' (APPLY)' : ' (dry-run)'}`,
+      );
+      const report = await importRedashMemberships({
+        apply,
+        performerId: userId,
+        performerName: this.user!.username,
+      });
+
+      // Only audit a real (apply) run — a dry-run writes nothing. Per-grant
+      // ACCESS_IMPORTED entries are written inside the service.
+      if (apply) {
+        await prisma.auditEntry.create({
+          data: {
+            action: 'REDASH_IMPORT_TRIGGERED',
+            performerId: userId,
+            performerName: this.user!.username,
+            details: report as object,
+          },
+        });
+      }
+
+      this.sendResponse(
+        report,
+        apply
+          ? 'Redash membership import completed'
+          : 'Redash membership import dry-run completed (no changes made)',
+      );
+    } catch (error) {
+      this.handleError(error, 'Redash membership import failed');
     }
   }
 }

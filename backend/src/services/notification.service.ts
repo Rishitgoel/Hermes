@@ -306,6 +306,97 @@ export class NotificationService {
     await this.emailAndDm(requesterEmail, email, dm);
   }
 
+  // ── ZooKeeper config change requests ────────────────────────────────────────────
+
+  /**
+   * A user proposed ZooKeeper config change(s) → notify the admins of EVERY involved group
+   * + the ZooKeeper platform admins (fall back to super admins). One request can span
+   * several groups; any involved admin can review it.
+   */
+  async notifyZkChangeRequestCreated(
+    requestId: string,
+    groupIds: string[],
+    groupNames: string[],
+    requesterName: string,
+    justification: string | null,
+    changeCount: number = 0,
+  ): Promise<void> {
+    const groupLabel = groupNames.join(', ') || 'ZooKeeper';
+    const slackMsg = `🔧 *Hermes — ZooKeeper Config Change*\n--------------------------\n*${escapeSlackText(requesterName)}* proposed ${changeCount} config change(s) for *${escapeSlackText(groupLabel)}*.${justification ? `\nReason: "${escapeSlackText(justification)}"` : ''}\n\n👉 Review in Hermes: ${config.frontend.url}/pending-approvals`;
+    await slackService.sendPing(slackMsg);
+
+    try {
+      const [groupAdmins, platformAdmins] = await Promise.all([
+        groupIds.length > 0
+          ? prisma.groupAdmin.findMany({ where: { groupId: { in: groupIds } } })
+          : Promise.resolve([] as { userId: string; userEmail: string }[]),
+        prisma.platformAdmin.findMany({ where: { platform: 'zookeeper' } }),
+      ]);
+
+      let recipients: AdminRecipient[] = [
+        ...groupAdmins.map((a) => ({ userId: a.userId, email: a.userEmail })),
+        ...platformAdmins.map((a) => ({ userId: a.userId, email: a.userEmail })),
+      ];
+      if (recipients.length === 0) {
+        const supers = await keycloakSetupService.getSuperAdmins();
+        recipients = supers.map((s) => ({ userId: s.id, email: s.email }));
+      }
+
+      const email = templates.adminZkChangeRequest({ requesterName, groupName: groupLabel, changeCount, justification });
+      const dm = `🔧 *${escapeSlackText(requesterName)}* proposed ${changeCount} ZooKeeper config change(s) for *${escapeSlackText(groupLabel)}*.${justification ? `\nReason: "${escapeSlackText(justification)}"` : ''}\n👉 ${config.frontend.url}/pending-approvals`;
+
+      const notified = await this.fanOutToAdmins(
+        recipients,
+        {
+          title: 'ZooKeeper config change request',
+          message: `${requesterName} proposed ${changeCount} config change(s) for ${groupLabel}.`,
+          link: '/pending-approvals',
+        },
+        email,
+        dm,
+      );
+      if (notified === 0) {
+        logger.warn({ requestId }, 'notifyZkChangeRequestCreated: no admins resolved to notify');
+      }
+    } catch (error: any) {
+      logger.error('Failed to notify ZooKeeper change-request admins:', error.message);
+    }
+  }
+
+  /** A ZooKeeper config change request was reviewed (per-change) → notify the requester
+   *  with the approved/rejected breakdown. */
+  async notifyZkChangeRequestReviewed(
+    requesterId: string,
+    requesterEmail: string | undefined,
+    groupNames: string[],
+    status: 'APPLIED' | 'PARTIALLY_APPLIED' | 'APPLY_FAILED' | 'REJECTED',
+    reviewerName: string,
+    note?: string,
+    approved: number = 0,
+    rejected: number = 0,
+  ): Promise<void> {
+    const groupLabel = (groupNames || []).join(', ') || 'ZooKeeper';
+    const summary: Record<typeof status, string> = {
+      APPLIED: `all ${approved} change(s) were approved and applied`,
+      PARTIALLY_APPLIED: `${approved} change(s) approved & applied, ${rejected} rejected`,
+      APPLY_FAILED: `${approved} change(s) approved but one or more failed to apply — an admin will follow up`,
+      REJECTED: `your change(s) were rejected`,
+    };
+    const line = summary[status];
+    const title = status === 'REJECTED' ? 'ZooKeeper change rejected' : 'ZooKeeper change reviewed';
+
+    await this.createNotification(
+      requesterId,
+      title,
+      `Your ZooKeeper config request for ${groupLabel} was reviewed by ${reviewerName}: ${line}.${note ? ` Note: "${note}"` : ''}`,
+      '/zookeeper',
+    );
+
+    const email = templates.userZkChangeReviewed({ groupName: groupLabel, status, reviewerName, note, approved, rejected });
+    const dm = `🔧 Your ZooKeeper config request for *${escapeSlackText(groupLabel)}* was reviewed by ${escapeSlackText(reviewerName)}: ${escapeSlackText(line)}.${note ? `\nNote: "${escapeSlackText(note)}"` : ''}`;
+    await this.emailAndDm(requesterEmail, email, dm);
+  }
+
   // Access is auto-expired
   async notifyAccessExpired(
     userId: string,
@@ -386,7 +477,8 @@ export class NotificationService {
     // Display name is adapter-owned (PlatformAdapter.displayName) — no per-platform
     // branching here, so a new adapter's name flows through automatically. Fall back
     // to a title-cased key for an unregistered platform.
-    if (provisioningRegistry.has(key)) return provisioningRegistry.get(key).displayName;
+    const adapter = provisioningRegistry.tryGet(key);
+    if (adapter) return adapter.displayName;
     return key.replace(/\b\w/g, (c) => c.toUpperCase());
   }
 
@@ -497,13 +589,16 @@ export class NotificationService {
     requesterId: string,
     userEmail: string,
     platform: string = config.platform.default,
+    details?: Record<string, unknown>,
   ): Promise<void> {
     // Onboarding copy is platform-specific (Redash: "you're set up"; AWS: "set your
     // password via the access portal"). Each adapter owns its own message via
     // getOnboardingMessage(), so this stays platform-agnostic — a new platform just
-    // supplies that method and needs no change here.
-    const adapter = provisioningRegistry.has(platform) ? provisioningRegistry.get(platform) : null;
-    const onboarding = adapter?.getOnboardingMessage?.();
+    // supplies that method and needs no change here. `details` carries any per-completion
+    // data from the invite (e.g. ZooKeeper's one-time credential) for the adapter to
+    // render; this layer never inspects or branches on it.
+    const adapter = provisioningRegistry.tryGet(platform);
+    const onboarding = adapter?.getOnboardingMessage?.(details);
 
     if (onboarding) {
       await this.createNotification(

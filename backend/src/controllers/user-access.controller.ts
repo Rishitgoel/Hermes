@@ -16,7 +16,7 @@ export class UserAccessController extends BaseController {
 
       const accesses = await prisma.userAccess.findMany({
         where: { userId, isActive: true },
-        include: { group: true },
+        include: { group: true, level: { select: { id: true, name: true } } },
         orderBy: { grantedAt: 'desc' },
       });
 
@@ -90,15 +90,15 @@ export class UserAccessController extends BaseController {
       if (!platformResult.success) return;
       const platform = platformResult.data;
 
-      const email = this.user!.email;
+      const email = this.user!.email || '';
 
-      if (!email) {
+      if (!email && platform !== 'zookeeper') {
         this.sendResponse({ exists: false, email: '' }, 'Email not found in session');
         return;
       }
 
       const adapter = provisioningRegistry.get(platform);
-      const status = await adapter.checkUserStatus(email);
+      const status = await adapter.checkUserStatus(email, this.user!.id);
       this.sendResponse(status, `Platform status for ${platform} retrieved`);
     } catch (error) {
       this.handleError(error, 'Failed to retrieve platform user status');

@@ -10,6 +10,10 @@ process.env.DATABASE_URL_HERMES = uri;
 process.env.KEYCLOAK_SIMULATION = 'true';
 process.env.REDASH_SIMULATION = 'true';
 process.env.AWS_SIMULATION = 'true';
+// Pin ZooKeeper to its in-process mock even if the dev .env points at a live ensemble,
+// so the sim tests never try to dial a real ZooKeeper in CI.
+process.env.ZOOKEEPER_SIMULATION = 'true';
+delete process.env.ZOOKEEPER_CONNECT_STRING;
 process.env.EMAIL_SIMULATION = 'true';
 process.env.SLACK_SIMULATION = 'true';
 process.env.NODE_ENV = 'test';
@@ -50,10 +54,11 @@ beforeEach(async () => {
       "group_admins", 
       "platform_admins", 
       "user_creation_requests", 
-      "platform_external_users", 
-      "platform_external_groups", 
-      "group_levels", 
-      "groups" 
+      "platform_external_users",
+      "platform_external_groups",
+      "zookeeper_change_requests",
+      "group_levels",
+      "groups"
     CASCADE;
   `);
 });

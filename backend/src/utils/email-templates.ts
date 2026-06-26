@@ -136,7 +136,60 @@ export function adminNewGroupRequestsBulk(opts: {
   };
 }
 
+export function adminZkChangeRequest(opts: {
+  requesterName: string;
+  groupName: string;
+  changeCount: number;
+  justification?: string | null;
+}): EmailContent {
+  const href = url('/pending-approvals');
+  const reason = opts.justification
+    ? `<p style="margin:12px 0 0;"><strong>Reason:</strong> ${esc(opts.justification)}</p>`
+    : '';
+  return {
+    subject: `[Hermes] ${opts.requesterName} proposed ${opts.changeCount} ZooKeeper config change(s)`,
+    html: layout({
+      heading: 'New ZooKeeper config change request',
+      bodyHtml: `<p style="margin:0;"><strong>${esc(opts.requesterName)}</strong> proposed <strong>${opts.changeCount}</strong> configuration change(s) for the <strong>${esc(opts.groupName)}</strong> group.</p>${reason}<p style="margin:12px 0 0;">Review the diff and approve or reject it in Hermes.</p>`,
+      ctaLabel: 'Review change request',
+      ctaHref: href,
+    }),
+    text: `${opts.requesterName} proposed ${opts.changeCount} ZooKeeper config change(s) for ${opts.groupName}.${opts.justification ? ` Reason: ${opts.justification}.` : ''} Review: ${href}`,
+  };
+}
+
 // ── User-facing ───────────────────────────────────────────────
+
+export function userZkChangeReviewed(opts: {
+  groupName: string;
+  status: 'APPLIED' | 'PARTIALLY_APPLIED' | 'APPLY_FAILED' | 'REJECTED';
+  reviewerName: string;
+  note?: string;
+  approved?: number;
+  rejected?: number;
+}): EmailContent {
+  const href = url('/zookeeper');
+  const approved = opts.approved ?? 0;
+  const rejected = opts.rejected ?? 0;
+  const noteHtml = opts.note ? `<p style="margin:12px 0 0;"><strong>Note:</strong> ${esc(opts.note)}</p>` : '';
+  const copy: Record<typeof opts.status, { heading: string; line: string }> = {
+    APPLIED: { heading: 'Config change applied ✅', line: `all ${approved} change(s) were approved and applied` },
+    PARTIALLY_APPLIED: { heading: 'Config change partially applied', line: `${approved} change(s) approved &amp; applied, ${rejected} rejected` },
+    APPLY_FAILED: { heading: 'Config change needs attention', line: `${approved} change(s) were approved but one or more failed to apply — an admin will follow up` },
+    REJECTED: { heading: 'Config change declined', line: 'your change(s) were rejected' },
+  };
+  const { heading, line } = copy[opts.status];
+  return {
+    subject: `[Hermes] ZooKeeper config change reviewed: ${opts.groupName}`,
+    html: layout({
+      heading,
+      bodyHtml: `<p style="margin:0;">Your ZooKeeper configuration request for <strong>${esc(opts.groupName)}</strong> was reviewed by ${esc(opts.reviewerName)} — ${line}.</p>${noteHtml}`,
+      ctaLabel: 'Open ZooKeeper Config',
+      ctaHref: href,
+    }),
+    text: `Your ZooKeeper config request for ${opts.groupName} was reviewed by ${opts.reviewerName}: ${line.replace('&amp;', '&')}.${opts.note ? ` Note: ${opts.note}.` : ''} ${href}`,
+  };
+}
 
 export function userAccountApproved(opts: { reviewerName: string; platformLabel?: string }): EmailContent {
   const href = url('/my-requests');
@@ -194,6 +247,58 @@ export function userAwsAccountReady(opts: { portalUrl: string }): EmailContent {
       ctaHref: opts.portalUrl || undefined,
     }),
     text: `Your AWS access is ready. Open the AWS access portal${opts.portalUrl ? ` (${opts.portalUrl})` : ''}, click "Forgot password" with this email to set your password, complete MFA setup if prompted, and sign in. Approved group access is already attached to your account.`,
+  };
+}
+
+/**
+ * ZooKeeper onboarding. Hermes is the identity issuer for the `digest` scheme, so it
+ * mints and delivers the one-time credential here (ZooKeeper itself sends nothing).
+ * `username`/`password` are absent on a generic completion (no credential to show) —
+ * the copy degrades to "your access is set up". The credential is shown once and is
+ * not stored by Hermes.
+ */
+export function userZookeeperAccountReady(opts: {
+  username?: string;
+  password?: string;
+  connectString?: string;
+}): EmailContent {
+  const haveCreds = !!(opts.username && opts.password);
+  const connect = opts.connectString || '';
+  if (!haveCreds) {
+    return {
+      subject: '[Hermes] Your ZooKeeper access is ready',
+      html: layout({
+        heading: 'Your ZooKeeper access is ready 🎉',
+        bodyHtml: `<p style="margin:0;">Your ZooKeeper access has been set up. Any group access an admin has approved is already attached to your identity.</p>`,
+      }),
+      text: 'Your ZooKeeper access is ready. Any approved group access is already attached to your identity.',
+    };
+  }
+  const connectLine = connect
+    ? `<p style="margin:6px 0 0;color:${MUTED};font-size:13px;">Connect string: <code>${esc(connect)}</code></p>`
+    : '';
+  return {
+    subject: '[Hermes] Your ZooKeeper credential (shown once)',
+    html: layout({
+      heading: 'Your ZooKeeper access is ready 🔑',
+      bodyHtml: `<p style="margin:0;">Your ZooKeeper access has been set up. Here is your credential — <strong>store it now; it is shown only once</strong> and Hermes does not keep a copy:</p>
+        <table role="presentation" cellpadding="0" cellspacing="0" style="margin:14px 0 0;border:1px solid ${BORDER};border-radius:8px;background:#f9fafb;width:100%;">
+          <tr><td style="padding:10px 14px;color:${TEXT};font-size:14px;">
+            <div><strong>Username:</strong> <code>${esc(opts.username)}</code></div>
+            <div style="margin-top:6px;"><strong>Password:</strong> <code>${esc(opts.password)}</code></div>
+          </td></tr>
+        </table>
+        <p style="margin:14px 0 0;color:${TEXT};">Authenticate in your ZooKeeper client with:</p>
+        <pre style="margin:6px 0 0;padding:10px 14px;background:#0f172a;color:#e2e8f0;border-radius:8px;font-size:13px;overflow:auto;">addauth digest ${esc(opts.username)}:${esc(opts.password)}</pre>
+        ${connectLine}
+        <p style="margin:14px 0 0;color:${MUTED};font-size:13px;">Any group access an admin has approved is already attached to this identity.</p>`,
+    }),
+    text:
+      `Your ZooKeeper access is ready. Store this credential now — it is shown only once and Hermes keeps no copy.\n` +
+      (connect ? `Connect string: ${connect}\n` : '') +
+      `Username: ${opts.username}\nPassword: ${opts.password}\n` +
+      `Authenticate with: addauth digest ${opts.username}:${opts.password}\n` +
+      `Approved group access is already attached to this identity.`,
   };
 }
 

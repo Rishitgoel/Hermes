@@ -83,7 +83,7 @@ export class AwsProvisioner implements PlatformAdapter {
   }
 
   /** Look up whether a user exists, cache-first with a live fallback. */
-  async checkUserStatus(email: string): Promise<PlatformUserStatus> {
+  async checkUserStatus(email: string, _userId?: string): Promise<PlatformUserStatus> {
     if (!config.aws.isEnabled) {
       return { exists: false, email };
     }

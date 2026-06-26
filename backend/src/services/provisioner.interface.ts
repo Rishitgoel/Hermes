@@ -15,6 +15,16 @@ import type { EmailContent } from '../utils/email-templates';
 export interface ProvisionContext {
   email: string;
   name: string;
+  /**
+   * Hermes user id of the requester (stable across sessions). The access-creation
+   * gate keys on `(userId, platform)`, so an adapter that mints its own per-user
+   * credential (ZooKeeper) should resolve it by `userId` too — resolving by `email`
+   * instead breaks when the Keycloak JWT carries no/different email between account
+   * approval and group request, making the gate say "approved" while provisioning
+   * claims the account doesn't exist. Optional for back-compat; email-based adapters
+   * (Redash/AWS resolve the user on the platform itself) ignore it.
+   */
+  userId?: string;
   /** ID of the group on the target platform the user should be added to. */
   externalGroupId?: string;
   /** Platform-specific extras (AWS ARNs, Jira project keys, etc.). */
@@ -56,6 +66,14 @@ export interface OnboardingMessage {
 export interface DeprovisionContext {
   externalUserId: string;
   externalGroupId?: string;
+  /**
+   * Optional: when a level swap deprovisions the OLD mapping right after provisioning
+   * the NEW one, this carries the NEW mapping so a multi-target adapter (ZooKeeper,
+   * whose externalGroupId is a list of znode paths) does NOT strip a target the new
+   * mapping still grants — i.e. shared paths between two levels survive the swap.
+   * Single-target adapters (Redash/AWS) ignore it.
+   */
+  retainExternalGroupId?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -65,6 +83,40 @@ export interface PlatformUserStatus {
   externalUserId?: string;
   email: string;
   metadata?: Record<string, unknown>;
+}
+
+/** A group's active members, handed to {@link PlatformAdapter.reconcileMembers}. */
+export interface ReconcileMembersContext {
+  /** The group/level's external id before the admin's edit (null if it had none). */
+  oldExternalGroupId: string | null;
+  /** The external id after the edit (null if cleared). */
+  newExternalGroupId: string | null;
+  /**
+   * Active members of the group/level to bring in line with the new mapping.
+   * `retainExternalGroupIds` carries the external ids of each member's OTHER active
+   * grants on this platform, so a multi-target adapter (ZooKeeper) never strips a target
+   * the member still legitimately holds through a different group/level. Single-target
+   * adapters ignore it.
+   */
+  members: { email: string; name: string; externalUserId: string; retainExternalGroupIds?: string[] }[];
+}
+
+/**
+ * Summary of a {@link PlatformAdapter.reconcileMembers} run, surfaced to the admin
+ * (and audited). For ZooKeeper the paths are znode paths; `errors` carries any
+ * per-member ACL failures that need manual cleanup.
+ */
+export interface ReconcileMembersResult {
+  /** Targets newly added to the mapping (granted to every member). */
+  addedPaths: string[];
+  /** Targets removed from the mapping (stripped from every member). */
+  removedPaths: string[];
+  /** Targets kept but with changed permissions (re-applied to every member). */
+  updatedPaths: string[];
+  /** How many members were reconciled. */
+  memberCount: number;
+  /** Per-member/target failures (best-effort: the config change still committed). */
+  errors: { member: string; error: string }[];
 }
 
 /**
@@ -99,9 +151,15 @@ export interface PlatformAdapter {
   deprovision(ctx: DeprovisionContext): Promise<void>;
 
   /** Look a user up by email — used to decide whether an invite is needed. */
-  checkUserStatus(email: string): Promise<PlatformUserStatus>;
-  /** Create the user's account on the platform (typically sends an invite). */
-  inviteUser(email: string, name: string): Promise<ProvisionResult>;
+  checkUserStatus(email: string, userId?: string): Promise<PlatformUserStatus>;
+  /**
+   * Create the user's account on the platform (typically sends an invite). The optional
+   * `userId` is the Hermes user id from the account-creation request; adapters whose
+   * cache key can't rely on email (ZooKeeper — a live Keycloak JWT often carries no email,
+   * so many users share the empty string) use it to key per-user state on a stable id.
+   * Email-keyed adapters (Redash/AWS) ignore it.
+   */
+  inviteUser(email: string, name: string, userId?: string): Promise<ProvisionResult>;
 
   /**
    * Optional: re-issue a one-time setup link for a user whose account already
@@ -138,6 +196,32 @@ export interface PlatformAdapter {
   deleteExternalGroup?(externalGroupId: string): Promise<void>;
 
   /**
+   * Optional: after an admin edits a group's/level's `externalGroupId`, bring the
+   * group's EXISTING active members in line with the new mapping. Only meaningful for
+   * an adapter whose `externalGroupId` encodes more than one immutable target —
+   * ZooKeeper's is a newline-separated list of znode paths, so adding a path must
+   * grant it to current members and removing one must strip it.
+   *
+   * Implementing this hook is what opts an adapter's `externalGroupId` into being
+   * *editable*: the admin layer allows the edit only when the platform can reconcile.
+   * Single-group platforms (Redash/AWS) omit it and keep their `externalGroupId`
+   * immutable, since swapping it would orphan members rather than re-map them.
+   *
+   * Best-effort: the Hermes-side config has already been saved as the source of truth,
+   * so per-member failures are returned (not thrown) for auditing/manual cleanup.
+   */
+  reconcileMembers?(ctx: ReconcileMembersContext): Promise<ReconcileMembersResult>;
+
+  /**
+   * Optional: validate a candidate `externalGroupId` for this platform's id format
+   * BEFORE it is persisted (e.g. ZooKeeper checks every line parses to a znode path).
+   * Throws a ValidationError on a malformed value, so the admin layer can reject the
+   * edit/create rather than saving a broken mapping that later fails every provision.
+   * Adapters whose id is an opaque string (Redash/AWS) omit it.
+   */
+  validateExternalGroupId?(externalGroupId: string): void;
+
+  /**
    * Optional: whether this adapter is currently running against a mock/simulated
    * backend instead of the real platform. SyncService uses this to skip the
    * Hermes-group reconciliation in simulation mode (so local dev seed data isn't
@@ -171,8 +255,13 @@ export interface PlatformAdapter {
    * platform is COMPLETED. Adapters that need platform-specific first-sign-in copy
    * (Redash setup-done, AWS set-your-password) implement it; the notification
    * service falls back to a generic message for adapters that don't.
+   *
+   * `details` carries optional per-completion data from {@link inviteUser}'s
+   * `ProvisionResult.metadata` (threaded through the completion event). A platform
+   * that is its own identity issuer (ZooKeeper mints a digest credential) uses it to
+   * deliver the one-time secret over email/DM. Adapters that don't need it ignore it.
    */
-  getOnboardingMessage?(): OnboardingMessage;
+  getOnboardingMessage?(details?: Record<string, unknown>): OnboardingMessage;
 }
 
 // Keep backward-compat alias

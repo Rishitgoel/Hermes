@@ -17,7 +17,9 @@ export interface AccessEvent {
     | 'user-creation.submitted'
     | 'user-creation.invited'
     | 'user-creation.rejected'
-    | 'user-creation.completed';
+    | 'user-creation.completed'
+    | 'zk-change.submitted'
+    | 'zk-change.reviewed';
   payload: Record<string, unknown>;
   timestamp: Date;
 }

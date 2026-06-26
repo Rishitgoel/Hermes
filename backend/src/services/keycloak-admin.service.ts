@@ -220,6 +220,31 @@ class KeycloakAdminService {
     }
   }
 
+  /**
+   * Resolve a user's Keycloak id ('sub') from their email — the identity Hermes
+   * keys grants and account-creation requests on. Returns null in sim, on no
+   * match, or on error (callers treat that as "no Hermes identity for this
+   * person"). Used by the one-shot Redash membership import to attach imported
+   * grants to the right user. Exact, case-insensitive match.
+   */
+  async findUserIdByEmail(email: string): Promise<string | null> {
+    if (!this.isLive) return null;
+    try {
+      const headers = await this.authHeaders();
+      const res = await axios.get(`${this.base}/users`, {
+        headers,
+        params: { email, exact: true },
+      });
+      const users: Array<{ id: string; email?: string }> = Array.isArray(res.data) ? res.data : [];
+      const match =
+        users.find((u) => (u.email || '').toLowerCase() === email.toLowerCase()) ?? users[0];
+      return match?.id ?? null;
+    } catch (err: any) {
+      logger.warn(`Keycloak admin: findUserIdByEmail failed for ${email}: ${err.message}`);
+      return null;
+    }
+  }
+
   /** Keycloak user IDs holding a given realm role. Empty when not live. */
   async getUsersInRole(roleName: string): Promise<string[]> {
     if (!this.isLive) return [];

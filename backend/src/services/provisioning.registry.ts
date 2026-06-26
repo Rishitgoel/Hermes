@@ -1,6 +1,7 @@
 import { PlatformAdapter } from './provisioner.interface';
 import { redashProvisioner } from './redash.provisioner';
 import { awsProvisioner } from './aws.provisioner';
+import { zookeeperProvisioner } from './zookeeper.provisioner';
 import logger from '../utils/logger';
 
 /**
@@ -19,6 +20,7 @@ class ProvisioningRegistry {
     // Register standard platform provisioners.
     this.register('redash', redashProvisioner);
     this.register('aws', awsProvisioner);
+    this.register('zookeeper', zookeeperProvisioner);
   }
 
   /** Add (or replace) the adapter for a platform. Key is lower-cased. */
@@ -35,6 +37,11 @@ class ProvisioningRegistry {
       throw new Error(`No provisioner registered for platform "${platform}"`);
     }
     return adapter;
+  }
+
+  tryGet(platform: string): PlatformAdapter | null {
+    const key = platform.toLowerCase();
+    return this.registry.get(key) ?? null;
   }
 
   has(platform: string): boolean {

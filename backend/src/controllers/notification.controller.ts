@@ -59,9 +59,13 @@ export class NotificationController extends BaseController {
       const userId = this.getUserId();
       if (!userId) return;
 
+      // Cap the payload — the bell only ever shows the most recent slice, and an
+      // unbounded list let heavy users accumulate hundreds of rows. The unread
+      // badge still reflects the true total via /unread-count.
       const notifications = await prisma.notification.findMany({
         where: { userId },
         orderBy: { createdAt: 'desc' },
+        take: 50,
       });
 
       this.sendResponse(notifications, 'Notifications retrieved successfully');
@@ -113,6 +117,43 @@ export class NotificationController extends BaseController {
       this.sendResponse(result, `All notifications marked as read (${result.count} updated)`);
     } catch (error) {
       this.handleError(error, 'Failed to mark all notifications as read');
+    }
+  }
+
+  // DELETE /api/notifications/:id — dismiss (permanently remove) a single notification.
+  async dismissNotification(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const idResult = this.validateWithZod(notificationIdSchema, this.req.params.id, 'Invalid notification ID');
+      if (!idResult.success) return;
+      const id = idResult.data;
+
+      const userId = this.getUserId();
+      if (!userId) return;
+
+      // deleteMany (not delete) so another user's id can never be removed and a
+      // missing row is a no-op rather than a thrown P2025.
+      const result = await prisma.notification.deleteMany({ where: { id, userId } });
+      if (result.count === 0) {
+        throw new NotFoundError('Notification not found');
+      }
+
+      this.sendResponse({ id }, 'Notification dismissed');
+    } catch (error) {
+      this.handleError(error, 'Failed to dismiss notification');
+    }
+  }
+
+  // DELETE /api/notifications — clear every notification for the authenticated user.
+  async clearAll(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const userId = this.getUserId();
+      if (!userId) return;
+
+      const result = await prisma.notification.deleteMany({ where: { userId } });
+
+      this.sendResponse(result, `All notifications cleared (${result.count} removed)`);
+    } catch (error) {
+      this.handleError(error, 'Failed to clear notifications');
     }
   }
 
