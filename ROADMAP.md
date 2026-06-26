@@ -10,7 +10,7 @@ The prioritized implementation backlog for Hermes, grouped **P2 → P3** (P0/P1 
 > - **AWS IAM Identity Center adapter** is live (`aws.provisioner.ts` + `aws-identity-center.service.ts`), with simulation mode for local dev.
 > - **Per-platform account creation** — `UserCreationRequest` is unique per `(user, platform)`; approval on one platform doesn't imply another.
 > - **Group levels (subgroups)** — each level backed by its own external group; non-breaking (level-less groups unchanged).
-> - **New features not in the original doc:** user-creation-with-admin-approval, AWS SES transactional email (alongside Slack), group CRUD from Admin UI, level-change (promote/demote) flow.
+> - **New features not in the original doc:** user-creation-with-admin-approval, AWS SES transactional email (alongside Slack), group CRUD from Admin UI, admin set-member-level (self-service promote/demote was built then removed — too much complexity for little value).
 > - "Redash sync" is now **platform sync** (adapter-agnostic). Update your mental model when reading older notes below.
 
 ---
@@ -50,7 +50,7 @@ Everything below is on `main` / `origin/main`. Verified present in the tree on 2
 | **User creation** | **User-creation-with-admin-approval workflow** (request account → admin approves → invite link). Per-platform: `UserCreationRequest` unique per `(user, platform)`. | `backend/src/controllers/user-creation.controller.ts`, `services/user-creation.service.ts`; migrations `20260528101716_add_user_creation_workflow`, `20260528104309_add_user_creation_invite_link`, `20260528122344_add_is_invitation_pending`; `frontend/src/components/user-creation/AccountStatusPanel.tsx` |
 | **Email (SES)** | **AWS SES transactional email** alongside Slack, with shared templates and an `EMAIL_SIMULATION` flag. | `backend/src/services/email.service.ts`, `utils/email-templates.ts`, `notification.service.ts` |
 | **AWS adapter** | **AWS IAM Identity Center** provisioner live. `AWS_SIMULATION` mock by default; real Identity Store when configured. Handles create-user, provision/deprovision to groups, sync, and eventual-consistency retries. | `backend/src/services/aws.provisioner.ts`, `aws-identity-center.service.ts`; `provisioning.registry.ts` (registered alongside Redash) |
-| **Group levels** | **Group levels / subgroups** — each level backed by its own external group; non-breaking (level-less groups unchanged). Level-change (promote/demote) flow with atomic swap. CRUD is super/platform-admin only. | `backend/src/services/access-workflow.service.ts` (`_swapGrant`), `admin-management.controller.ts`; `frontend/src/pages/GroupDetail.tsx` |
+| **Group levels** | **Group levels / subgroups** — each level backed by its own external group; non-breaking (level-less groups unchanged). Level changes via admin set-member-level with atomic swap (self-service promote/demote removed). CRUD is super/platform-admin only. | `backend/src/services/access-workflow.service.ts` (`_swapGrant`, `adminSetMemberLevel`), `admin-management.controller.ts`; `frontend/src/pages/AdminManagement.tsx` |
 | **Group CRUD** | **Group create/edit/archive** from Admin Management UI. Delete is pristine-only; referenced groups are archived. | `admin-management.controller.ts` (`createGroup` / `updateGroup` / `deleteGroup`); `frontend/src/pages/AdminManagement.tsx` |
 | **Dev stack** | **Local Docker Postgres** (`localhost:15433`), simulation flags for Keycloak/Redash/AWS/email. | `docker-compose.yml`, `backend/.env.example`, `CLAUDE.md` |
 | **P2-1** | **Tests (vitest)** | Root-level `npm test` sequentially running backend integration tests (via `@testcontainers/postgresql`) and frontend unit/smoke tests (via `jsdom` and React Testing Library). |
@@ -86,6 +86,7 @@ Everything below is on `main` / `origin/main`. Verified present in the tree on 2
 | P3-4 | Split large pages (Groups, GroupDetail, PendingApprovals) | M | Low |
 | P3-5 | OpenAPI spec from Zod | M | Low |
 | P3-6 | OpenTelemetry traces | M | Low |
+| P3-7 | ZooKeeper value change-requests (approval-gated edits) | L | Med |
 
 Effort: XS ≈ 15 min · S ≈ 1–2 h · M ≈ half day · L ≈ 1–2 days. Risk = chance of breaking existing flows.
 
@@ -95,7 +96,7 @@ Effort: XS ≈ 15 min · S ≈ 1–2 h · M ≈ half day · L ≈ 1–2 days. Ri
 
 ## P2-1 — Tests (vitest)
 
-**Why:** zero test coverage today (verified 2026-06-11 — no `*.test.ts` / `*.spec.ts` anywhere). The access workflow (request → approve → provision → revoke → expire) is the riskiest code and has the most state transitions. Regressions here will silently break authorization. The **user-creation**, **admin-tier authorization**, **level-change (promote/demote)**, and **AWS provisioner** paths are now equally worth covering.
+**Why:** zero test coverage today (verified 2026-06-11 — no `*.test.ts` / `*.spec.ts` anywhere). The access workflow (request → approve → provision → revoke → expire) is the riskiest code and has the most state transitions. Regressions here will silently break authorization. The **user-creation**, **admin-tier authorization**, **level-change (admin set-level + renewal)**, and **AWS provisioner** paths are now equally worth covering.
 
 **Stack:**
 - **vitest** for both backend and frontend (same runner, simpler than jest + babel).
@@ -115,7 +116,7 @@ Effort: XS ≈ 15 min · S ≈ 1–2 h · M ≈ half day · L ≈ 1–2 days. Ri
    - Provisioner throwing → request goes to PROVISION_FAILED, audit entry includes error.
    - Auto-expiry retry cap (`MAX_EXPIRY_ATTEMPTS=3`) → force-expire after max retries, `ACCESS_EXPIRY_FAILED` audit + admin alert.
 4. **(New) user-creation flow:** request account → admin approve → invite link issued; reject path; duplicate-request guard. Test **both** completion paths: Redash (setup link → AWAITING_SETUP → sync → COMPLETED) and AWS (instant COMPLETED).
-5. **(New) level-change flow:** `_swapGrant` atomicity — requesting a level when one is already active; promote (needs approval) vs demote (immediate); verify old level is deprovisioned and new one is provisioned; `ACCESS_LEVEL_CHANGED` audit entry.
+5. **(New) level-change flow:** `_swapGrant` atomicity via admin set-member-level (`adminSetMemberLevel`) and renewals — verify old level is deprovisioned and new one provisioned, exactly one active grant per group is preserved, and the `ACCESS_LEVEL_CHANGED` / `ACCESS_RENEWED` audit entry is written. (Self-service promote/demote was removed.)
 6. **(New) AWS provisioner sim:** provision/deprovision through the AWS simulation store; `EntityAlreadyExists` conflict handling; idempotent group add/remove.
 7. **(New) admin-management authorization:** tier enforcement — platform admin can't manage another platform's groups; group admin can't manage sibling groups; super admin can do everything.
 
@@ -289,6 +290,70 @@ Then `GroupDetail.tsx` (members table, level-change panel, settings drawer → s
 4. Ship traces to whatever Bachatt uses. If undecided, enable the console exporter to see the structure first, then switch.
 
 **Done when:** a single "approve request" action produces one trace showing: incoming HTTP → Prisma queries → outgoing platform API (Redash or AWS) → outgoing Slack/SES, all under one trace ID.
+
+---
+
+## P3-7 — ZooKeeper value change-requests (approval-gated edits)
+
+**Why / what it is:** ZooKeeper access today is purely *access management* — Hermes grants/revokes per-path ACLs and never touches znode **data**. The next step users have asked for is a governed way to **edit a value**: a member sees a key, proposes a new value, and a **group admin approves** before it's written. This is the "PR for ZooKeeper config" model.
+
+**Why it can't live in ZooNavigator (decided 2026-06-22):** ZooNavigator (and zkui, and every off-the-shelf ZK browser) is a *direct-write* tool — editing a value immediately does `setData` against ZK, and there is **no plugin / edit-hook / webhook** to divert that write into an approval queue. Intercepting writes would mean forking ZooNavigator. So the approval flow lives in **Hermes**, and — crucially — it does **not** require building a ZK tree browser: Hermes already authenticates to ZK as an admin identity (it holds ADMIN on every managed znode), so it can read the current value and apply the approved write itself. **ZooNavigator stays as the read-only browser**; Hermes owns the governed write path.
+
+**How it composes with what's already shipped (subtree-read expansion):** in this model users are **READ-only everywhere** (the granted node + its subtree + ancestors — already implemented), and *every* value change funnels through this approval flow, applied by Hermes. So there is no direct user write at all, which also sidesteps "does write cascade to the subtree?" — nobody writes directly. (If P3-7 is adopted, the granted node's perms can stay read; write perms on the node itself become unnecessary.)
+
+**Data model** — new Prisma model in `backend/prisma/hermes/schema.prisma` (then `npm run prisma:migrate`):
+```prisma
+model ZkChangeRequest {
+  id              String    @id @default(uuid())
+  userId          String    // requester
+  groupId         String    // the Hermes group whose admin approves (path → group mapping)
+  levelId         String?   // optional: the level whose mapping covers the path
+  path            String    // the znode path to change
+  currentValue    String?   // value snapshot at request time (drives the admin's diff)
+  proposedValue   String    // new value (UTF-8 text assumed; see caveat)
+  expectedVersion Int       // znode dataVersion at request time (optimistic concurrency)
+  reason          String?
+  status          String    @default("PENDING") // PENDING | APPROVED | REJECTED | STALE | APPLY_FAILED
+  reviewedById    String?
+  reviewedAt      DateTime?
+  reviewNote      String?
+  appliedAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  @@index([groupId, status])
+  @@index([userId])
+  @@map("zk_change_requests")
+}
+```
+
+**Backend — service** (`zookeeper.service.ts`, mirroring the existing ACL methods + sim branch):
+- `getData(path): Promise<{ exists: boolean; value: string | null; version: number }>` — live `client.getData` (returns data + `stat.version`); sim reads the in-process store (extend `SimNode` with a `data`/`version` field).
+- `setData(path, value, expectedVersion): Promise<{ version: number }>` — live `client.setData(path, Buffer.from(value, 'utf8'), expectedVersion, cb)`; a ZK `BAD_VERSION` becomes a `ConflictError` (someone changed the value since the snapshot). `expectedVersion` is the snapshot version, so writes are **optimistic-concurrency checked**, not blind.
+
+**Backend — controller + routes** (`zk-change-request.controller.ts` / `.route.ts`, all `authenticateToken`, tier checks in-controller via `authz.ts`):
+- `GET /api/zookeeper/data?path=…` — current value + version. Authz: requester must hold an active grant on a group whose mapping covers the path (equal to, or under, one of the group's/levels' `externalGroupId` paths — reuse `zookeeperService.parseExternalGroupIds`).
+- `POST /api/zookeeper/change-requests` — `{ groupId, path, proposedValue, reason? }`. Validates access + that `path` is covered by the group's mapping, snapshots `currentValue`/`expectedVersion`, stores PENDING, emits `zk.change.requested` → notify group admins.
+- `GET /api/zookeeper/change-requests/pending` — the admin queue, filtered to `getManageablePlatforms`/manageable groups (super → all, platform admin → their platform's groups, group admin → their group).
+- `GET /api/zookeeper/change-requests/mine` — the requester's own.
+- `PUT /api/zookeeper/change-requests/:id/review` — `{ decision: APPROVED | REJECTED, note? }`, gated on `isGroupAdminOf(user, groupId)`. On **approve**: re-read the live version; if it differs from `expectedVersion` → mark `STALE` and tell the admin to re-review (never apply a stale diff); else `setData(path, proposedValue, expectedVersion)` → `APPROVED`/applied, audit `ZK_VALUE_CHANGED`, notify requester. Apply failure → `APPLY_FAILED`. On **reject** → `REJECTED` + notify.
+
+**Validation** (`zk-change-request.validation.ts`): `createZkChangeRequestSchema` and `reviewZkChangeRequestSchema`, called via `this.validateWithZod`.
+
+**Events / notifications / audit:** emit `zk.change.requested` and `zk.change.reviewed` on `event-bus.ts`; add the notification + email copy in `notification.service.ts` / `email-templates.ts`. New audit actions: `ZK_CHANGE_REQUESTED`, `ZK_CHANGE_APPROVED`, `ZK_CHANGE_REJECTED`, `ZK_VALUE_CHANGED`, `ZK_CHANGE_APPLY_FAILED`. (Structurally a twin of the access-request → review flow — lean on that code.)
+
+**Frontend:**
+- *Propose change*: from the group detail page (a small "ZooKeeper keys" view listing the group's mapped paths, with read-only subtree navigation via a new `getChildren`-backed endpoint, or just paste a path) → a form that shows the current value (`GET …/data`), a textarea for the new value, and a reason → submit.
+- *Admin queue*: a "ZooKeeper Changes" section (in `AdminManagement.tsx` or `PendingApprovals.tsx`) listing pending requests with an **old → new diff** and approve/reject. Add TanStack Query keys.
+
+**Caveats / open decisions to settle when picked up:**
+- **Values are UTF-8 text.** ZK data is raw bytes; binary or very large values are out of scope for v1 (consider base64 + a flag later).
+- **v1 is value edits only** — creating/deleting znodes via the same approval flow is a later extension.
+- **Key discovery:** v1 can rely on ZooNavigator for browsing + paste-the-path, or a thin Hermes-side `getChildren` list scoped to the group's paths. Decide based on how much you want to keep users out of ZooNavigator.
+- **Live-only in practice**, but `getData`/`setData` must work against the sim store so the whole flow is testable locally (mirror the ACL methods).
+
+**Effort:** L. **Risk:** Med — this is the first Hermes-owned **write** to live platform *data* (not just ACLs); mitigated by the group-admin gate, version-checked writes, and sim coverage.
+
+**Done when:** a member proposes a value change → the group admin sees the old→new diff and approves → Hermes writes it (version-checked) and audits `ZK_VALUE_CHANGED` → the requester is notified; a concurrent external edit makes the approval go `STALE` instead of clobbering.
 
 ---
 
