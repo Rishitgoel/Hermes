@@ -70,6 +70,30 @@ export class AdminManagementController extends BaseController {
     return { userName: row.userName, userEmail: row.userEmail };
   }
 
+  /**
+   * Derive a globally-unique group slug from `base` (already validated as
+   * lowercase-alphanumeric-with-hyphens). The `slug` column is globally unique, so
+   * two groups with the same name — even on different platforms — would otherwise
+   * collide. If `base` is free we use it; otherwise we append the smallest numeric
+   * suffix (`-2`, `-3`, …) that isn't taken. One query fetches every conflicting
+   * slug; the create call's P2002 catch covers the rare concurrent-create race.
+   */
+  private async generateUniqueGroupSlug(base: string): Promise<string> {
+    const existing = await prisma.group.findMany({
+      where: { OR: [{ slug: base }, { slug: { startsWith: `${base}-` } }] },
+      select: { slug: true },
+    });
+    const taken = new Set(existing.map((g) => g.slug));
+    if (!taken.has(base)) {
+      return base;
+    }
+    let n = 2;
+    while (taken.has(`${base}-${n}`)) {
+      n++;
+    }
+    return `${base}-${n}`;
+  }
+
   // GET /api/admin/platforms — platform keys the caller may administer.
   async listManageablePlatforms(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
@@ -356,12 +380,18 @@ export class AdminManagementController extends BaseController {
         autoCreatedExternalGroupId = created.externalGroupId;
       }
 
+      // Slug is server-authoritative: ignore the client's derived slug and resolve a
+      // globally-unique one (auto-suffixed if the base is taken) so creation never
+      // fails on a slug collision. A duplicate name on the SAME platform is still a
+      // real conflict (the @@unique([platform, name]) constraint) and is reported below.
+      const uniqueSlug = await this.generateUniqueGroupSlug(data.slug);
+
       let group;
       try {
         group = await prisma.group.create({
           data: {
             name: data.name,
-            slug: data.slug,
+            slug: uniqueSlug,
             description: data.description,
             platform,
             icon: data.icon ?? null,
@@ -382,7 +412,15 @@ export class AdminManagementController extends BaseController {
           }
         }
         if (err?.code === 'P2002') {
-          throw new ConflictError('A group with this name or slug already exists.');
+          const target = Array.isArray(err?.meta?.target)
+            ? err.meta.target.join(',')
+            : String(err?.meta?.target ?? '');
+          // Slug is auto-uniquified above, so a slug hit here can only be a rare
+          // concurrent-create race; name collisions are the real user-facing case.
+          if (target.includes('name')) {
+            throw new ConflictError('A group with this name already exists on this platform.');
+          }
+          throw new ConflictError('A group with this slug already exists. Please try again.');
         }
         throw err;
       }

@@ -8,6 +8,7 @@ import { listZkChangeRequests } from '../services/api/zookeeperApi';
 import { useAuth } from '../contexts/AuthContext';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../lib/queryKeys';
+import { fetchPlatforms, LivePlatform } from '../services/api/platforms';
 import SectionHeader from '../components/common/SectionHeader';
 import ZkChangeApprovals from '../components/zookeeper/ZkChangeApprovals';
 
@@ -24,6 +25,7 @@ interface PendingRequest {
   group: {
     name: string;
     color: string | null;
+    platform: string;
   };
   level: {
     name: string;
@@ -58,6 +60,14 @@ export const PendingApprovals: React.FC = () => {
     refetchInterval: 15000,
     refetchOnMount: 'always',
   });
+
+  const { data: livePlatforms = [] } = useQuery<LivePlatform[]>({
+    queryKey: queryKeys.platforms(),
+    queryFn: fetchPlatforms,
+  });
+  const platformsByKey = new Map(livePlatforms.map((p) => [p.key, p]));
+  const platformLabel = (key: string) =>
+    platformsByKey.get(key)?.displayName ?? key.charAt(0).toUpperCase() + key.slice(1);
 
   // Set of userIds whose group requests are blocked (no approved user-creation row yet).
   // We treat anyone with a row in PENDING as "blocked"; admin must approve user-creation first.
@@ -280,6 +290,7 @@ export const PendingApprovals: React.FC = () => {
                     </div>
                   </th>
                   <th>Requester</th>
+                  <th style={{ width: '120px' }}>Platform</th>
                   <th>Requested Group</th>
                   <th style={{ width: '220px' }}>Requested Duration</th>
                   <th style={{ width: '200px' }}>Date</th>
@@ -400,6 +411,11 @@ export const PendingApprovals: React.FC = () => {
                           </div>
                         </div>
                       </div>
+                    </td>
+                    <td>
+                      <span className="badge badge-admin badge-sm" style={{ textTransform: 'none' }}>
+                        {platformLabel(req.group.platform)}
+                      </span>
                     </td>
                     <td>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>

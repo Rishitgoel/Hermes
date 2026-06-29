@@ -117,7 +117,8 @@ export const GroupFormModal: React.FC<GroupFormModalProps> = ({
           />
           {!isEdit && derivedSlug && (
             <div style={{ fontSize: '11px', color: 'var(--text-light)', marginTop: '4px' }}>
-              Slug: <code>{derivedSlug}</code> (auto-generated, fixed after creation)
+              Slug: <code>{derivedSlug}</code> (auto-generated; a number is appended if
+              it's already taken, then fixed after creation)
             </div>
           )}
         </div>

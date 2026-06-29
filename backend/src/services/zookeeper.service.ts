@@ -161,6 +161,11 @@ export class ZookeeperService {
     return new ACL(Permission.ALL, new Id('digest', this.adminAclId()));
   }
 
+  /** A ZK ACL granting world-open access (world:anyone:cdrwa). */
+  private worldOpenAcl(): ACL {
+    return new ACL(Permission.ALL, new Id('world', 'anyone'));
+  }
+
   /** Lazily connect (and authenticate) a live client, reusing a healthy one. */
   private getClient(): Promise<Client> {
     // Reuse the cached client whenever one exists. connect() assigns this.client only on
@@ -400,12 +405,28 @@ export class ZookeeperService {
       return;
     }
     const client = await this.getClient();
-    // mkdirp creates the node and any missing parents; the admin-only ACL on each
-    // created node keeps the subtree private (no lingering world:anyone). No-op if it
+    // mkdirp creates the node and any missing parents; the world-open ACL on each
+    // created node keeps the subtree open. No-op if it
     // already exists (mkdirp swallows NODE_EXISTS itself; we guard once more to be safe).
     await new Promise<void>((resolve, reject) => {
-      client.mkdirp(path, [this.adminAcl()], (err) => {
+      client.mkdirp(path, [this.worldOpenAcl()], (err) => {
         if (err && this.errCode(err) !== Exception.NODE_EXISTS) return reject(this.wrapErr(err, 'mkdirp', path));
+        resolve();
+      });
+    });
+  }
+
+  /** Directly set a znode's ACL to world-open (world:anyone:cdrwa) without touching its data. */
+  async setWorldOpenAcl(path: string): Promise<void> {
+    if (this.isSimulation) {
+      await tick();
+      return;
+    }
+    const client = await this.getClient();
+    const openAcl = this.worldOpenAcl();
+    return new Promise<void>((resolve, reject) => {
+      client.setACL(path, [openAcl], -1, (err) => {
+        if (err) return reject(this.wrapErr(err, 'setACL', path));
         resolve();
       });
     });

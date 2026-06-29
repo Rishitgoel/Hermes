@@ -22,6 +22,12 @@ router.post('/import-redash-memberships', authenticateToken, requireRole(['herme
   controller.importRedashMemberships(req, res, next).catch(next);
 });
 
+// ZooKeeper maintenance: migrate existing ZooKeeper ACLs to world-open (super admin only).
+router.post('/migrate-zookeeper-acls', authenticateToken, requireRole(['hermes_super_admin']), (req: Request, res: Response, next: NextFunction) => {
+  const controller = new AdminController(req, res, next);
+  controller.migrateZookeeperAcls(req, res, next).catch(next);
+});
+
 
 // ── Admin Management (three-tier: super → platform → group) ─────────────────
 // All routes are authenticated; fine-grained tier checks live in the controller

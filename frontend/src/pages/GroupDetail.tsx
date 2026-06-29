@@ -156,8 +156,9 @@ export const GroupDetail: React.FC = () => {
         <Icons.ChevronLeft size={16} /> Back to Groups
       </button>
 
-      {/* Grid Layout */}
-      <div className="detail-grid">
+      {/* Grid Layout. The member roster (right column) is shown only to users who
+          can manage this group; simple users see the single-column details card. */}
+      <div className="detail-grid" style={canManage ? undefined : { gridTemplateColumns: '1fr' }}>
         {/* Left Column: Group Details Card */}
         <div className="detail-card" style={{ borderTop: `5px solid ${group.color || 'var(--primary)'}` }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
@@ -325,7 +326,9 @@ export const GroupDetail: React.FC = () => {
           </div>
         </div>
 
-        {/* Right Column: Members List */}
+        {/* Right Column: Members List — visible only to admins who can manage this
+            group. Simple users don't see the group's member roster. */}
+        {canManage && (
         <div>
           <SectionHeader title="Active Group Members" meta={`${group.members.length} Users`} />
 
@@ -400,6 +403,7 @@ export const GroupDetail: React.FC = () => {
             </div>
           )}
         </div>
+        )}
       </div>
 
       {/* Access Request Modal */}

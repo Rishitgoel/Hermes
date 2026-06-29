@@ -310,3 +310,18 @@ export async function importRedashMemberships(apply: boolean): Promise<RedashImp
   const res = await apiClient.post('/api/admin/import-redash-memberships', { apply });
   return res.data as RedashImportReport;
 }
+
+// ZooKeeper maintenance: migrate existing ZooKeeper ACLs to world-open (world:anyone:cdrwa)
+export interface ZookeeperMigrationReport {
+  apply: boolean;
+  targetRoots: string[];
+  pathsFound: string[];
+  updatedCount: number;
+  failedPaths: { path: string; error: string }[];
+}
+
+export async function migrateZookeeperAcls(apply: boolean): Promise<ZookeeperMigrationReport> {
+  const res = await apiClient.post('/api/admin/migrate-zookeeper-acls', { apply });
+  return res.data as ZookeeperMigrationReport;
+}
+

@@ -3,6 +3,7 @@ import BaseController from './base.controller';
 import syncService from '../services/sync.service';
 import adminReconciliationService from '../services/admin-reconciliation.service';
 import { importRedashMemberships } from '../services/redash-import.service';
+import { migrateZookeeperAcls } from '../services/zookeeper-migration.service';
 import prisma from '../config/prisma';
 import { AuthorizationError } from '../utils/errors';
 import { isSuperAdmin } from '../utils/authz';
@@ -128,6 +129,50 @@ export class AdminController extends BaseController {
       );
     } catch (error) {
       this.handleError(error, 'Redash membership import failed');
+    }
+  }
+
+  // POST /api/admin/migrate-zookeeper-acls  body: { apply?: boolean }
+  // Maintenance tool (super admin only): migrate existing ZooKeeper ACLs to world-open (world:anyone:cdrwa).
+  // Dry-run unless apply === true.
+  async migrateZookeeperAcls(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const userId = this.getUserId();
+      if (!userId) return;
+
+      if (!isSuperAdmin(this.user!)) {
+        throw new AuthorizationError('Only super admins can migrate ZooKeeper ACLs');
+      }
+
+      const apply = req.body?.apply === true;
+      logger.info(
+        `Super admin ${this.user!.username} triggered ZooKeeper ACL migration${apply ? ' (APPLY)' : ' (dry-run)'}`,
+      );
+      const report = await migrateZookeeperAcls({
+        apply,
+        performerId: userId,
+        performerName: this.user!.username,
+      });
+
+      if (apply) {
+        await prisma.auditEntry.create({
+          data: {
+            action: 'ZOOKEEPER_MIGRATION_TRIGGERED',
+            performerId: userId,
+            performerName: this.user!.username,
+            details: report as any,
+          },
+        });
+      }
+
+      this.sendResponse(
+        report,
+        apply
+          ? 'ZooKeeper ACL migration completed'
+          : 'ZooKeeper ACL migration dry-run completed (no changes made)',
+      );
+    } catch (error) {
+      this.handleError(error, 'ZooKeeper ACL migration failed');
     }
   }
 }

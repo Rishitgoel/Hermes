@@ -3,6 +3,7 @@ import BaseController from './base.controller';
 import prisma from '../config/prisma';
 import { RequestStatus } from '@prisma/client';
 import { groupSlugSchema } from '../validations/group.validation';
+import { isGroupAdminOf } from '../utils/authz';
 
 export class GroupController extends BaseController {
   // GET /api/groups
@@ -174,10 +175,10 @@ export class GroupController extends BaseController {
       // grant is revocable like any member's (revoking it leaves approval rights
       // intact, since those come from the admin role, not the grant).
       //
-      // Visibility: the roster is returned to every authenticated user, so it always
-      // matches the public member count shown on the group list. Mutating actions
-      // (Revoke) stay gated on the frontend by `canManage` (super-admin / group admin),
-      // so non-admins can see who's in a group but can't change its membership.
+      // Visibility: the member roster is returned ONLY to users who can manage this
+      // group (super admin / platform admin / group admin). Simple users get an empty
+      // roster — they can see the public member COUNT but not who's in the group.
+      const canManage = await isGroupAdminOf(this.user!, group.id, group.slug);
       const responseData = {
         id: group.id,
         name: group.name,
@@ -206,17 +207,19 @@ export class GroupController extends BaseController {
           assignedAt: adm.assignedAt,
         })),
         memberCount: group.userAccesses.length,
-        members: group.userAccesses.map(m => ({
-          id: m.id,
-          userId: m.userId,
-          userName: m.userName,
-          userEmail: m.userEmail,
-          grantedAt: m.grantedAt,
-          expiresAt: m.expiresAt,
-          grantedBy: m.grantedBy,
-          levelId: m.levelId,
-          levelName: m.level?.name ?? null,
-        })),
+        members: canManage
+          ? group.userAccesses.map(m => ({
+              id: m.id,
+              userId: m.userId,
+              userName: m.userName,
+              userEmail: m.userEmail,
+              grantedAt: m.grantedAt,
+              expiresAt: m.expiresAt,
+              grantedBy: m.grantedBy,
+              levelId: m.levelId,
+              levelName: m.level?.name ?? null,
+            }))
+          : [],
       };
 
       this.sendResponse(responseData, 'Group details retrieved successfully');

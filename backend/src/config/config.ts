@@ -147,8 +147,10 @@ export const config = {
     //
     // The ensemble connect string, e.g. "zk-0:2181,zk-1:2181". Unset locally ⇒ sim.
     get connectString() { return process.env.ZOOKEEPER_CONNECT_STRING || ''; },
-    // Root znode path Hermes creates its backing group nodes under.
-    get rootPath() { return process.env.ZOOKEEPER_ROOT_PATH || '/hermes'; },
+    // Root znode path Hermes creates its auto-generated backing group nodes under
+    // (used by createExternalGroup to derive a path from a group name, e.g.
+    // "Credit Card" → /credit-card when rootPath is /).
+    get rootPath() { return process.env.ZOOKEEPER_ROOT_PATH || '/'; },
     // The super-digest "user:password" Hermes authenticates as to setACL on the
     // target znodes (needs ADMIN there). Secret-backed — must stay a lazy getter.
     get adminAuth() { return process.env.ZOOKEEPER_ADMIN_AUTH; },

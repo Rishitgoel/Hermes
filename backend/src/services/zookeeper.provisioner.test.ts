@@ -15,8 +15,15 @@ import { ValidationError } from '../utils/errors';
 describe('ZookeeperProvisioner (simulation)', () => {
   const GROUP_PATH = '/hermes/credit-card';
 
+  let rootPathSpy: any;
+
   beforeEach(() => {
     zookeeperService.__resetSim();
+    rootPathSpy = vi.spyOn(config.zookeeper, 'rootPath', 'get').mockReturnValue('/hermes');
+  });
+
+  afterEach(() => {
+    rootPathSpy?.mockRestore();
   });
 
   /** Invite a user and return their minted ACL id. */
@@ -483,7 +490,7 @@ describe('ZookeeperProvisioner (simulation)', () => {
   });
 
   it('checkUserStatus resolves status for blank-email ZK users', async () => {
-    const aclId = await invite('', 'Blank User');
+    const aclId = (await zookeeperProvisioner.inviteUser('', 'Blank User', 'usr-blank')).externalUserId;
     await prisma.userCreationRequest.create({
       data: {
         userId: 'usr-blank',

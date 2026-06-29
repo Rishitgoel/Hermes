@@ -20,9 +20,11 @@ import {
   removePlatformAdmin,
   updateGroup,
   importRedashMemberships, // Redash maintenance: membership backfill (collapsed disclosure)
+  migrateZookeeperAcls, // ZooKeeper maintenance: ACL migration (collapsed disclosure)
   type ManageableGroup,
   type PlatformAdminRow,
   type RedashImportReport,
+  type ZookeeperMigrationReport,
 } from '../services/api/admin';
 
 export const AdminManagement: React.FC = () => {
@@ -114,6 +116,23 @@ export const AdminManagement: React.FC = () => {
       }
     },
     onError: (e: any) => toast.error(e.message || 'Redash membership import failed.'),
+  });
+
+  // ZooKeeper ACL migration — a rarely-used maintenance tool that updates existing
+  // znodes to be world-open. Lives in a collapsed "Maintenance" disclosure at the
+  // bottom of the ZooKeeper platform view.
+  const [zkMigrationReport, setZkMigrationReport] = useState<ZookeeperMigrationReport | null>(null);
+  const zkMigrationMutation = useMutation({
+    mutationFn: (apply: boolean) => migrateZookeeperAcls(apply),
+    onSuccess: (report) => {
+      setZkMigrationReport(report);
+      toast.success(
+        report.apply
+          ? `Migration applied: updated ${report.updatedCount} znode(s).`
+          : `Dry run: would update ${report.pathsFound.length} znode(s).`,
+      );
+    },
+    onError: (e: any) => toast.error(e.message || 'ZooKeeper ACL migration failed.'),
   });
 
   // Restore (un-archive) a group straight from the Archived tab — one click merges
@@ -410,6 +429,88 @@ export const AdminManagement: React.FC = () => {
                     <summary>{importReport.levelConflicts.length} level conflict(s) resolved by seniority</summary>
                     <pre style={{ whiteSpace: 'pre-wrap', margin: '6px 0 0' }}>
                       {importReport.levelConflicts.join('\n')}
+                    </pre>
+                  </details>
+                )}
+              </div>
+            )}
+          </div>
+        </details>
+      )}
+
+      {/* Maintenance: ZooKeeper ACL migration to world-open. Collapsed disclosure at the bottom */}
+      {superAdmin && activePlatform === 'zookeeper' && (
+        <details
+          style={{
+            marginTop: '8px',
+            marginBottom: '24px',
+            fontSize: '12px',
+            color: 'var(--text-muted)',
+          }}
+        >
+          <summary style={{ cursor: 'pointer', userSelect: 'none' }}>
+            <Icons.Wrench size={12} style={{ verticalAlign: 'middle', marginRight: '6px' }} />
+            Maintenance — migrate ZooKeeper ACLs to world-open
+          </summary>
+          <div
+            style={{
+              marginTop: '10px',
+              padding: '14px',
+              border: '1px solid var(--border)',
+              borderRadius: '8px',
+            }}
+          >
+            <p style={{ margin: '0 0 12px', lineHeight: 1.5 }}>
+              Migrate existing ZooKeeper ACLs (for <code>/hermes</code>, <code>/bachatt</code>, and any configured root path) to world-open (<code>world:anyone:cdrwa</code>) so that other client UIs can read/write them. Run <strong>Dry run</strong> to preview the paths, then <strong>Apply</strong> to write. Node data remains untouched.
+            </p>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                type="button"
+                className="btn btn-outline btn-sm"
+                disabled={zkMigrationMutation.isPending}
+                onClick={() => zkMigrationMutation.mutate(false)}
+              >
+                <Icons.Eye size={15} /> Dry run
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={zkMigrationMutation.isPending}
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      'Apply ZooKeeper ACL migration? This recursively sets ACLs for all /hermes and /bachatt nodes to world-open. Existing node values will not be deleted or modified.',
+                    )
+                  ) {
+                    zkMigrationMutation.mutate(true);
+                  }
+                }}
+              >
+                <Icons.DatabaseZap size={15} /> Apply migration
+              </button>
+            </div>
+            {zkMigrationMutation.isPending && <LoadingSpinner />}
+            {zkMigrationReport && (
+              <div className="table-container" style={{ padding: '12px', marginTop: '12px' }}>
+                <div style={{ marginBottom: '8px' }}>
+                  <strong>{zkMigrationReport.apply ? 'Applied' : 'Dry run'}</strong> — roots scanned:{' '}
+                  {zkMigrationReport.targetRoots.join(', ')}, total paths found:{' '}
+                  {zkMigrationReport.pathsFound.length}, updated successfully:{' '}
+                  {zkMigrationReport.updatedCount}
+                </div>
+                {zkMigrationReport.pathsFound.length > 0 && (
+                  <details style={{ marginTop: '6px' }}>
+                    <summary>{zkMigrationReport.pathsFound.length} paths scanned</summary>
+                    <pre style={{ whiteSpace: 'pre-wrap', margin: '6px 0 0', maxHeight: '150px', overflowY: 'auto' }}>
+                      {zkMigrationReport.pathsFound.join('\n')}
+                    </pre>
+                  </details>
+                )}
+                {zkMigrationReport.failedPaths.length > 0 && (
+                  <details style={{ marginTop: '6px', color: 'var(--status-rejected-text)' }}>
+                    <summary>{zkMigrationReport.failedPaths.length} failed updates</summary>
+                    <pre style={{ whiteSpace: 'pre-wrap', margin: '6px 0 0', maxHeight: '150px', overflowY: 'auto' }}>
+                      {zkMigrationReport.failedPaths.map((f: any) => `${f.path}: ${f.error}`).join('\n')}
                     </pre>
                   </details>
                 )}
