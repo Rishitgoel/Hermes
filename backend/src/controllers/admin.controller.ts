@@ -12,16 +12,23 @@ import logger from '../utils/logger';
 export class AdminController extends BaseController {
   // POST /api/admin/sync[?platform=redash]
   // With ?platform set, syncs only that platform; otherwise syncs all registered platforms.
-  async triggerSync(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async triggerSync(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {return;}
 
       if (!isSuperAdmin(this.user!)) {
-        throw new AuthorizationError('Only super admins can trigger manual synchronization');
+        throw new AuthorizationError(
+          'Only super admins can trigger manual synchronization',
+        );
       }
 
-      const platform = typeof req.query.platform === 'string' ? req.query.platform : undefined;
+      const platform =
+        typeof req.query.platform === 'string' ? req.query.platform : undefined;
 
       logger.info(
         `Super admin ${this.user!.username} triggered manual platform sync${platform ? ` (${platform})` : ''}`,
@@ -40,7 +47,10 @@ export class AdminController extends BaseController {
         },
       });
 
-      this.sendResponse(syncResult, 'Platform synchronization completed successfully');
+      this.sendResponse(
+        syncResult,
+        'Platform synchronization completed successfully',
+      );
     } catch (error) {
       this.handleError(error, 'Synchronization triggered manual task failure');
     }
@@ -49,13 +59,19 @@ export class AdminController extends BaseController {
   // POST /api/admin/reconcile[?dryRun=true]
   // Force a Keycloak↔mirror reconciliation for platform/group admins (super only).
   // dryRun=true reports the drift without writing anything.
-  async triggerReconcile(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async triggerReconcile(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {return;}
 
       if (!isSuperAdmin(this.user!)) {
-        throw new AuthorizationError('Only super admins can trigger admin reconciliation');
+        throw new AuthorizationError(
+          'Only super admins can trigger admin reconciliation',
+        );
       }
 
       const dryRun = req.query.dryRun === 'true';
@@ -78,7 +94,9 @@ export class AdminController extends BaseController {
 
       this.sendResponse(
         result,
-        dryRun ? 'Admin reconciliation dry-run completed (no changes made)' : 'Admin reconciliation completed successfully',
+        dryRun
+          ? 'Admin reconciliation dry-run completed (no changes made)'
+          : 'Admin reconciliation completed successfully',
       );
     } catch (error) {
       this.handleError(error, 'Admin reconciliation failed');
@@ -89,13 +107,19 @@ export class AdminController extends BaseController {
   // Maintenance tool (super admin only): backfill existing Redash accounts +
   // memberships into Hermes so users keep access they already have. Dry-run unless
   // apply === true. Idempotent. Surfaced in a collapsed disclosure in the UI.
-  async importRedashMemberships(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async importRedashMemberships(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {return;}
 
       if (!isSuperAdmin(this.user!)) {
-        throw new AuthorizationError('Only super admins can import Redash memberships');
+        throw new AuthorizationError(
+          'Only super admins can import Redash memberships',
+        );
       }
 
       const apply = req.body?.apply === true;
@@ -135,13 +159,19 @@ export class AdminController extends BaseController {
   // POST /api/admin/migrate-zookeeper-acls  body: { apply?: boolean }
   // Maintenance tool (super admin only): migrate existing ZooKeeper ACLs to world-open (world:anyone:cdrwa).
   // Dry-run unless apply === true.
-  async migrateZookeeperAcls(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async migrateZookeeperAcls(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {return;}
 
       if (!isSuperAdmin(this.user!)) {
-        throw new AuthorizationError('Only super admins can migrate ZooKeeper ACLs');
+        throw new AuthorizationError(
+          'Only super admins can migrate ZooKeeper ACLs',
+        );
       }
 
       const apply = req.body?.apply === true;
@@ -176,3 +206,4 @@ export class AdminController extends BaseController {
     }
   }
 }
+

@@ -44,3 +44,5 @@ coverage/
 
 # graphify knowledge-graph output (build artifact, regenerate with /graphify)
 graphify-out/
+
+backend/generated

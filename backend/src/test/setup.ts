@@ -10,22 +10,28 @@ process.env.DATABASE_URL_HERMES = uri;
 process.env.KEYCLOAK_SIMULATION = 'true';
 process.env.REDASH_SIMULATION = 'true';
 process.env.AWS_SIMULATION = 'true';
-// Pin ZooKeeper to its in-process mock even if the dev .env points at a live ensemble,
-// so the sim tests never try to dial a real ZooKeeper in CI.
 process.env.ZOOKEEPER_SIMULATION = 'true';
-delete process.env.ZOOKEEPER_CONNECT_STRING;
 process.env.EMAIL_SIMULATION = 'true';
 process.env.SLACK_SIMULATION = 'true';
 process.env.NODE_ENV = 'test';
 
-// 2. Run migrations on the test database
+// 2. Provision the schema on the EPHEMERAL test database only.
+//    `db push` is used here purely for the throwaway Testcontainer — it is NEVER run
+//    against QA/prod (those are provisioned by hand from prisma/hermes/manual-schema.sql;
+//    nothing in the deploy path migrates). Hard-guard: refuse to touch anything that is
+//    not the local container, so a stray DATABASE_URL_HERMES in the env can't nuke a real DB.
+if (!/@(localhost|127\.0\.0\.1)(:|\/)/.test(uri)) {
+  console.error(`Refusing to run schema setup against a non-local database: ${uri}`);
+  await container.stop();
+  process.exit(1);
+}
 try {
-  execSync('npx prisma migrate deploy --schema=prisma/hermes/schema.prisma', {
+  execSync('npx prisma db push --schema=prisma/hermes/schema.prisma --accept-data-loss --skip-generate', {
     env: { ...process.env, DATABASE_URL_HERMES: uri },
     stdio: 'inherit',
   });
 } catch (err) {
-  console.error('Failed to run Prisma migrations on the ephemeral test database:', err);
+  console.error('Failed to provision the ephemeral test database:', err);
   await container.stop();
   process.exit(1);
 }
@@ -54,11 +60,10 @@ beforeEach(async () => {
       "group_admins", 
       "platform_admins", 
       "user_creation_requests", 
-      "platform_external_users",
-      "platform_external_groups",
-      "zookeeper_change_requests",
-      "group_levels",
-      "groups"
+      "platform_external_users", 
+      "platform_external_groups", 
+      "group_levels", 
+      "groups" 
     CASCADE;
   `);
 });

@@ -12,12 +12,29 @@ import {
   isAnyAdmin,
   getManageablePlatforms,
 } from '../utils/authz';
-import { AuthorizationError, NotFoundError, ValidationError, ConflictError } from '../utils/errors';
-import { assignPlatformAdminSchema, assignGroupAdminSchema, setMemberLevelSchema, addGroupMemberSchema } from '../validations/admin.validation';
-import { createGroupLevelSchema, updateGroupLevelSchema } from '../validations/group-level.validation';
-import { createGroupSchema, updateGroupSchema } from '../validations/group.validation';
+import {
+  AuthorizationError,
+  NotFoundError,
+  ValidationError,
+  ConflictError,
+} from '../utils/errors';
+import {
+  assignPlatformAdminSchema,
+  assignGroupAdminSchema,
+  setMemberLevelSchema,
+  addGroupMemberSchema,
+} from '../validations/admin.validation';
+import {
+  createGroupLevelSchema,
+  updateGroupLevelSchema,
+} from '../validations/group-level.validation';
+import {
+  createGroupSchema,
+  updateGroupSchema,
+} from '../validations/group.validation';
 import logger from '../utils/logger';
-import { RequestStatus } from '@prisma/client';
+import { RequestStatus } from '../../generated/hermes';
+
 
 const PLATFORM_ADMIN_MARKER = 'hermes_platform_admin';
 const GROUP_ADMIN_MARKER = 'hermes_group_admin';
@@ -36,7 +53,8 @@ const TERMINAL_REQUEST_STATUSES: RequestStatus[] = [
   RequestStatus.REVOKED,
 ];
 
-const platformAdminRole = (platform: string) => `hermes_platform_admin_${platform.toLowerCase()}`;
+const platformAdminRole = (platform: string) =>
+  `hermes_platform_admin_${platform.toLowerCase()}`;
 // Platform-qualified so the role is self-documenting and consistent with the
 // platform-admin role (e.g. hermes_group_admin_redash_growth). Slug keeps its
 // hyphens; platform keys are single tokens, so <platform>_<slug> parses cleanly.
@@ -55,7 +73,9 @@ const groupAdminRole = (platform: string, slug: string) =>
  */
 export class AdminManagementController extends BaseController {
   /** Look up a user's display name/email from the "users Hermes has seen" set. */
-  private async resolveUserProfile(userId: string): Promise<{ userName: string; userEmail: string }> {
+  private async resolveUserProfile(
+    userId: string,
+  ): Promise<{ userName: string; userEmail: string }> {
     // A user can now have one account-creation row per platform; name/email are
     // identical across them, so any row answers the "have we seen this user" question.
     const row = await prisma.userCreationRequest.findFirst({
@@ -95,25 +115,36 @@ export class AdminManagementController extends BaseController {
   }
 
   // GET /api/admin/platforms — platform keys the caller may administer.
-  async listManageablePlatforms(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async listManageablePlatforms(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
-      if (!this.getUserId()) return;
+      if (!this.getUserId()) {return;}
       const platforms = await getManageablePlatforms(this.user!);
       // Gate like the sibling lookups (/users, /groups, /group-admins): a non-admin
       // with no manageable platforms gets 403, not a 200 with an empty array.
       if (platforms.length === 0) {
         throw new AuthorizationError('You do not administer any platforms');
       }
-      this.sendResponse(platforms, 'Manageable platforms retrieved successfully');
+      this.sendResponse(
+        platforms,
+        'Manageable platforms retrieved successfully',
+      );
     } catch (error) {
       this.handleError(error, 'Failed to retrieve manageable platforms');
     }
   }
 
   // GET /api/admin/users?search= — candidate users to promote (seen by Hermes).
-  async searchUsers(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async searchUsers(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
-      if (!this.getUserId()) return;
+      if (!this.getUserId()) {return;}
 
       // Only admins who can assign roles (super or platform admin) may search.
       const manageable = await getManageablePlatforms(this.user!);
@@ -151,14 +182,22 @@ export class AdminManagementController extends BaseController {
   // ── Platform admins (super admin only) ───────────────────────────────────
 
   // GET /api/admin/platform-admins?platform=
-  async listPlatformAdmins(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async listPlatformAdmins(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
-      if (!this.getUserId()) return;
+      if (!this.getUserId()) {return;}
       if (!isSuperAdmin(this.user!)) {
-        throw new AuthorizationError('Only super admins can view platform admins');
+        throw new AuthorizationError(
+          'Only super admins can view platform admins',
+        );
       }
 
-      const platform = req.query.platform ? String(req.query.platform).toLowerCase() : undefined;
+      const platform = req.query.platform
+        ? String(req.query.platform).toLowerCase()
+        : undefined;
       const rows = await prisma.platformAdmin.findMany({
         where: platform ? { platform } : undefined,
         orderBy: [{ platform: 'asc' }, { userName: 'asc' }],
@@ -171,33 +210,52 @@ export class AdminManagementController extends BaseController {
   }
 
   // POST /api/admin/platform-admins  { userId, platform }
-  async assignPlatformAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async assignPlatformAdmin(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
-      if (!this.getUserId()) return;
+      if (!this.getUserId()) {return;}
       if (!isSuperAdmin(this.user!)) {
-        throw new AuthorizationError('Only super admins can assign platform admins');
+        throw new AuthorizationError(
+          'Only super admins can assign platform admins',
+        );
       }
 
-      const validated = this.validateWithZod(assignPlatformAdminSchema, this.req.body);
-      if (!validated.success) return;
+      const validated = this.validateWithZod(
+        assignPlatformAdminSchema,
+        this.req.body,
+      );
+      if (!validated.success) {return;}
 
       const userId = validated.data.userId;
       const platform = validated.data.platform.toLowerCase();
 
       if (!provisioningRegistry.has(platform)) {
-        throw new ValidationError(`Unknown platform "${platform}" — no provisioner is registered for it.`);
+        throw new ValidationError(
+          `Unknown platform "${platform}" — no provisioner is registered for it.`,
+        );
       }
 
       const profile = await this.resolveUserProfile(userId);
       const role = platformAdminRole(platform);
 
       // Keycloak (source of truth): ensure the composite role exists, then assign.
-      await keycloakAdminService.ensureCompositeRole(role, PLATFORM_ADMIN_MARKER, `Hermes platform admin for ${platform}`);
+      await keycloakAdminService.ensureCompositeRole(
+        role,
+        PLATFORM_ADMIN_MARKER,
+        `Hermes platform admin for ${platform}`,
+      );
       await keycloakAdminService.assignRealmRole(userId, role);
 
       const row = await prisma.platformAdmin.upsert({
         where: { userId_platform: { userId, platform } },
-        update: { userName: profile.userName, userEmail: profile.userEmail, assignedBy: this.user!.username },
+        update: {
+          userName: profile.userName,
+          userEmail: profile.userEmail,
+          assignedBy: this.user!.username,
+        },
         create: {
           userId,
           platform,
@@ -225,18 +283,27 @@ export class AdminManagementController extends BaseController {
   }
 
   // DELETE /api/admin/platform-admins/:id
-  async removePlatformAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async removePlatformAdmin(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
-      if (!this.getUserId()) return;
+      if (!this.getUserId()) {return;}
       if (!isSuperAdmin(this.user!)) {
-        throw new AuthorizationError('Only super admins can remove platform admins');
+        throw new AuthorizationError(
+          'Only super admins can remove platform admins',
+        );
       }
 
       const id = String(req.params.id);
       const row = await prisma.platformAdmin.findUnique({ where: { id } });
-      if (!row) throw new NotFoundError('Platform admin assignment not found');
+      if (!row) {throw new NotFoundError('Platform admin assignment not found');}
 
-      await keycloakAdminService.removeRealmRole(row.userId, platformAdminRole(row.platform));
+      await keycloakAdminService.removeRealmRole(
+        row.userId,
+        platformAdminRole(row.platform),
+      );
       await prisma.platformAdmin.delete({ where: { id } });
 
       // Deleting the mirror row revokes authorization immediately (authz is
@@ -252,7 +319,10 @@ export class AdminManagementController extends BaseController {
           performerName: this.user!.username,
           targetUserId: row.userId,
           targetUserName: row.userName,
-          details: { platform: row.platform, role: platformAdminRole(row.platform) },
+          details: {
+            platform: row.platform,
+            role: platformAdminRole(row.platform),
+          },
         },
       });
 
@@ -265,9 +335,13 @@ export class AdminManagementController extends BaseController {
   // ── Manageable groups (for the UI tree) ──────────────────────────────────
 
   // GET /api/admin/groups?platform=
-  async listManageableGroups(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async listManageableGroups(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
-      if (!this.getUserId()) return;
+      if (!this.getUserId()) {return;}
 
       const manageable = await getManageablePlatforms(this.user!);
       if (manageable.length === 0) {
@@ -296,7 +370,7 @@ export class AdminManagementController extends BaseController {
       });
 
       this.sendResponse(
-        groups.map((g) => {
+        groups.map(g => {
           // memberCount = everyone holding a real active grant. Admins are NOT
           // auto-enrolled, so any grant an admin holds is a genuine membership —
           // a person with both the admin role and a grant counts in both columns
@@ -334,33 +408,43 @@ export class AdminManagementController extends BaseController {
       throw new AuthorizationError('You cannot manage this group');
     }
     const group = await prisma.group.findUnique({ where: { id: groupId } });
-    if (!group) throw new NotFoundError('Group not found');
+    if (!group) {throw new NotFoundError('Group not found');}
     if (!(await isPlatformAdminOf(this.user!, group.platform))) {
-      throw new AuthorizationError("You cannot manage groups for this group's platform");
+      throw new AuthorizationError(
+        'You cannot manage groups for this group\'s platform',
+      );
     }
     return group;
   }
 
   // POST /api/admin/groups
-  async createGroup(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async createGroup(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
-      if (!this.getUserId()) return;
+      if (!this.getUserId()) {return;}
       // Coarse precheck before reading the body (avoids leaking via validation errors).
       if (!(await isAnyAdmin(this.user!))) {
         throw new AuthorizationError('You cannot create groups');
       }
 
       const validated = this.validateWithZod(createGroupSchema, this.req.body);
-      if (!validated.success) return;
+      if (!validated.success) {return;}
       const data = validated.data;
       const platform = data.platform; // lowercased by the schema
 
       if (!provisioningRegistry.has(platform)) {
-        throw new ValidationError(`Unknown platform "${platform}" — no provisioner is registered for it.`);
+        throw new ValidationError(
+          `Unknown platform "${platform}" — no provisioner is registered for it.`,
+        );
       }
       // Must be super, or platform admin of THIS platform.
       if (!(await isPlatformAdminOf(this.user!, platform))) {
-        throw new AuthorizationError('You cannot create groups for this platform');
+        throw new AuthorizationError(
+          'You cannot create groups for this platform',
+        );
       }
 
       // Resolve the backing platform group, same as createGroupLevel:
@@ -371,7 +455,8 @@ export class AdminManagementController extends BaseController {
       // Validate a pasted id against the platform's format before doing any work, so a
       // malformed value (e.g. a ZooKeeper path missing its leading "/") is rejected up
       // front instead of being saved and then breaking every future provision.
-      if (data.externalGroupId) adapter.validateExternalGroupId?.(data.externalGroupId);
+      if (data.externalGroupId)
+        {adapter.validateExternalGroupId?.(data.externalGroupId);}
       let externalGroupId = data.externalGroupId ?? null;
       let autoCreatedExternalGroupId: string | null = null;
       if (!externalGroupId && adapter.createExternalGroup) {
@@ -406,7 +491,10 @@ export class AdminManagementController extends BaseController {
             await adapter.deleteExternalGroup(autoCreatedExternalGroupId);
           } catch (cleanupErr: any) {
             logger.warn(
-              { externalGroupId: autoCreatedExternalGroupId, error: cleanupErr.message },
+              {
+                externalGroupId: autoCreatedExternalGroupId,
+                error: cleanupErr.message,
+              },
               'Failed to roll back auto-created platform group after group insert failure',
             );
           }
@@ -418,9 +506,13 @@ export class AdminManagementController extends BaseController {
           // Slug is auto-uniquified above, so a slug hit here can only be a rare
           // concurrent-create race; name collisions are the real user-facing case.
           if (target.includes('name')) {
-            throw new ConflictError('A group with this name already exists on this platform.');
+            throw new ConflictError(
+              'A group with this name already exists on this platform.',
+            );
           }
-          throw new ConflictError('A group with this slug already exists. Please try again.');
+          throw new ConflictError(
+            'A group with this slug already exists. Please try again.',
+          );
         }
         throw err;
       }
@@ -488,18 +580,22 @@ export class AdminManagementController extends BaseController {
     let reconciliation: ReconcileMembersResult | null = null;
     if (adapter?.reconcileMembers) {
       const members = await prisma.userAccess.findMany({
-        where: { ...opts.memberWhere, isActive: true, externalUserId: { not: null } },
+        where: {
+          ...opts.memberWhere,
+          isActive: true,
+          externalUserId: { not: null },
+        },
         select: { userEmail: true, userName: true, externalUserId: true },
       });
       const retainByEmail = await this.collectMemberRetainExternalIds(
-        members.map((m) => m.userEmail),
+        members.map(m => m.userEmail),
         opts.platform,
         opts.groupId,
       );
       reconciliation = await adapter.reconcileMembers({
         oldExternalGroupId: opts.oldExternalGroupId,
         newExternalGroupId: opts.newExternalGroupId,
-        members: members.map((m) => ({
+        members: members.map(m => ({
           email: m.userEmail,
           name: m.userName,
           externalUserId: m.externalUserId!,
@@ -528,14 +624,18 @@ export class AdminManagementController extends BaseController {
   }
 
   // PUT /api/admin/groups/:groupId — edit presentational fields + archive/restore.
-  async updateGroup(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async updateGroup(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
-      if (!this.getUserId()) return;
+      if (!this.getUserId()) {return;}
       const groupId = String(req.params.groupId);
       const existing = await this.authorizeGroupManagement(groupId);
 
       const validated = this.validateWithZod(updateGroupSchema, this.req.body);
-      if (!validated.success) return;
+      if (!validated.success) {return;}
       const data = validated.data;
 
       // externalGroupId is editable ONLY for adapters that can reconcile existing
@@ -543,7 +643,8 @@ export class AdminManagementController extends BaseController {
       // platform (Redash/AWS) it stays immutable — swapping it would orphan members.
       const adapter = provisioningRegistry.tryGet(existing.platform);
       const externalGroupIdChanged =
-        data.externalGroupId !== undefined && data.externalGroupId !== existing.externalGroupId;
+        data.externalGroupId !== undefined &&
+        data.externalGroupId !== existing.externalGroupId;
       if (externalGroupIdChanged && !adapter?.reconcileMembers) {
         throw new ValidationError(
           `The external group mapping is immutable for the "${existing.platform}" platform.`,
@@ -561,12 +662,16 @@ export class AdminManagementController extends BaseController {
           where: { id: groupId },
           data: {
             ...(data.name !== undefined ? { name: data.name } : {}),
-            ...(data.description !== undefined ? { description: data.description } : {}),
+            ...(data.description !== undefined
+              ? { description: data.description }
+              : {}),
             ...(data.icon !== undefined ? { icon: data.icon } : {}),
             ...(data.color !== undefined ? { color: data.color } : {}),
             ...(data.tables !== undefined ? { tables: data.tables } : {}),
             ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
-            ...(externalGroupIdChanged ? { externalGroupId: data.externalGroupId } : {}),
+            ...(externalGroupIdChanged
+              ? { externalGroupId: data.externalGroupId }
+              : {}),
           },
         });
       } catch (err: any) {
@@ -582,7 +687,11 @@ export class AdminManagementController extends BaseController {
           performerId: this.user!.id,
           performerName: this.user!.username,
           groupId,
-          details: { slug: group.slug, platform: group.platform, changed: Object.keys(data) },
+          details: {
+            slug: group.slug,
+            platform: group.platform,
+            changed: Object.keys(data),
+          },
         },
       });
 
@@ -600,7 +709,10 @@ export class AdminManagementController extends BaseController {
         });
       }
 
-      this.sendResponse({ ...group, reconciliation }, 'Group updated successfully');
+      this.sendResponse(
+        { ...group, reconciliation },
+        'Group updated successfully',
+      );
     } catch (error) {
       this.handleError(error, 'Failed to update group');
     }
@@ -612,12 +724,18 @@ export class AdminManagementController extends BaseController {
   // row blocks the delete). Levels and group-admins ON DELETE Cascade away. Anything
   // with history archives instead (isActive:false): it leaves the request flow
   // (getGroups filters isActive) while existing members keep access until expiry/revoke.
-  async deleteGroup(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async deleteGroup(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
-      if (!this.getUserId()) return;
+      if (!this.getUserId()) {return;}
       const groupId = String(req.params.groupId);
       const group = await this.authorizeGroupManagement(groupId);
-      const force = req.query.force === 'true' || (req.body as { force?: boolean })?.force === true;
+      const force =
+        req.query.force === 'true' ||
+        (req.body as { force?: boolean })?.force === true;
 
       // Force delete: permanently remove the group AND its historical access/request
       // rows, even when it has history — but ONLY when nobody currently holds active
@@ -627,8 +745,10 @@ export class AdminManagementController extends BaseController {
       if (force) {
         // Run active count check inside the transaction to prevent races where a user access row
         // is created between checking the count and performing the deletes.
-        await prisma.$transaction(async (tx) => {
-          const activeCount = await tx.userAccess.count({ where: { groupId, isActive: true } });
+        await prisma.$transaction(async tx => {
+          const activeCount = await tx.userAccess.count({
+            where: { groupId, isActive: true },
+          });
           if (activeCount > 0) {
             throw new ConflictError(
               `Group has ${activeCount} active member(s). Revoke their access (or wait for it to expire) before deleting permanently.`,
@@ -650,7 +770,10 @@ export class AdminManagementController extends BaseController {
               await adapter.deleteExternalGroup(group.externalGroupId);
             } catch (cleanupErr: any) {
               logger.warn(
-                { externalGroupId: group.externalGroupId, error: cleanupErr.message },
+                {
+                  externalGroupId: group.externalGroupId,
+                  error: cleanupErr.message,
+                },
                 'Group force-deleted but failed to remove its backing platform group',
               );
             }
@@ -672,7 +795,10 @@ export class AdminManagementController extends BaseController {
             },
           },
         });
-        this.sendResponse({ id: groupId, deleted: true }, 'Group permanently deleted, including its history.');
+        this.sendResponse(
+          { id: groupId, deleted: true },
+          'Group permanently deleted, including its history.',
+        );
         return;
       }
 
@@ -689,7 +815,7 @@ export class AdminManagementController extends BaseController {
         try {
           await prisma.group.delete({ where: { id: groupId } });
         } catch (err: any) {
-          if (err?.code !== 'P2003') throw err;
+          if (err?.code !== 'P2003') {throw err;}
           raced = true;
           [requestCount, accessCount] = await Promise.all([
             prisma.accessRequest.count({ where: { groupId } }),
@@ -712,7 +838,10 @@ export class AdminManagementController extends BaseController {
               await adapter.deleteExternalGroup(group.externalGroupId);
             } catch (cleanupErr: any) {
               logger.warn(
-                { externalGroupId: group.externalGroupId, error: cleanupErr.message },
+                {
+                  externalGroupId: group.externalGroupId,
+                  error: cleanupErr.message,
+                },
                 'Group deleted but failed to remove its backing platform group',
               );
             }
@@ -725,7 +854,12 @@ export class AdminManagementController extends BaseController {
             performerId: this.user!.id,
             performerName: this.user!.username,
             groupId,
-            details: { name: group.name, slug: group.slug, platform: group.platform, externalGroupId: group.externalGroupId },
+            details: {
+              name: group.name,
+              slug: group.slug,
+              platform: group.platform,
+              externalGroupId: group.externalGroupId,
+            },
           },
         });
         this.sendResponse({ id: groupId, deleted: true }, 'Group deleted');
@@ -733,14 +867,23 @@ export class AdminManagementController extends BaseController {
       }
 
       // Has history → archive instead of delete.
-      const archived = await prisma.group.update({ where: { id: groupId }, data: { isActive: false } });
+      const archived = await prisma.group.update({
+        where: { id: groupId },
+        data: { isActive: false },
+      });
       await prisma.auditEntry.create({
         data: {
           action: 'GROUP_ARCHIVED',
           performerId: this.user!.id,
           performerName: this.user!.username,
           groupId,
-          details: { name: archived.name, slug: archived.slug, platform: archived.platform, requestCount, accessCount },
+          details: {
+            name: archived.name,
+            slug: archived.slug,
+            platform: archived.platform,
+            requestCount,
+            accessCount,
+          },
         },
       });
       this.sendResponse(
@@ -755,16 +898,21 @@ export class AdminManagementController extends BaseController {
   // ── Group admins (super, or platform admin of that group's platform) ──────
 
   // GET /api/admin/group-admins?platform=&groupId=
-  async listGroupAdmins(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async listGroupAdmins(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
-      if (!this.getUserId()) return;
+      if (!this.getUserId()) {return;}
 
       const manageable = await getManageablePlatforms(this.user!);
       if (manageable.length === 0) {
         throw new AuthorizationError('You do not administer any platforms');
       }
 
-      const groupWhere: { platform?: string | { in: string[] }; id?: string } = {};
+      const groupWhere: { platform?: string | { in: string[] }; id?: string } =
+        {};
       if (!isSuperAdmin(this.user!)) {
         groupWhere.platform = { in: manageable };
       }
@@ -779,12 +927,19 @@ export class AdminManagementController extends BaseController {
         groupWhere.id = String(req.query.groupId);
       }
 
-      const groups = await prisma.group.findMany({ where: groupWhere, select: { id: true } });
-      const groupIds = groups.map((g) => g.id);
+      const groups = await prisma.group.findMany({
+        where: groupWhere,
+        select: { id: true },
+      });
+      const groupIds = groups.map(g => g.id);
 
       const rows = await prisma.groupAdmin.findMany({
         where: { groupId: { in: groupIds } },
-        include: { group: { select: { name: true, slug: true, platform: true, color: true } } },
+        include: {
+          group: {
+            select: { name: true, slug: true, platform: true, color: true },
+          },
+        },
         orderBy: { userName: 'asc' },
       });
 
@@ -795,45 +950,64 @@ export class AdminManagementController extends BaseController {
   }
 
   // POST /api/admin/group-admins  { userId, groupId }
-  async assignGroupAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async assignGroupAdmin(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
-      if (!this.getUserId()) return;
+      if (!this.getUserId()) {return;}
 
       // Coarse precheck before the group lookup so a non-admin can't probe group
       // existence via the 404-vs-403 difference. The fine-grained check is below.
       if (!(await isAnyAdmin(this.user!))) {
-        throw new AuthorizationError("You cannot manage this group's admins");
+        throw new AuthorizationError('You cannot manage this group\'s admins');
       }
 
-      const validated = this.validateWithZod(assignGroupAdminSchema, this.req.body);
-      if (!validated.success) return;
+      const validated = this.validateWithZod(
+        assignGroupAdminSchema,
+        this.req.body,
+      );
+      if (!validated.success) {return;}
 
       const { userId, groupId } = validated.data;
       const group = await prisma.group.findUnique({ where: { id: groupId } });
-      if (!group) throw new NotFoundError('Group not found');
+      if (!group) {throw new NotFoundError('Group not found');}
 
       // Super admin or platform admin of this group's platform. (Assigning a user
       // who also holds super_admin is allowed and harmless — no extra guard.)
       if (!(await isPlatformAdminOf(this.user!, group.platform))) {
-        throw new AuthorizationError("You cannot manage admins for this group's platform");
+        throw new AuthorizationError(
+          'You cannot manage admins for this group\'s platform',
+        );
       }
 
       // Reject groups whose platform has no registered provisioner (mirrors the
       // check in assignPlatformAdmin) — otherwise we'd mint an admin we can't
       // provision for, and the auto-enroll below would silently fail.
       if (!provisioningRegistry.has(group.platform)) {
-        throw new ValidationError(`Unknown platform "${group.platform}" — no provisioner is registered for it.`);
+        throw new ValidationError(
+          `Unknown platform "${group.platform}" — no provisioner is registered for it.`,
+        );
       }
 
       const profile = await this.resolveUserProfile(userId);
       const role = groupAdminRole(group.platform, group.slug);
 
-      await keycloakAdminService.ensureCompositeRole(role, GROUP_ADMIN_MARKER, `Hermes group admin for ${group.platform}/${group.slug}`);
+      await keycloakAdminService.ensureCompositeRole(
+        role,
+        GROUP_ADMIN_MARKER,
+        `Hermes group admin for ${group.platform}/${group.slug}`,
+      );
       await keycloakAdminService.assignRealmRole(userId, role);
 
       const row = await prisma.groupAdmin.upsert({
         where: { groupId_userId: { groupId, userId } },
-        update: { userName: profile.userName, userEmail: profile.userEmail, assignedBy: this.user!.username },
+        update: {
+          userName: profile.userName,
+          userEmail: profile.userEmail,
+          assignedBy: this.user!.username,
+        },
         create: {
           groupId,
           userId,
@@ -865,9 +1039,13 @@ export class AdminManagementController extends BaseController {
   }
 
   // DELETE /api/admin/group-admins/:id
-  async removeGroupAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async removeGroupAdmin(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
-      if (!this.getUserId()) return;
+      if (!this.getUserId()) {return;}
 
       // Coarse precheck before the row lookup (avoids a 404-vs-403 existence oracle).
       if (!(await isAnyAdmin(this.user!))) {
@@ -875,14 +1053,22 @@ export class AdminManagementController extends BaseController {
       }
 
       const id = String(req.params.id);
-      const row = await prisma.groupAdmin.findUnique({ where: { id }, include: { group: true } });
-      if (!row) throw new NotFoundError('Group admin assignment not found');
+      const row = await prisma.groupAdmin.findUnique({
+        where: { id },
+        include: { group: true },
+      });
+      if (!row) {throw new NotFoundError('Group admin assignment not found');}
 
       if (!(await isPlatformAdminOf(this.user!, row.group.platform))) {
-        throw new AuthorizationError("You cannot manage admins for this group's platform");
+        throw new AuthorizationError(
+          'You cannot manage admins for this group\'s platform',
+        );
       }
 
-      await keycloakAdminService.removeRealmRole(row.userId, groupAdminRole(row.group.platform, row.group.slug));
+      await keycloakAdminService.removeRealmRole(
+        row.userId,
+        groupAdminRole(row.group.platform, row.group.slug),
+      );
       await prisma.groupAdmin.delete({ where: { id } });
 
       // Mirror deletion revokes authorization immediately (authz is
@@ -898,13 +1084,20 @@ export class AdminManagementController extends BaseController {
           targetUserId: row.userId,
           targetUserName: row.userName,
           groupId: row.groupId,
-          details: { slug: row.group.slug, platform: row.group.platform, role: groupAdminRole(row.group.platform, row.group.slug) },
+          details: {
+            slug: row.group.slug,
+            platform: row.group.platform,
+            role: groupAdminRole(row.group.platform, row.group.slug),
+          },
         },
       });
 
       // Membership is intentionally retained — removing admin rights does not
       // revoke their group access (revoke manually if needed).
-      this.sendResponse({ id }, 'Group admin removed (group membership retained)');
+      this.sendResponse(
+        { id },
+        'Group admin removed (group membership retained)',
+      );
     } catch (error) {
       this.handleError(error, 'Failed to remove group admin');
     }
@@ -913,9 +1106,13 @@ export class AdminManagementController extends BaseController {
   // ── Members ──────────────────────────────────────────────────────────────
 
   // GET /api/admin/groups/:groupId/members
-  async listGroupMembers(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async listGroupMembers(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
-      if (!this.getUserId()) return;
+      if (!this.getUserId()) {return;}
 
       // Coarse precheck before the group lookup (avoids a 404-vs-403 existence
       // oracle); same message as the fine-grained check so they're indistinguishable.
@@ -925,7 +1122,7 @@ export class AdminManagementController extends BaseController {
 
       const groupId = String(req.params.groupId);
       const group = await prisma.group.findUnique({ where: { id: groupId } });
-      if (!group) throw new NotFoundError('Group not found');
+      if (!group) {throw new NotFoundError('Group not found');}
 
       if (!(await isGroupAdminOf(this.user!, groupId, group.slug))) {
         throw new AuthorizationError('You do not administer this group');
@@ -941,12 +1138,15 @@ export class AdminManagementController extends BaseController {
           orderBy: { grantedAt: 'desc' },
           include: { level: { select: { name: true, permission: true } } },
         }),
-        prisma.groupAdmin.findMany({ where: { groupId }, select: { userId: true } }),
+        prisma.groupAdmin.findMany({
+          where: { groupId },
+          select: { userId: true },
+        }),
       ]);
-      const adminUserIds = new Set(admins.map((a) => a.userId));
+      const adminUserIds = new Set(admins.map(a => a.userId));
 
       this.sendResponse(
-        members.map((m) => ({
+        members.map(m => ({
           id: m.id,
           userId: m.userId,
           userName: m.userName,
@@ -976,10 +1176,14 @@ export class AdminManagementController extends BaseController {
   // already-approved request, so it carries the same tier as the other member
   // actions (group admin of this group, or platform/super above it). The workflow
   // service applies the normal request validations + the per-platform account gate.
-  async addGroupMember(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async addGroupMember(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {return;}
 
       // Coarse precheck before the group lookup (avoids a 404-vs-403 existence
       // oracle); same message as the fine-grained check so they're indistinguishable.
@@ -989,19 +1193,26 @@ export class AdminManagementController extends BaseController {
 
       const groupId = String(req.params.groupId);
       const group = await prisma.group.findUnique({ where: { id: groupId } });
-      if (!group) throw new NotFoundError('Group not found');
+      if (!group) {throw new NotFoundError('Group not found');}
 
       if (!(await isGroupAdminOf(this.user!, groupId, group.slug))) {
         throw new AuthorizationError('You do not administer this group');
       }
 
-      const validated = this.validateWithZod(addGroupMemberSchema, this.req.body);
-      if (!validated.success) return;
+      const validated = this.validateWithZod(
+        addGroupMemberSchema,
+        this.req.body,
+      );
+      if (!validated.success) {return;}
 
       const profile = await this.resolveUserProfile(validated.data.userId);
       const result = await accessWorkflowService.adminAddMember(
         { id: userId, username: this.user!.username },
-        { id: validated.data.userId, name: profile.userName, email: profile.userEmail },
+        {
+          id: validated.data.userId,
+          name: profile.userName,
+          email: profile.userEmail,
+        },
         groupId,
         validated.data.levelId ?? null,
         validated.data.duration,
@@ -1020,10 +1231,14 @@ export class AdminManagementController extends BaseController {
   }
 
   // DELETE /api/admin/groups/:groupId/members/:userAccessId
-  async removeGroupMember(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async removeGroupMember(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {return;}
 
       // Coarse precheck before the group lookup (avoids a 404-vs-403 existence
       // oracle); same message as the fine-grained check so they're indistinguishable.
@@ -1035,13 +1250,15 @@ export class AdminManagementController extends BaseController {
       const userAccessId = String(req.params.userAccessId);
 
       const group = await prisma.group.findUnique({ where: { id: groupId } });
-      if (!group) throw new NotFoundError('Group not found');
+      if (!group) {throw new NotFoundError('Group not found');}
 
       if (!(await isGroupAdminOf(this.user!, groupId, group.slug))) {
         throw new AuthorizationError('You do not administer this group');
       }
 
-      const access = await prisma.userAccess.findUnique({ where: { id: userAccessId } });
+      const access = await prisma.userAccess.findUnique({
+        where: { id: userAccessId },
+      });
       if (!access || access.groupId !== groupId) {
         throw new NotFoundError('Member not found in this group');
       }
@@ -1066,10 +1283,14 @@ export class AdminManagementController extends BaseController {
   // Admin override: set the level a member holds. Same authorization as the other
   // member actions (group admin of this group, or platform/super above it). The
   // swap (and platform re-provisioning) happens in the workflow service.
-  async setGroupMemberLevel(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async setGroupMemberLevel(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {return;}
 
       // Coarse precheck before the group lookup (avoids a 404-vs-403 existence oracle).
       if (!(await isAnyAdmin(this.user!))) {
@@ -1080,16 +1301,21 @@ export class AdminManagementController extends BaseController {
       const userAccessId = String(req.params.userAccessId);
 
       const group = await prisma.group.findUnique({ where: { id: groupId } });
-      if (!group) throw new NotFoundError('Group not found');
+      if (!group) {throw new NotFoundError('Group not found');}
 
       if (!(await isGroupAdminOf(this.user!, groupId, group.slug))) {
         throw new AuthorizationError('You do not administer this group');
       }
 
-      const validated = this.validateWithZod(setMemberLevelSchema, this.req.body);
-      if (!validated.success) return;
+      const validated = this.validateWithZod(
+        setMemberLevelSchema,
+        this.req.body,
+      );
+      if (!validated.success) {return;}
 
-      const access = await prisma.userAccess.findUnique({ where: { id: userAccessId } });
+      const access = await prisma.userAccess.findUnique({
+        where: { id: userAccessId },
+      });
       if (!access || access.groupId !== groupId) {
         throw new NotFoundError('Member not found in this group');
       }
@@ -1115,20 +1341,26 @@ export class AdminManagementController extends BaseController {
   /** Shared gate for level CRUD: coarse precheck → load group → platform-tier check. */
   private async authorizeLevelManagement(groupId: string) {
     if (!(await isAnyAdmin(this.user!))) {
-      throw new AuthorizationError("You cannot manage this group's levels");
+      throw new AuthorizationError('You cannot manage this group\'s levels');
     }
     const group = await prisma.group.findUnique({ where: { id: groupId } });
-    if (!group) throw new NotFoundError('Group not found');
+    if (!group) {throw new NotFoundError('Group not found');}
     if (!(await isPlatformAdminOf(this.user!, group.platform))) {
-      throw new AuthorizationError("You cannot manage levels for this group's platform");
+      throw new AuthorizationError(
+        'You cannot manage levels for this group\'s platform',
+      );
     }
     return group;
   }
 
   // GET /api/admin/groups/:groupId/levels — all levels (incl. inactive) + member counts.
-  async listGroupLevels(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async listGroupLevels(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
-      if (!this.getUserId()) return;
+      if (!this.getUserId()) {return;}
       const groupId = String(req.params.groupId);
       await this.authorizeLevelManagement(groupId);
 
@@ -1141,7 +1373,7 @@ export class AdminManagementController extends BaseController {
       });
 
       this.sendResponse(
-        levels.map((l) => ({
+        levels.map(l => ({
           id: l.id,
           name: l.name,
           slug: l.slug,
@@ -1160,14 +1392,21 @@ export class AdminManagementController extends BaseController {
   }
 
   // POST /api/admin/groups/:groupId/levels
-  async createGroupLevel(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async createGroupLevel(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
-      if (!this.getUserId()) return;
+      if (!this.getUserId()) {return;}
       const groupId = String(req.params.groupId);
       const group = await this.authorizeLevelManagement(groupId);
 
-      const validated = this.validateWithZod(createGroupLevelSchema, this.req.body);
-      if (!validated.success) return;
+      const validated = this.validateWithZod(
+        createGroupLevelSchema,
+        this.req.body,
+      );
+      if (!validated.success) {return;}
       const data = validated.data;
 
       // Resolve the backing platform group:
@@ -1179,9 +1418,12 @@ export class AdminManagementController extends BaseController {
       let autoCreatedExternalGroupId: string | null = null;
       const adapter = provisioningRegistry.tryGet(group.platform);
       // Reject a malformed pasted id (e.g. a bad ZooKeeper path) before persisting.
-      if (data.externalGroupId) adapter?.validateExternalGroupId?.(data.externalGroupId);
+      if (data.externalGroupId)
+        {adapter?.validateExternalGroupId?.(data.externalGroupId);}
       if (!externalGroupId && adapter?.createExternalGroup) {
-        const created = await adapter.createExternalGroup(`${group.name} — ${data.name}`);
+        const created = await adapter.createExternalGroup(
+          `${group.name} — ${data.name}`,
+        );
         externalGroupId = created.externalGroupId;
         autoCreatedExternalGroupId = created.externalGroupId;
       }
@@ -1207,13 +1449,18 @@ export class AdminManagementController extends BaseController {
             await adapter.deleteExternalGroup(autoCreatedExternalGroupId);
           } catch (cleanupErr: any) {
             logger.warn(
-              { externalGroupId: autoCreatedExternalGroupId, error: cleanupErr.message },
+              {
+                externalGroupId: autoCreatedExternalGroupId,
+                error: cleanupErr.message,
+              },
               'Failed to roll back auto-created platform group after level insert failure',
             );
           }
         }
         if (err?.code === 'P2002') {
-          throw new ConflictError('A level with this slug already exists in this group.');
+          throw new ConflictError(
+            'A level with this slug already exists in this group.',
+          );
         }
         throw err;
       }
@@ -1242,30 +1489,43 @@ export class AdminManagementController extends BaseController {
   }
 
   // PUT /api/admin/groups/:groupId/levels/:levelId
-  async updateGroupLevel(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async updateGroupLevel(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
-      if (!this.getUserId()) return;
+      if (!this.getUserId()) {return;}
       const groupId = String(req.params.groupId);
       const levelId = String(req.params.levelId);
       const group = await this.authorizeLevelManagement(groupId);
 
-      const existing = await prisma.groupLevel.findUnique({ where: { id: levelId } });
+      const existing = await prisma.groupLevel.findUnique({
+        where: { id: levelId },
+      });
       if (!existing || existing.groupId !== groupId) {
         throw new NotFoundError('Level not found in this group');
       }
 
-      const validated = this.validateWithZod(updateGroupLevelSchema, this.req.body);
-      if (!validated.success) return;
+      const validated = this.validateWithZod(
+        updateGroupLevelSchema,
+        this.req.body,
+      );
+      if (!validated.success) {return;}
       const data = validated.data;
 
       // Validate a changed externalGroupId against the platform's format BEFORE persisting,
       // so a malformed paste can't be saved and then break reconciliation + every future
       // provision of this level.
-      if (data.externalGroupId !== undefined && data.externalGroupId !== existing.externalGroupId) {
+      if (
+        data.externalGroupId !== undefined &&
+        data.externalGroupId !== existing.externalGroupId
+      ) {
         const validateAdapter = provisioningRegistry.has(group.platform)
           ? provisioningRegistry.get(group.platform)
           : null;
-        if (data.externalGroupId) validateAdapter?.validateExternalGroupId?.(data.externalGroupId);
+        if (data.externalGroupId)
+          {validateAdapter?.validateExternalGroupId?.(data.externalGroupId);}
       }
 
       let level;
@@ -1275,22 +1535,31 @@ export class AdminManagementController extends BaseController {
           data: {
             ...(data.name !== undefined ? { name: data.name } : {}),
             ...(data.slug !== undefined ? { slug: data.slug } : {}),
-            ...(data.description !== undefined ? { description: data.description } : {}),
-            ...(data.permission !== undefined ? { permission: data.permission } : {}),
-            ...(data.externalGroupId !== undefined ? { externalGroupId: data.externalGroupId } : {}),
+            ...(data.description !== undefined
+              ? { description: data.description }
+              : {}),
+            ...(data.permission !== undefined
+              ? { permission: data.permission }
+              : {}),
+            ...(data.externalGroupId !== undefined
+              ? { externalGroupId: data.externalGroupId }
+              : {}),
             ...(data.rank !== undefined ? { rank: data.rank } : {}),
             ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
           },
         });
       } catch (err: any) {
         if (err?.code === 'P2002') {
-          throw new ConflictError('A level with this slug already exists in this group.');
+          throw new ConflictError(
+            'A level with this slug already exists in this group.',
+          );
         }
         throw err;
       }
 
       const externalGroupIdChanged =
-        data.externalGroupId !== undefined && data.externalGroupId !== existing.externalGroupId;
+        data.externalGroupId !== undefined &&
+        data.externalGroupId !== existing.externalGroupId;
 
       await prisma.auditEntry.create({
         data: {
@@ -1324,7 +1593,10 @@ export class AdminManagementController extends BaseController {
         });
       }
 
-      this.sendResponse({ ...level, reconciliation }, 'Level updated successfully');
+      this.sendResponse(
+        { ...level, reconciliation },
+        'Level updated successfully',
+      );
     } catch (error) {
       this.handleError(error, 'Failed to update level');
     }
@@ -1336,9 +1608,13 @@ export class AdminManagementController extends BaseController {
   // NOT block the delete: their level_id is nulled by the FK and the history lives on
   // in the audit log. Falls back to deactivation only when there's still an active
   // member or an open request that would otherwise be orphaned.
-  async deleteGroupLevel(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async deleteGroupLevel(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
-      if (!this.getUserId()) return;
+      if (!this.getUserId()) {return;}
       const groupId = String(req.params.groupId);
       const levelId = String(req.params.levelId);
       const group = await this.authorizeLevelManagement(groupId);
@@ -1349,7 +1625,9 @@ export class AdminManagementController extends BaseController {
           _count: {
             select: {
               userAccesses: { where: { isActive: true } },
-              accessRequests: { where: { status: { notIn: TERMINAL_REQUEST_STATUSES } } },
+              accessRequests: {
+                where: { status: { notIn: TERMINAL_REQUEST_STATUSES } },
+              },
             },
           },
         },
@@ -1378,7 +1656,10 @@ export class AdminManagementController extends BaseController {
               await adapter.deleteExternalGroup(existing.externalGroupId);
             } catch (cleanupErr: any) {
               logger.warn(
-                { externalGroupId: existing.externalGroupId, error: cleanupErr.message },
+                {
+                  externalGroupId: existing.externalGroupId,
+                  error: cleanupErr.message,
+                },
                 'Level deleted but failed to remove its backing platform group',
               );
             }
@@ -1391,7 +1672,13 @@ export class AdminManagementController extends BaseController {
             performerId: this.user!.id,
             performerName: this.user!.username,
             groupId,
-            details: { levelId, slug: existing.slug, name: existing.name, platform: group.platform, externalGroupId: existing.externalGroupId },
+            details: {
+              levelId,
+              slug: existing.slug,
+              name: existing.name,
+              platform: group.platform,
+              externalGroupId: existing.externalGroupId,
+            },
           },
         });
         this.sendResponse({ id: levelId, deleted: true }, 'Level deleted');
@@ -1411,7 +1698,14 @@ export class AdminManagementController extends BaseController {
           performerId: this.user!.id,
           performerName: this.user!.username,
           groupId,
-          details: { levelId, slug: existing.slug, name: existing.name, platform: group.platform, activeMembers, openRequests },
+          details: {
+            levelId,
+            slug: existing.slug,
+            name: existing.name,
+            platform: group.platform,
+            activeMembers,
+            openRequests,
+          },
         },
       });
       this.sendResponse(

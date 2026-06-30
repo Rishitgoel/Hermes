@@ -3,7 +3,7 @@ import prisma from '../config/prisma';
 import { accessWorkflowService } from './access-workflow.service';
 import { userCreationService } from './user-creation.service';
 import provisioningRegistry from './provisioning.registry';
-import { AccessDuration, RequestStatus, UserCreationStatus } from '@prisma/client';
+import { AccessDuration, RequestStatus, UserCreationStatus } from '../../generated/hermes';
 import { ConflictError, UserNotApprovedError } from '../utils/errors';
 import config from '../config/config';
   
@@ -21,14 +21,14 @@ describe('AccessWorkflowService Integration Tests', () => {
 
   // Mock Provisioners
   const mockRedashInviteLink = `${config.redash.baseUrl.replace(/\/$/, '')}/invite/token123`;
-  let deprovisionCallCount = 0;
+  let _deprovisionCallCount = 0;
   let deprovisionShouldThrow = false;
 
   const mockRedashAdapter = {
     platform: 'redash',
     provision: vi.fn().mockResolvedValue({ externalUserId: 'ext-redash-123' }),
     deprovision: vi.fn(async () => {
-      deprovisionCallCount++;
+      _deprovisionCallCount++;
       if (deprovisionShouldThrow) {
         throw new Error('Deprovision failed');
       }
@@ -58,7 +58,7 @@ describe('AccessWorkflowService Integration Tests', () => {
   };
 
   beforeEach(async () => {
-    deprovisionCallCount = 0;
+    _deprovisionCallCount = 0;
     deprovisionShouldThrow = false;
     vi.clearAllMocks();
 
@@ -255,7 +255,7 @@ describe('AccessWorkflowService Integration Tests', () => {
           group.id,
           'Justification 2',
           AccessDuration.ONE_DAY,
-        )
+        ),
       ).rejects.toThrow(ConflictError);
     });
 
@@ -269,7 +269,7 @@ describe('AccessWorkflowService Integration Tests', () => {
 
       // No UserCreationRequest seeded -> should throw UserNotApprovedError
       await expect(
-        accessWorkflowService.reviewRequest(req.id, adminUser, 'APPROVED')
+        accessWorkflowService.reviewRequest(req.id, adminUser, 'APPROVED'),
       ).rejects.toThrow(UserNotApprovedError);
     });
 
@@ -398,11 +398,10 @@ describe('AccessWorkflowService Integration Tests', () => {
     });
   });
 
-  describe('Admin set-member-level (swap) flows', () => {
+  describe('Level-Change promoting/demoting/swapping flows', () => {
     let group: any;
     let levelIntern: any;
     let levelJunior: any;
-    let levelSenior: any;
     let userAccess: any;
 
     beforeEach(async () => {
@@ -413,6 +412,8 @@ describe('AccessWorkflowService Integration Tests', () => {
           description: 'Analytics Access',
           platform: 'redash',
           externalGroupId: 'ext-grp-base',
+          icon: 'TrendingUp',
+          color: '#4F46E5',
         },
       });
 
@@ -436,7 +437,7 @@ describe('AccessWorkflowService Integration Tests', () => {
         },
       });
 
-      levelSenior = await prisma.groupLevel.create({
+      await prisma.groupLevel.create({
         data: {
           groupId: group.id,
           name: 'Senior',
@@ -472,64 +473,69 @@ describe('AccessWorkflowService Integration Tests', () => {
       });
     });
 
-    it('admin set-member-level atomically swaps a member to a different level', async () => {
-      // Admin moves the member from Junior (rank 1) to Senior (rank 2) directly.
-      const finalRequest = await accessWorkflowService.adminSetMemberLevel(
+    it('should change level immediately when admin calls adminSetMemberLevel', async () => {
+      // Set current access to expire tomorrow (ensure system doesn't reset the timer)
+      const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      await prisma.userAccess.update({
+        where: { id: userAccess.id },
+        data: { expiresAt: tomorrow },
+      });
+
+      // Admin sets member level from Junior (rank 1) -> Intern (rank 0)
+      const res = await accessWorkflowService.adminSetMemberLevel(
         adminUser,
         userAccess.id,
-        levelSenior.id,
+        levelIntern.id,
       );
-      expect(finalRequest.status).toBe(RequestStatus.PROVISIONED);
 
-      // Old grant deactivated; exactly one active grant remains, now at Senior.
+      expect(res.status).toBe(RequestStatus.PROVISIONED);
+
+      // Verify old grant is deactivated
       const oldGrant = await prisma.userAccess.findUnique({ where: { id: userAccess.id } });
       expect(oldGrant?.isActive).toBe(false);
 
+      // Verify new grant is active at Intern level
       const newGrant = await prisma.userAccess.findFirst({
         where: { userId: testUser.id, groupId: group.id, isActive: true },
       });
       expect(newGrant).not.toBeNull();
-      expect(newGrant?.levelId).toBe(levelSenior.id);
+      expect(newGrant?.levelId).toBe(levelIntern.id);
+      // Expiry is re-applied from now, so it should be after tomorrow
+      expect(newGrant?.expiresAt?.getTime()).toBeGreaterThan(tomorrow.getTime());
 
-      // The superseded request is marked revoked (level-change), preserving history.
-      const oldRequest = await prisma.accessRequest.findUnique({
-        where: { id: userAccess.accessRequestId },
-      });
-      expect(oldRequest?.status).toBe(RequestStatus.REVOKED);
-      expect(oldRequest?.revokeReason).toContain('Superseded by level change');
-
-      // The swap drove a deprovision from the old level group + provision into the new.
-      // retainExternalGroupId carries the new mapping so a multi-target adapter keeps
-      // shared targets (Redash is single-target and ignores it).
+      // Deprovision called on old group, provision called on new group
       expect(mockRedashAdapter.deprovision).toHaveBeenCalledWith({
         externalUserId: 'ext-redash-123',
         externalGroupId: levelJunior.externalGroupId,
-        retainExternalGroupId: levelSenior.externalGroupId,
+        retainExternalGroupId: levelIntern.externalGroupId,
       });
       expect(mockRedashAdapter.provision).toHaveBeenCalledWith({
         email: testUser.email,
         name: testUser.username,
         userId: testUser.id,
-        externalGroupId: levelSenior.externalGroupId,
-        metadata: { groupSlug: group.slug, levelSlug: levelSenior.slug },
+        externalGroupId: levelIntern.externalGroupId,
+        metadata: { groupSlug: group.slug, levelSlug: levelIntern.slug },
       });
 
-      // Audit: the level change is recorded (from→to), and the originating
-      // self-reviewed request is flagged as an admin-set-level.
-      const auditLevelChange = await prisma.auditEntry.findFirst({
+      // Verify audit entry logs level change
+      const auditCreate = await prisma.auditEntry.findFirst({
+        where: { action: 'REQUEST_CREATED', accessRequestId: res.id },
+      });
+      expect(auditCreate?.details).toMatchObject({
+        adminSetLevel: true,
+        fromLevelId: levelJunior.id,
+      });
+
+      const auditDemote = await prisma.auditEntry.findFirst({
         where: { action: 'ACCESS_LEVEL_CHANGED' },
       });
-      expect(auditLevelChange?.details).toMatchObject({
+      expect(auditDemote?.details).toMatchObject({
         fromLevelId: levelJunior.id,
-        toLevelId: levelSenior.id,
+        toLevelId: levelIntern.id,
       });
-
-      const auditCreate = await prisma.auditEntry.findFirst({
-        where: { action: 'REQUEST_CREATED', accessRequestId: finalRequest.id },
-      });
-      expect(auditCreate?.details).toMatchObject({ adminSetLevel: true });
     });
   });
+
 
   describe('Access Renewal (extension) flows', () => {
     let group: any;

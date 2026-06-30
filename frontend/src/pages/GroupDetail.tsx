@@ -98,7 +98,7 @@ export const GroupDetail: React.FC = () => {
   // If the group fetch errors (e.g. 404), bounce back to the listing.
   React.useEffect(() => {
     if (groupQuery.isError) {
-      navigate('/groups');
+      navigate('/hermes/groups');
     }
   }, [groupQuery.isError, navigate]);
 
@@ -150,7 +150,7 @@ export const GroupDetail: React.FC = () => {
       {/* Page Navigation */}
       <button
         className="btn btn-outline btn-sm"
-        onClick={() => navigate(`/groups?platform=${group.platform}`)}
+        onClick={() => navigate(`/hermes/groups?platform=${group.platform}`)}
         style={{ marginBottom: '24px' }}
       >
         <Icons.ChevronLeft size={16} /> Back to Groups

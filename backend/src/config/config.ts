@@ -29,14 +29,36 @@ export const config = {
   // adminPassword (a stale `undefined` would make keycloakAdminService.isLive false
   // forever in prod). Same rationale as slack/email below.
   keycloak: {
-    get jwksUri() { return process.env.KEYCLOAK_JWKS_URI || 'https://keycloak.bachatt.app/realms/master/protocol/openid-connect/certs'; },
-    get issuer() { return process.env.KEYCLOAK_ISSUER || 'https://keycloak.bachatt.app/realms/master'; },
-    get audience() { return process.env.KEYCLOAK_AUDIENCE; },
-    get adminUrl() { return process.env.KEYCLOAK_ADMIN_URL || 'https://keycloak.bachatt.app'; },
-    get adminClientId() { return process.env.KEYCLOAK_ADMIN_CLIENT_ID || 'admin-cli'; },
-    get adminUsername() { return process.env.KEYCLOAK_ADMIN_USERNAME || 'admin'; },
-    get adminPassword() { return process.env.KEYCLOAK_ADMIN_PASSWORD; },
-    get realm() { return process.env.VITE_KEYCLOAK_REALM || 'master'; },
+    get jwksUri() {
+      return (
+        process.env.KEYCLOAK_JWKS_URI ||
+        'https://keycloak.bachatt.app/realms/master/protocol/openid-connect/certs'
+      );
+    },
+    get issuer() {
+      return (
+        process.env.KEYCLOAK_ISSUER ||
+        'https://keycloak.bachatt.app/realms/master'
+      );
+    },
+    get audience() {
+      return process.env.KEYCLOAK_AUDIENCE;
+    },
+    get adminUrl() {
+      return process.env.KEYCLOAK_ADMIN_URL || 'https://keycloak.bachatt.app';
+    },
+    get adminClientId() {
+      return process.env.KEYCLOAK_ADMIN_CLIENT_ID || 'admin-cli';
+    },
+    get adminUsername() {
+      return process.env.KEYCLOAK_ADMIN_USERNAME || 'admin';
+    },
+    get adminPassword() {
+      return process.env.KEYCLOAK_ADMIN_PASSWORD;
+    },
+    get realm() {
+      return process.env.VITE_KEYCLOAK_REALM || 'master';
+    },
   },
 
   // ── Platform routing (provisioning-registry-agnostic) ──
@@ -46,21 +68,29 @@ export const config = {
     // `platform`. Must match a registered adapter key. This is the SINGLE place
     // the "default platform" lives — change it here to re-home the default rather
     // than editing the literal across controllers/services.
-    get default() { return (process.env.DEFAULT_PLATFORM || 'redash').toLowerCase(); },
+    get default() {
+      return (process.env.DEFAULT_PLATFORM || 'redash').toLowerCase();
+    },
   },
 
   redash: {
     // Lazy getters (see keycloak note): baseUrl/apiKey may arrive from AWS Secrets
     // Manager after import. A static apiKey capture would stay the dev dummy →
     // isSimulation would wrongly return true in production.
-    get baseUrl() { return process.env.REDASH_BASE_URL || 'https://redash.bachatt.app'; },
-    get apiKey() { return process.env.REDASH_API_KEY || 'dummy-key-for-development'; },
+    get baseUrl() {
+      return process.env.REDASH_BASE_URL || 'https://redash.bachatt.app';
+    },
+    get apiKey() {
+      return process.env.REDASH_API_KEY || 'dummy-key-for-development';
+    },
     get isSimulation() {
       // ON only when explicitly requested, or when the key is still the dev
       // dummy. The previous `|| config.isDev` clause forced simulation on
       // locally even when REDASH_SIMULATION=false, making the toggle a no-op.
-      return process.env.REDASH_SIMULATION === 'true'
-        || this.apiKey === 'dummy-key-for-development';
+      return (
+        process.env.REDASH_SIMULATION === 'true' ||
+        this.apiKey === 'dummy-key-for-development'
+      );
     },
   },
 
@@ -69,9 +99,13 @@ export const config = {
   // module is imported, so a static capture would be stale ('') in production.
   slack: {
     // Incoming webhook → posts to a single shared channel (team feed). Optional.
-    get webhookUrl() { return process.env.SLACK_WEBHOOK_URL; },
+    get webhookUrl() {
+      return process.env.SLACK_WEBHOOK_URL;
+    },
     // Bot token (xoxb-…) → required for per-user DMs (users.lookupByEmail + chat.postMessage).
-    get botToken() { return process.env.SLACK_BOT_TOKEN; },
+    get botToken() {
+      return process.env.SLACK_BOT_TOKEN;
+    },
     // DMs simulate (log instead of send) when no bot token is set, or when forced off.
     get dmSimulation() {
       return process.env.SLACK_SIMULATION === 'true' || !this.botToken;
@@ -80,12 +114,20 @@ export const config = {
 
   email: {
     // SES verified sender, e.g. "Hermes <no-reply@bachatt.app>". Required to send.
-    get from() { return process.env.EMAIL_FROM || ''; },
-    get replyTo() { return process.env.EMAIL_REPLY_TO; },
+    get from() {
+      return process.env.EMAIL_FROM || '';
+    },
+    get replyTo() {
+      return process.env.EMAIL_REPLY_TO;
+    },
     // SES region — falls back to the general AWS region if unset.
-    get region() { return process.env.SES_REGION || process.env.AWS_REGION; },
+    get region() {
+      return process.env.SES_REGION || process.env.AWS_REGION;
+    },
     // Optional dev-only address used as the "super admin" recipient in simulation.
-    get simAdminEmail() { return process.env.SIM_ADMIN_EMAIL; },
+    get simAdminEmail() {
+      return process.env.SIM_ADMIN_EMAIL;
+    },
     // Simulate (log instead of send) when explicitly requested, or when no sender
     // is configured. Set EMAIL_SIMULATION=false + EMAIL_FROM=… in prod to go live.
     get isSimulation() {
@@ -104,27 +146,52 @@ export const config = {
       return process.env.AWS_ENABLED !== 'false';
     },
 
-    get region() { return process.env.AWS_REGION; },
-    get accessKeyId() { return process.env.AWS_ACCESS_KEY_ID; },
-    get secretAccessKey() { return process.env.AWS_SECRET_ACCESS_KEY; },
-    get secretName() { return process.env.AWS_SECRET_NAME || 'Hermes-Prod'; },
+    get region() {
+      return process.env.AWS_REGION;
+    },
+    get accessKeyId() {
+      return process.env.AWS_ACCESS_KEY_ID;
+    },
+    get secretAccessKey() {
+      return process.env.AWS_SECRET_ACCESS_KEY;
+    },
+    // Prefer Hermes' OWN secret name. When Hermes runs embedded inside admin-panel,
+    // AWS_SECRET_NAME is admin-panel's secret — reading it would fetch the wrong blob
+    // (missing Hermes' Keycloak/Redash/Slack config) and clobber shared process.env.
+    // So a dedicated HERMES_AWS_SECRET_NAME wins; AWS_SECRET_NAME stays only as a
+    // fallback for the standalone Hermes deployable. loadSecrets() warns on that fallback.
+    get secretName() {
+      return (
+        process.env.HERMES_AWS_SECRET_NAME ||
+        process.env.AWS_SECRET_NAME ||
+        'Hermes-Prod'
+      );
+    },
 
     // ── IAM Identity Center (the `aws` provisioning adapter) ──
     // The Identity Store the adapter manages users/groups/memberships in, e.g.
     // "d-1234567890". Console: IAM Identity Center → Settings → Identity Store ID.
-    get identityStoreId() { return process.env.AWS_IDENTITY_STORE_ID; },
+    get identityStoreId() {
+      return process.env.AWS_IDENTITY_STORE_ID;
+    },
     // Region the Identity Center instance lives in (it is a regional service).
     // Falls back to the general AWS_REGION when unset.
-    get identityCenterRegion() { return process.env.AWS_IDENTITY_CENTER_REGION || process.env.AWS_REGION; },
+    get identityCenterRegion() {
+      return process.env.AWS_IDENTITY_CENTER_REGION || process.env.AWS_REGION;
+    },
     // Optional: the SSO instance ARN. Only needed if Hermes ever automates account
     // assignments (group → permission set → account) via sso-admin. The
     // membership-only flow does not use it — admins configure assignments once per
     // group in the console (analogous to Redash data-source permissions).
-    get ssoInstanceArn() { return process.env.AWS_SSO_INSTANCE_ARN; },
+    get ssoInstanceArn() {
+      return process.env.AWS_SSO_INSTANCE_ARN;
+    },
     // The AWS access portal (SSO start) URL, e.g. https://d-xxxx.awsapps.com/start.
     // Used in the onboarding email so a newly-created user can set their password on
     // first sign-in (AWS does not send an activation email for API-created users).
-    get accessPortalUrl() { return process.env.AWS_ACCESS_PORTAL_URL; },
+    get accessPortalUrl() {
+      return process.env.AWS_ACCESS_PORTAL_URL;
+    },
 
     // Simulate the AWS adapter (mock, no real AWS calls) when explicitly requested,
     // or whenever no Identity Store id is configured (so a half-configured env can
@@ -140,20 +207,29 @@ export const config = {
   },
 
   zookeeper: {
-    // The `zookeeper` provisioning adapter. Access is per-znode ACLs (digest scheme):
-    // a Hermes group is a znode path, a level is "<path>#<perms>", and a user's
-    // identity is a minted digest credential. Lazy getters (see keycloak/redash
-    // notes): connectString/adminAuth may arrive from AWS Secrets Manager after import.
+    // The `zookeeper` provisioning adapter. Managed znodes are world-open
+    // (world:anyone:cdrwa); access is enforced at the Hermes application layer (Postgres),
+    // not via per-znode ACLs. A Hermes group is a znode path, a level is "<path>#<perms>".
+    // The ensemble is network-isolated, reachable only through Hermes. Lazy getters (see
+    // keycloak/redash notes): connectString/adminAuth may arrive from AWS Secrets Manager
+    // after import.
     //
     // The ensemble connect string, e.g. "zk-0:2181,zk-1:2181". Unset locally ⇒ sim.
-    get connectString() { return process.env.ZOOKEEPER_CONNECT_STRING || ''; },
-    // Root znode path Hermes creates its auto-generated backing group nodes under
-    // (used by createExternalGroup to derive a path from a group name, e.g.
-    // "Credit Card" → /credit-card when rootPath is /).
-    get rootPath() { return process.env.ZOOKEEPER_ROOT_PATH || '/'; },
+    get connectString() {
+      return process.env.ZOOKEEPER_CONNECT_STRING || '';
+    },
+    // Root znode path Hermes treats as the top of its managed tree: backing group nodes
+    // are created under it, and the world-open migration scans from it. Defaults to "/"
+    // (the whole ensemble, minus the reserved /zookeeper subtree) — set ZOOKEEPER_ROOT_PATH
+    // to a narrower prefix to scope Hermes to a subtree when the ensemble is shared.
+    get rootPath() {
+      return process.env.ZOOKEEPER_ROOT_PATH || '/';
+    },
     // The super-digest "user:password" Hermes authenticates as to setACL on the
     // target znodes (needs ADMIN there). Secret-backed — must stay a lazy getter.
-    get adminAuth() { return process.env.ZOOKEEPER_ADMIN_AUTH; },
+    get adminAuth() {
+      return process.env.ZOOKEEPER_ADMIN_AUTH;
+    },
     // Simulate (in-process mock, no real ZooKeeper) when explicitly requested, or
     // whenever no connect string is configured (so a half-configured env can never
     // accidentally hit a real ensemble). INDEPENDENT of the other simulation flags.
@@ -165,7 +241,10 @@ export const config = {
 
   frontend: {
     url: process.env.FRONTEND_URL || 'http://localhost:5173',
-    allowedOrigins: (process.env.ALLOWED_ORIGINS || 'http://localhost:5173,http://localhost:5174')
+    allowedOrigins: (
+      process.env.ALLOWED_ORIGINS ||
+      'http://localhost:5173,http://localhost:5174'
+    )
       .split(',')
       .map(o => o.trim()),
   },
@@ -191,7 +270,9 @@ export const config = {
     // 0 = trust no proxy (correct for local dev).
     get trustProxy(): number | string {
       const v = process.env.TRUST_PROXY;
-      if (!v) return 0;
+      if (!v) {
+        return 0;
+      }
       return /^\d+$/.test(v) ? parseInt(v, 10) : v;
     },
   },

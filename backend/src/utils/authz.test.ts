@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import prisma from '../config/prisma';
 import { AuthenticatedUser } from '../middleware/auth.middleware';
+import config from '../config/config';
 import {
   isSuperAdmin,
   isPlatformAdminOf,
@@ -21,19 +22,9 @@ describe('Authorization Helpers (authz.ts)', () => {
   let mockGroupRedash: any;
   let mockGroupAws: any;
 
-  // getManageablePlatforms now honors config.aws.isEnabled (AWS_ENABLED). These
-  // tests assume every registered platform is available, so pin AWS enabled —
-  // otherwise a dev .env with AWS_ENABLED=false would make the AWS assertions
-  // flake locally (CI leaves it unset → enabled → fine either way).
-  const originalAwsEnabled = process.env.AWS_ENABLED;
-
-  afterEach(() => {
-    if (originalAwsEnabled === undefined) delete process.env.AWS_ENABLED;
-    else process.env.AWS_ENABLED = originalAwsEnabled;
-  });
-
   beforeEach(async () => {
-    process.env.AWS_ENABLED = 'true';
+    vi.spyOn(config.aws, 'isEnabled', 'get').mockReturnValue(true);
+
     superAdminUser = {
       id: 'usr-super',
       username: 'super.admin',
@@ -103,6 +94,10 @@ describe('Authorization Helpers (authz.ts)', () => {
         assignedBy: 'system',
       },
     });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   describe('isSuperAdmin', () => {

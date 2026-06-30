@@ -29,10 +29,16 @@ const MOCK_NAME = 'John Doe';
 async function main() {
   const root = config.zookeeper.rootPath.replace(/\/$/, '');
   const sim = config.zookeeper.isSimulation;
-  console.log(`ZooKeeper seed — mode: ${sim ? 'SIMULATION (in-process)' : `LIVE (${config.zookeeper.connectString})`}`);
+  console.log(
+    `ZooKeeper seed — mode: ${sim ? 'SIMULATION (in-process)' : `LIVE (${config.zookeeper.connectString})`}`,
+  );
   if (sim) {
-    console.log('⚠  Running in simulation: znodes live only in this process and will not persist.');
-    console.log('   For real znodes: `docker compose up -d zookeeper` then ZOOKEEPER_SIMULATION=false.\n');
+    console.log(
+      '⚠  Running in simulation: znodes live only in this process and will not persist.',
+    );
+    console.log(
+      '   For real znodes: `docker compose up -d zookeeper` then ZOOKEEPER_SIMULATION=false.\n',
+    );
   }
 
   // 1. Hermes groups + levels (so they appear under the ZooKeeper platform).
@@ -42,40 +48,47 @@ async function main() {
   ];
   for (const g of groups) {
     const created = await upsertZookeeperGroup(g.name, g.path);
-    // Reset the backing znode so re-runs don't accumulate stale ACL entries: a real
-    // account is invited once, but this mock re-mints a fresh credential (new hash)
-    // every run, so delete-then-create keeps a single, clean entry per node.
+    // Reset the backing znode so re-runs start from a clean node (delete-then-create).
     await zookeeperService.deleteNode(g.path);
     await zookeeperService.createNode(g.path);
-    console.log(`✅ group "${created.name}" → ${created.externalGroupId} (znode reset)`);
+    console.log(
+      `✅ group "${created.name}" → ${created.externalGroupId} (znode reset)`,
+    );
   }
 
-  // 2. Mint the mock user's credential through the adapter (writes the cache row).
-  const invite = await zookeeperProvisioner.inviteUser(MOCK_EMAIL, MOCK_NAME);
-  const username = invite.metadata?.zkUsername as string;
-  const password = invite.metadata?.zkPassword as string;
+  // 2. Create the mock user's ZK identity through the adapter (writes the cache row).
+  //    No credential is minted — access is enforced inside Hermes (world-open znodes).
+  await zookeeperProvisioner.inviteUser(MOCK_EMAIL, MOCK_NAME);
 
   // 3. Provision that user: read/write on Credit Card, read-only on Config Store.
-  await zookeeperProvisioner.provision({ email: MOCK_EMAIL, name: MOCK_NAME, externalGroupId: `${root}/credit-card#cdrw` });
-  await zookeeperProvisioner.provision({ email: MOCK_EMAIL, name: MOCK_NAME, externalGroupId: `${root}/config-store#r` });
+  await zookeeperProvisioner.provision({
+    email: MOCK_EMAIL,
+    name: MOCK_NAME,
+    externalGroupId: `${root}/credit-card#cdrw`,
+  });
+  await zookeeperProvisioner.provision({
+    email: MOCK_EMAIL,
+    name: MOCK_NAME,
+    externalGroupId: `${root}/config-store#r`,
+  });
 
-  // 4. Read the ACLs back as proof.
-  const ccAcl = await zookeeperService.getAcl(`${root}/credit-card`);
-  const csAcl = await zookeeperService.getAcl(`${root}/config-store`);
+  // 4. Verify node existence as proof.
+  const ccExists = await zookeeperService.exists(`${root}/credit-card`);
+  const csExists = await zookeeperService.exists(`${root}/config-store`);
 
-  console.log('\n🔑 Mock ZooKeeper credential (shown once — store it to test live auth):');
-  console.log(`   connect : ${config.zookeeper.connectString || '(simulation — no live connect string)'}`);
-  console.log(`   username: ${username}`);
-  console.log(`   password: ${password}`);
-  console.log(`   addauth : addauth digest ${username}:${password}`);
-  console.log('\nResulting znode ACLs (Hermes-managed digest entries):');
-  console.log(`   ${root}/credit-card  →`, ccAcl.map((e) => `${e.id} (${e.perms})`));
-  console.log(`   ${root}/config-store →`, csAcl.map((e) => `${e.id} (${e.perms})`));
+  console.log('\n🔑 Mock ZooKeeper user provisioned (no credential — access is enforced in Hermes):');
+  console.log(`   user    : ${MOCK_EMAIL}`);
+  console.log(
+    `   connect : ${config.zookeeper.connectString || '(simulation — no live connect string)'}`,
+  );
+  console.log('\nResulting znodes status (world-open by default):');
+  console.log(`   ${root}/credit-card  → ${ccExists ? 'exists' : 'does not exist'}`);
+  console.log(`   ${root}/config-store → ${csExists ? 'exists' : 'does not exist'}`);
   console.log('\n✅ Seed complete.');
 }
 
 main()
-  .catch((e) => {
+  .catch(e => {
     console.error('Error:', e?.message || e);
     process.exitCode = 1;
   })

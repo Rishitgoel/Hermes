@@ -1,8 +1,8 @@
 /**
- * One-shot migration script to recursively set the ACL of the ZooKeeper paths
- * (/hermes, /bachatt, and any configured root path) and all their descendants
- * to world-open (world:anyone, ALL permissions) without deleting any znodes
- * or modifying their data.
+ * One-shot migration script to recursively set the ACL of the ZooKeeper tree under
+ * config.zookeeper.rootPath (default "/", the whole ensemble minus the reserved
+ * /zookeeper subtree) and all its descendants to world-open (world:anyone, ALL
+ * permissions) without deleting any znodes or modifying their data.
  *
  * This is crucial for production, where you want to switch to the no-ACL model
  * but cannot afford to lose existing data.
@@ -25,7 +25,7 @@ async function collectPathsRobustly(rootPath: string): Promise<string[]> {
   const collected: string[] = [];
   try {
     const exists = await zookeeperService.exists(rootPath);
-    if (!exists) return [];
+    if (!exists) {return [];}
     collected.push(rootPath);
   } catch (err: any) {
     console.warn(`  ⚠ Skipping root path ${rootPath} due to exists check error: ${err.message}`);
@@ -43,7 +43,7 @@ async function collectPathsRobustly(rootPath: string): Promise<string[]> {
 
     for (const c of children) {
       const childPath = p === '/' ? `/${c}` : `${p}/${c}`;
-      if (zookeeperService.isReservedPath(childPath)) continue;
+      if (zookeeperService.isReservedPath(childPath)) {continue;}
       collected.push(childPath);
       await walk(childPath);
     }
@@ -61,14 +61,14 @@ async function main() {
   console.log(`  Hermes ZK ACL Migration   [${APPLY ? 'APPLY' : 'DRY RUN'}]`);
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log(`  Connect:    ${config.zookeeper.connectString || '(unset)'}`);
-  console.log(`  Target Root: /`);
+  console.log('  Target Root: /');
   console.log(`  Mode:       ${config.zookeeper.isSimulation ? 'SIMULATION' : 'LIVE'}`);
   console.log('');
 
   if (config.zookeeper.isSimulation) {
     console.error(
       '✗ Refusing to run: ZooKeeper is in simulation mode. Set ZOOKEEPER_SIMULATION=false\n' +
-        '  and a real ZOOKEEPER_CONNECT_STRING + ZOOKEEPER_ADMIN_AUTH in backend/.env first.'
+        '  and a real ZOOKEEPER_CONNECT_STRING + ZOOKEEPER_ADMIN_AUTH in backend/.env first.',
     );
     process.exit(1);
   }

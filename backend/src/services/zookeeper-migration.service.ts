@@ -16,7 +16,7 @@ async function collectPathsRobustly(rootPath: string): Promise<string[]> {
   const collected: string[] = [];
   try {
     const exists = await zookeeperService.exists(rootPath);
-    if (!exists) return [];
+    if (!exists) {return [];}
     collected.push(rootPath);
   } catch (err: any) {
     logger.warn({ path: rootPath, error: err.message }, 'Skipping root path migration due to exists check error');
@@ -34,7 +34,7 @@ async function collectPathsRobustly(rootPath: string): Promise<string[]> {
 
     for (const c of children) {
       const childPath = p === '/' ? `/${c}` : `${p}/${c}`;
-      if (zookeeperService.isReservedPath(childPath)) continue;
+      if (zookeeperService.isReservedPath(childPath)) {continue;}
       collected.push(childPath);
       await walk(childPath);
     }
@@ -61,10 +61,11 @@ export async function migrateZookeeperAcls(opts: {
     throw new ConflictError(`Could not reach ZooKeeper: ${health.message ?? 'unknown error'}`);
   }
 
-  // 2. Scan the entire ZooKeeper tree from / (skipping the reserved /zookeeper subtree).
-  //    collectPathsRobustly already excludes reserved paths internally.
+  // 2. Scan the Hermes-managed tree from config.zookeeper.rootPath (default "/", the whole
+  //    ensemble), skipping the reserved /zookeeper subtree. Nodes outside the root are never
+  //    touched. collectPathsRobustly already excludes reserved paths internally.
   const pathsToUpdate: string[] = [];
-  const allPaths = await collectPathsRobustly('/');
+  const allPaths = await collectPathsRobustly(config.zookeeper.rootPath);
   pathsToUpdate.push(...allPaths);
 
   const uniquePaths = Array.from(new Set(pathsToUpdate)).sort();
@@ -86,7 +87,7 @@ export async function migrateZookeeperAcls(opts: {
 
   return {
     apply,
-    targetRoots: ['/'],
+    targetRoots: [config.zookeeper.rootPath],
     pathsFound: uniquePaths,
     updatedCount,
     failedPaths,

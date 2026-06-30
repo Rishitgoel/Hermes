@@ -1,11 +1,15 @@
 import prisma from '../config/prisma';
 import zookeeperService, { normalizePerms } from './zookeeper.service';
-import zookeeperProvisioner from './zookeeper.provisioner';
 import eventBus from './event-bus';
 import logger from '../utils/logger';
 import { AuthenticatedUser } from '../middleware/auth.middleware';
 import { isSuperAdmin, isPlatformAdminOf } from '../utils/authz';
-import { AuthorizationError, NotFoundError, ValidationError, ConflictError } from '../utils/errors';
+import {
+  AuthorizationError,
+  NotFoundError,
+  ValidationError,
+  ConflictError,
+} from '../utils/errors';
 
 const PLATFORM = 'zookeeper';
 
@@ -53,7 +57,11 @@ interface ZkGrantTarget {
   perms: string;
 }
 
-type FinalStatus = 'APPLIED' | 'PARTIALLY_APPLIED' | 'APPLY_FAILED' | 'REJECTED';
+type FinalStatus =
+  | 'APPLIED'
+  | 'PARTIALLY_APPLIED'
+  | 'APPLY_FAILED'
+  | 'REJECTED';
 
 /**
  * Business logic for approval-based ZooKeeper config management. ALL authorization is
@@ -82,7 +90,9 @@ export class ZookeeperConfigService {
   }
 
   /** Every (group, path, perms) the user holds via active ZooKeeper grants. */
-  private async resolveUserGrantTargets(userId: string): Promise<ZkGrantTarget[]> {
+  private async resolveUserGrantTargets(
+    userId: string,
+  ): Promise<ZkGrantTarget[]> {
     const grants = await prisma.userAccess.findMany({
       where: { userId, isActive: true, group: { platform: PLATFORM } },
       include: { group: true, level: true },
@@ -90,8 +100,9 @@ export class ZookeeperConfigService {
     });
     const out: ZkGrantTarget[] = [];
     for (const g of grants) {
-      const externalGroupId = g.level?.externalGroupId ?? g.group.externalGroupId;
-      if (!externalGroupId) continue;
+      const externalGroupId =
+        g.level?.externalGroupId ?? g.group.externalGroupId;
+      if (!externalGroupId) {continue;}
       let targets: { path: string; perms: string }[] = [];
       try {
         targets = zookeeperService.parseExternalGroupIds(externalGroupId);
@@ -124,15 +135,16 @@ export class ZookeeperConfigService {
 
   private readable(path: string, G: Map<string, string>): boolean {
     for (const g of G.keys()) {
-      if (this.isAtOrUnder(path, g) || this.isAtOrUnder(g, path)) return true;
+      if (this.isAtOrUnder(path, g) || this.isAtOrUnder(g, path)) {return true;}
     }
     return false;
   }
 
   private writable(path: string, G: Map<string, string>): boolean {
     for (const [g, perms] of G.entries()) {
-      const hasMutatingPerm = perms.includes('c') || perms.includes('d') || perms.includes('w');
-      if (hasMutatingPerm && this.isAtOrUnder(path, g)) return true;
+      const hasMutatingPerm =
+        perms.includes('c') || perms.includes('d') || perms.includes('w');
+      if (hasMutatingPerm && this.isAtOrUnder(path, g)) {return true;}
     }
     return false;
   }
@@ -153,11 +165,21 @@ export class ZookeeperConfigService {
 
   /** The user's write-granting group that most specifically covers `path` (deepest grant
    *  path; ties broken by groupId for determinism). null ⇒ no write coverage. */
-  private owningGroup(targets: ZkGrantTarget[], path: string, action: ZkChangeAction): ZkGrantTarget | null {
+  private owningGroup(
+    targets: ZkGrantTarget[],
+    path: string,
+    action: ZkChangeAction,
+  ): ZkGrantTarget | null {
     const requiredPerm = this.requiredPermForAction(action);
-    const candidates = targets.filter((t) => t.perms.includes(requiredPerm) && this.isAtOrUnder(path, t.path));
-    if (candidates.length === 0) return null;
-    candidates.sort((a, b) => b.path.split('/').length - a.path.split('/').length || a.groupId.localeCompare(b.groupId));
+    const candidates = targets.filter(
+      t => t.perms.includes(requiredPerm) && this.isAtOrUnder(path, t.path),
+    );
+    if (candidates.length === 0) {return null;}
+    candidates.sort(
+      (a, b) =>
+        b.path.split('/').length - a.path.split('/').length ||
+        a.groupId.localeCompare(b.groupId),
+    );
     return candidates[0];
   }
 
@@ -169,10 +191,20 @@ export class ZookeeperConfigService {
     for (const t of await this.resolveUserGrantTargets(userId)) {
       let entry = byGroup.get(t.groupId);
       if (!entry) {
-        entry = { groupId: t.groupId, groupName: t.groupName, levelId: t.levelId, levelName: t.levelName, paths: [] };
+        entry = {
+          groupId: t.groupId,
+          groupName: t.groupName,
+          levelId: t.levelId,
+          levelName: t.levelName,
+          paths: [],
+        };
         byGroup.set(t.groupId, entry);
       }
-      entry.paths.push({ path: t.path, perms: t.perms, canWrite: t.perms.includes('w') });
+      entry.paths.push({
+        path: t.path,
+        perms: t.perms,
+        canWrite: t.perms.includes('w'),
+      });
     }
     return [...byGroup.values()];
   }
@@ -180,26 +212,45 @@ export class ZookeeperConfigService {
   async browseNode(
     userId: string,
     path: string,
-  ): Promise<{ path: string; data: string | null; canWrite: boolean; children: ZkBrowseChild[] }> {
+  ): Promise<{
+    path: string;
+    data: string | null;
+    canWrite: boolean;
+    children: ZkBrowseChild[];
+  }> {
     const p = (path || '').trim();
-    if (!p.startsWith('/')) throw new ValidationError('A ZooKeeper path must start with "/".');
-    if (zookeeperService.isReservedPath(p)) throw new AuthorizationError('That ZooKeeper path is reserved.');
+    if (!p.startsWith('/'))
+      {throw new ValidationError('A ZooKeeper path must start with "/".');}
+    if (zookeeperService.isReservedPath(p))
+      {throw new AuthorizationError('That ZooKeeper path is reserved.');}
 
     const G = await this.resolveUserZkPaths(userId);
-    if (!this.readable(p, G)) throw new AuthorizationError('You do not have access to this ZooKeeper path.');
+    if (!this.readable(p, G))
+      {throw new AuthorizationError(
+        'You do not have access to this ZooKeeper path.',
+      );}
 
-    const [data, childNames] = await Promise.all([zookeeperService.getData(p), zookeeperService.getChildren(p)]);
+    const [data, childNames] = await Promise.all([
+      zookeeperService.getData(p),
+      zookeeperService.getChildren(p),
+    ]);
 
     const children = (
       await Promise.all(
         childNames.map(async (name): Promise<ZkBrowseChild | null> => {
           const childPath = p === '/' ? `/${name}` : `${p}/${name}`;
-          if (!this.readable(childPath, G)) return null;
+          if (!this.readable(childPath, G)) {return null;}
           const [grandkids, value] = await Promise.all([
             zookeeperService.getChildren(childPath),
             zookeeperService.getData(childPath),
           ]);
-          return { name, path: childPath, isFolder: grandkids.length > 0, value, canWrite: this.writable(childPath, G) };
+          return {
+            name,
+            path: childPath,
+            isFolder: grandkids.length > 0,
+            value,
+            canWrite: this.writable(childPath, G),
+          };
         }),
       )
     ).filter((c): c is ZkBrowseChild => c !== null);
@@ -209,18 +260,23 @@ export class ZookeeperConfigService {
 
   async exportSubtree(userId: string, path: string): Promise<string> {
     const p = (path || '').trim();
-    if (!p.startsWith('/')) throw new ValidationError('A ZooKeeper path must start with "/".');
+    if (!p.startsWith('/'))
+      {throw new ValidationError('A ZooKeeper path must start with "/".');}
     const G = await this.resolveUserZkPaths(userId);
-    if (![...G.keys()].some((g) => this.isAtOrUnder(p, g))) {
-      throw new AuthorizationError('You can only export within your granted ZooKeeper paths.');
+    if (![...G.keys()].some(g => this.isAtOrUnder(p, g))) {
+      throw new AuthorizationError(
+        'You can only export within your granted ZooKeeper paths.',
+      );
     }
     const nodes = [p, ...(await zookeeperService.descendantPaths(p))];
-    const readableNodes = nodes.filter((node) => this.readable(node, G));
-    const values = await Promise.all(readableNodes.map((node) => zookeeperService.getData(node)));
+    const readableNodes = nodes.filter(node => this.readable(node, G));
+    const values = await Promise.all(
+      readableNodes.map(node => zookeeperService.getData(node)),
+    );
     const lines: string[] = [];
     for (let i = 0; i < readableNodes.length; i++) {
       const value = values[i];
-      if (value === null) continue;
+      if (value === null) {continue;}
       lines.push(JSON.stringify({ path: readableNodes[i], value }));
     }
     return lines.join('\n');
@@ -240,14 +296,18 @@ export class ZookeeperConfigService {
     justification?: string;
   }) {
     const { requester, changes, justification } = args;
-    if (!Array.isArray(changes) || changes.length === 0) throw new ValidationError('No changes to submit.');
+    if (!Array.isArray(changes) || changes.length === 0)
+      {throw new ValidationError('No changes to submit.');}
 
     const targets = await this.resolveUserGrantTargets(requester.id);
-    if (targets.length === 0) throw new AuthorizationError('You are not a member of any ZooKeeper group.');
+    if (targets.length === 0)
+      {throw new AuthorizationError(
+        'You are not a member of any ZooKeeper group.',
+      );}
 
     const stagedExists = new Map<string, boolean>();
     const getStagedExists = async (path: string): Promise<boolean> => {
-      if (stagedExists.has(path)) return stagedExists.get(path)!;
+      if (stagedExists.has(path)) {return stagedExists.get(path)!;}
       const res = await zookeeperService.exists(path);
       stagedExists.set(path, res);
       return res;
@@ -255,20 +315,29 @@ export class ZookeeperConfigService {
 
     const resolved: ZkChange[] = [];
     for (const c of changes) {
-      if (!c.path || !c.path.startsWith('/')) throw new ValidationError(`Invalid path "${c.path}".`);
-      if (zookeeperService.isReservedPath(c.path)) throw new ValidationError(`Path "${c.path}" is reserved.`);
+      if (!c.path || !c.path.startsWith('/'))
+        {throw new ValidationError(`Invalid path "${c.path}".`);}
+      if (zookeeperService.isReservedPath(c.path))
+        {throw new ValidationError(`Path "${c.path}" is reserved.`);}
       const owner = this.owningGroup(targets, c.path, c.action);
-      if (!owner) throw new AuthorizationError(`You don't have permission to perform ${c.action} on "${c.path}".`);
+      if (!owner)
+        {throw new AuthorizationError(
+          `You don't have permission to perform ${c.action} on "${c.path}".`,
+        );}
 
       const exists = await getStagedExists(c.path);
       if (c.action === 'CREATE') {
         if (exists) {
-          throw new ValidationError(`Node "${c.path}" already exists. Please submit a SET change to update its value instead.`);
+          throw new ValidationError(
+            `Node "${c.path}" already exists. Please submit a SET change to update its value instead.`,
+          );
         }
         stagedExists.set(c.path, true);
       } else {
         if (!exists) {
-          throw new ValidationError(`Node "${c.path}" does not exist. Please submit a CREATE change to create it.`);
+          throw new ValidationError(
+            `Node "${c.path}" does not exist. Please submit a CREATE change to create it.`,
+          );
         }
         if (c.action === 'DELETE') {
           stagedExists.set(c.path, false);
@@ -295,7 +364,7 @@ export class ZookeeperConfigService {
       changesByGroup.set(gid, list);
     }
 
-    const rows = await prisma.$transaction(async (tx) => {
+    const rows = await prisma.$transaction(async tx => {
       const createdRequests = [];
       for (const [gid, groupChanges] of changesByGroup.entries()) {
         const row = await tx.zookeeperChangeRequest.create({
@@ -317,7 +386,11 @@ export class ZookeeperConfigService {
             performerId: requester.id,
             performerName: requester.username,
             groupId: gid,
-            details: { requestId: row.id, changeCount: groupChanges.length, groupIds: [gid] },
+            details: {
+              requestId: row.id,
+              changeCount: groupChanges.length,
+              groupIds: [gid],
+            },
           },
         });
 
@@ -346,25 +419,39 @@ export class ZookeeperConfigService {
   }
 
   /** Group ids a non-super/non-platform admin may review (their ZK GroupAdmin rows). */
-  async reviewableGroupIds(user: AuthenticatedUser): Promise<{ all: boolean; groupIds: string[] }> {
-    if (isSuperAdmin(user) || (await isPlatformAdminOf(user, PLATFORM))) return { all: true, groupIds: [] };
+  async reviewableGroupIds(
+    user: AuthenticatedUser,
+  ): Promise<{ all: boolean; groupIds: string[] }> {
+    if (isSuperAdmin(user) || (await isPlatformAdminOf(user, PLATFORM)))
+      {return { all: true, groupIds: [] };}
     const rows = await prisma.groupAdmin.findMany({
       where: { userId: user.id },
       include: { group: { select: { platform: true } } },
     });
-    return { all: false, groupIds: rows.filter((r) => r.group.platform === PLATFORM).map((r) => r.groupId) };
+    return {
+      all: false,
+      groupIds: rows
+        .filter(r => r.group.platform === PLATFORM)
+        .map(r => r.groupId),
+    };
   }
 
   /** `scope='mine'` → the caller's own; `scope='review'` → PENDING requests touching any
    *  group the caller can review. */
   async listChangeRequests(user: AuthenticatedUser, scope: 'mine' | 'review') {
     if (scope === 'mine') {
-      return prisma.zookeeperChangeRequest.findMany({ where: { requesterId: user.id }, orderBy: { createdAt: 'desc' } });
+      return prisma.zookeeperChangeRequest.findMany({
+        where: { requesterId: user.id },
+        orderBy: { createdAt: 'desc' },
+      });
     }
     const { all, groupIds } = await this.reviewableGroupIds(user);
-    if (!all && groupIds.length === 0) return [];
+    if (!all && groupIds.length === 0) {return [];}
     return prisma.zookeeperChangeRequest.findMany({
-      where: { status: 'PENDING', ...(all ? {} : { groupIds: { hasSome: groupIds } }) },
+      where: {
+        status: 'PENDING',
+        ...(all ? {} : { groupIds: { hasSome: groupIds } }),
+      },
       orderBy: { createdAt: 'asc' },
     });
   }
@@ -389,21 +476,28 @@ export class ZookeeperConfigService {
       where: { status: 'APPLYING', updatedAt: { lt: cutoff } },
       data: {
         status: 'APPLY_FAILED',
-        applyError: 'Apply did not complete (process interrupted); recovered by sweep — re-review to retry.',
+        applyError:
+          'Apply did not complete (process interrupted); recovered by sweep — re-review to retry.',
       },
     });
     if (result.count > 0) {
-      logger.warn({ count: result.count }, 'Recovered ZooKeeper change requests stuck in APPLYING');
+      logger.warn(
+        { count: result.count },
+        'Recovered ZooKeeper change requests stuck in APPLYING',
+      );
     }
     return result.count;
   }
 
   /** Can `user` review this request? Super / ZK platform admin / group admin of ANY
    *  involved group. Used by the controller before delegating here. */
-  async canReview(user: AuthenticatedUser, request: { groupIds: string[] }): Promise<boolean> {
+  async canReview(
+    user: AuthenticatedUser,
+    request: { groupIds: string[] },
+  ): Promise<boolean> {
     const { all, groupIds } = await this.reviewableGroupIds(user);
-    if (all) return true;
-    return request.groupIds.some((g) => groupIds.includes(g));
+    if (all) {return true;}
+    return request.groupIds.some(g => groupIds.includes(g));
   }
 
   /**
@@ -417,22 +511,39 @@ export class ZookeeperConfigService {
     decisions: { path: string; decision: ZkChangeDecision }[],
     note?: string,
   ) {
-    const row = await prisma.zookeeperChangeRequest.findUnique({ where: { id: requestId } });
-    if (!row) throw new NotFoundError('Change request not found');
-    if (row.status !== 'PENDING') throw new ValidationError(`Request is not pending (status: ${row.status}).`);
+    const row = await prisma.zookeeperChangeRequest.findUnique({
+      where: { id: requestId },
+    });
+    if (!row) {throw new NotFoundError('Change request not found');}
+    if (row.status !== 'PENDING')
+      {throw new ValidationError(
+        `Request is not pending (status: ${row.status}).`,
+      );}
 
     const result = await prisma.zookeeperChangeRequest.updateMany({
       where: { id: requestId, status: 'PENDING' },
-      data: { status: 'APPLYING', reviewerId: reviewer.id, reviewerName: reviewer.username, reviewNote: note ?? null, reviewedAt: new Date() },
+      data: {
+        status: 'APPLYING',
+        reviewerId: reviewer.id,
+        reviewerName: reviewer.username,
+        reviewNote: note ?? null,
+        reviewedAt: new Date(),
+      },
     });
     if (result.count === 0) {
-      throw new ConflictError('This change request is already being reviewed or applied by another admin.');
+      throw new ConflictError(
+        'This change request is already being reviewed or applied by another admin.',
+      );
     }
 
-    const decisionByPath = new Map(decisions.map((d) => [d.path, d.decision]));
-    const changes = ((row.changes as unknown as ZkChange[]) ?? []).map((c) => ({ ...c }));
+    const decisionByPath = new Map(decisions.map(d => [d.path, d.decision]));
+    const changes = ((row.changes as unknown as ZkChange[]) ?? []).map(c => ({
+      ...c,
+    }));
     // Unlisted ⇒ rejected, so nothing is silently applied.
-    for (const c of changes) c.decision = decisionByPath.get(c.path) === 'APPROVED' ? 'APPROVED' : 'REJECTED';
+    for (const c of changes)
+      {c.decision =
+        decisionByPath.get(c.path) === 'APPROVED' ? 'APPROVED' : 'REJECTED';}
 
     const backing = await this.backingPaths();
     let approved = 0;
@@ -455,15 +566,18 @@ export class ZookeeperConfigService {
         c.applied = false;
         c.error = err.message;
         failed++;
-        logger.warn({ requestId, path: c.path, action: c.action, error: err.message }, 'ZooKeeper applyOne failed');
+        logger.warn(
+          { requestId, path: c.path, action: c.action, error: err.message },
+          'ZooKeeper applyOne failed',
+        );
       }
     }
 
     let status: FinalStatus;
-    if (failed > 0) status = 'APPLY_FAILED';
-    else if (approved === 0) status = 'REJECTED';
-    else if (rejected === 0) status = 'APPLIED';
-    else status = 'PARTIALLY_APPLIED';
+    if (failed > 0) {status = 'APPLY_FAILED';}
+    else if (approved === 0) {status = 'REJECTED';}
+    else if (rejected === 0) {status = 'APPLIED';}
+    else {status = 'PARTIALLY_APPLIED';}
 
     const updated = await prisma.zookeeperChangeRequest.update({
       where: { id: row.id },
@@ -471,7 +585,9 @@ export class ZookeeperConfigService {
         status,
         changes: changes as any,
         appliedAt: new Date(),
-        applyError: failed ? `${failed} approved change(s) failed to apply` : null,
+        applyError: failed
+          ? `${failed} approved change(s) failed to apply`
+          : null,
       },
     });
 
@@ -491,7 +607,7 @@ export class ZookeeperConfigService {
         requestId: row.id,
         requesterId: row.requesterId,
         requesterEmail: row.requesterEmail,
-        groupNames: [...new Set(changes.map((c) => c.groupName).filter(Boolean))],
+        groupNames: [...new Set(changes.map(c => c.groupName).filter(Boolean))],
         reviewerName: reviewer.username,
         note,
         approved,
@@ -507,17 +623,26 @@ export class ZookeeperConfigService {
   /** Backing paths of every ZK group/level — DELETE must never remove one. */
   private async backingPaths(): Promise<Set<string>> {
     const [groups, levels] = await Promise.all([
-      prisma.group.findMany({ where: { platform: PLATFORM, externalGroupId: { not: null } }, select: { externalGroupId: true } }),
+      prisma.group.findMany({
+        where: { platform: PLATFORM, externalGroupId: { not: null } },
+        select: { externalGroupId: true },
+      }),
       prisma.groupLevel.findMany({
-        where: { group: { platform: PLATFORM }, externalGroupId: { not: null } },
+        where: {
+          group: { platform: PLATFORM },
+          externalGroupId: { not: null },
+        },
         select: { externalGroupId: true },
       }),
     ]);
     const set = new Set<string>();
     for (const g of [...groups, ...levels]) {
-      if (!g.externalGroupId) continue;
+      if (!g.externalGroupId) {continue;}
       try {
-        for (const t of zookeeperService.parseExternalGroupIds(g.externalGroupId)) set.add(t.path);
+        for (const t of zookeeperService.parseExternalGroupIds(
+          g.externalGroupId,
+        ))
+          {set.add(t.path);}
       } catch {
         /* malformed mapping isn't a valid DELETE target anyway */
       }
@@ -531,8 +656,6 @@ export class ZookeeperConfigService {
       case 'CREATE':
         await zookeeperService.createNodeRecursive(c.path);
         await zookeeperService.setData(c.path, c.newValue ?? '');
-        // Re-cover the new node for the OWNING group's members (ZooNavigator visibility).
-        if (c.groupId) await zookeeperProvisioner.recoverNodeForGroup(c.groupId, c.path);
         break;
       case 'SET': {
         // Lost-update guard: ALWAYS compare the node's current value to the value the
@@ -544,7 +667,9 @@ export class ZookeeperConfigService {
         const current = (await zookeeperService.getData(c.path)) ?? '';
         const drafted = c.oldValue ?? '';
         if (current !== drafted) {
-          throw new Error(`value changed since draft (expected "${drafted}", found "${current}")`);
+          throw new Error(
+            `value changed since draft (expected "${drafted}", found "${current}")`,
+          );
         }
         await zookeeperService.setData(c.path, c.newValue ?? '');
         break;
@@ -553,7 +678,10 @@ export class ZookeeperConfigService {
         await zookeeperService.setData(c.path, '');
         break;
       case 'DELETE':
-        if (backing.has(c.path)) throw new Error('path backs a Hermes group/level — clear it instead of deleting');
+        if (backing.has(c.path))
+          {throw new Error(
+            'path backs a Hermes group/level — clear it instead of deleting',
+          );}
         await zookeeperService.deleteNode(c.path);
         break;
       default:

@@ -5,7 +5,7 @@
  * script is just for quick local/demo setup.
  *
  * ZooKeeper model (see zookeeper.service.ts): a group is a znode PATH, and each level
- * is "<path>#<perms>" where perms are ZK ACL letters (c/d/r/w/a). The backing znodes
+ * is "<path>#<perms>" where perms are ZK ACL letters (c/d/r/w). The backing znodes
  * are created lazily on first provision, so no live ZooKeeper is needed in simulation.
  *
  * Idempotent: re-running updates the group (keyed on slug) and its two levels. The

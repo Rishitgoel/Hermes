@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import BaseController from './base.controller';
 import prisma from '../config/prisma';
-import { RequestStatus } from '@prisma/client';
+import { RequestStatus } from '../../generated/hermes';
 import { groupSlugSchema } from '../validations/group.validation';
 import { isGroupAdminOf } from '../utils/authz';
 
@@ -10,7 +10,7 @@ export class GroupController extends BaseController {
   async getGroups(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {return;}
 
       const [groups, activeAccesses, openRequests] = await Promise.all([
         prisma.group.findMany({
@@ -44,7 +44,7 @@ export class GroupController extends BaseController {
             requesterId: userId,
             status: { in: [RequestStatus.PENDING, RequestStatus.WAITING_FOR_SETUP] },
           },
-        })
+        }),
       ]);
 
       // accessStatus reflects the user's REAL grant/request state only. Admins get
@@ -115,11 +115,11 @@ export class GroupController extends BaseController {
   async getGroupDetail(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const slugResult = this.validateWithZod(groupSlugSchema, this.req.params.slug, 'Invalid group slug');
-      if (!slugResult.success) return;
+      if (!slugResult.success) {return;}
       const slug = slugResult.data;
 
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {return;}
 
       const group = await prisma.group.findUnique({
         where: { slug },

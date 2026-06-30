@@ -461,7 +461,7 @@ export const AdminManagement: React.FC = () => {
             }}
           >
             <p style={{ margin: '0 0 12px', lineHeight: 1.5 }}>
-              Migrate existing ZooKeeper ACLs (for <code>/hermes</code>, <code>/bachatt</code>, and any configured root path) to world-open (<code>world:anyone:cdrwa</code>) so that other client UIs can read/write them. Run <strong>Dry run</strong> to preview the paths, then <strong>Apply</strong> to write. Node data remains untouched.
+              Migrate existing ZooKeeper ACLs (for Hermes's configured ZooKeeper root path) to world-open (<code>world:anyone:cdrwa</code>) so that other client UIs can read/write them. Run <strong>Dry run</strong> to preview the paths, then <strong>Apply</strong> to write. Node data remains untouched.
             </p>
             <div style={{ display: 'flex', gap: '8px' }}>
               <button
@@ -479,7 +479,7 @@ export const AdminManagement: React.FC = () => {
                 onClick={() => {
                   if (
                     window.confirm(
-                      'Apply ZooKeeper ACL migration? This recursively sets ACLs for all /hermes and /bachatt nodes to world-open. Existing node values will not be deleted or modified.',
+                      'Apply ZooKeeper ACL migration? This recursively sets ACLs for all nodes under Hermes\'s configured ZooKeeper root path to world-open. Existing node values will not be deleted or modified.',
                     )
                   ) {
                     zkMigrationMutation.mutate(true);
