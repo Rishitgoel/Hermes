@@ -98,9 +98,33 @@ export const PLATFORMS: PlatformMetadata[] = [
   },
 ];
 
-/** Friendly display name for a platform id (falls back to a capitalized id). */
+/**
+ * Adapter-owned display names (e.g. "Redash (QA)") keyed by platform instance,
+ * populated by fetchPlatforms() whenever GET /api/platforms resolves. Lets
+ * platformDisplayName() show a multi-instance platform's real name everywhere
+ * — including deep child components (GroupDrawer, AssignAdminModal, etc.) that
+ * only ever receive a bare platform key — without threading the live platforms
+ * list through every call site. A module-level cache rather than React state
+ * since these are plain helper functions called outside any component's render.
+ */
+const liveDisplayNames: Record<string, string> = {};
+
+export function registerLivePlatforms(platforms: { key: string; displayName: string }[]): void {
+  for (const p of platforms) {
+    liveDisplayNames[p.key] = p.displayName;
+  }
+}
+
+/**
+ * Friendly display name for a platform id. Prefers the live adapter's own
+ * displayName (correct for multi-instance keys like "redash-qa" → "Redash
+ * (QA)"); falls back to the static PLATFORMS metadata, then a capitalized id
+ * before the live platforms list has loaded.
+ */
 export function platformDisplayName(id: string): string {
+  if (!id) return 'Platform';
+  if (liveDisplayNames[id]) return liveDisplayNames[id];
   const meta = PLATFORMS.find((p) => p.id === id);
   if (meta) return meta.name;
-  return id ? id.charAt(0).toUpperCase() + id.slice(1) : 'Platform';
+  return id.charAt(0).toUpperCase() + id.slice(1);
 }

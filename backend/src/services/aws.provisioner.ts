@@ -6,7 +6,8 @@ import {
   PlatformUserStatus,
   OnboardingMessage,
 } from './provisioner.interface';
-import awsIdentityCenterService, { IdcUser } from './aws-identity-center.service';
+import awsIdentityCenterService from './aws-identity-center.service';
+import { notifyUserCreationWorkflow, recomputeGroupMemberCounts } from './adapter-helpers';
 import prisma from '../config/prisma';
 import logger from '../utils/logger';
 import config from '../config/config';
@@ -55,6 +56,11 @@ const RESERVED_GROUP_NAMES = ['API-TESTING'];
 export class AwsProvisioner implements PlatformAdapter {
   readonly platform = PLATFORM;
   readonly displayName = 'AWS';
+
+  /** Whether the AWS platform is administratively enabled (AWS_ENABLED, toggle-aws.ts). */
+  isEnabled(): boolean {
+    return config.aws.isEnabled;
+  }
 
   // ── Provisioning lifecycle ────────────────────────────────────────────────
 
@@ -267,8 +273,16 @@ export class AwsProvisioner implements PlatformAdapter {
       });
     }
 
-    await this.recomputeGroupMemberCounts();
-    await this.notifyUserCreationWorkflow(users);
+    await recomputeGroupMemberCounts(PLATFORM);
+    await notifyUserCreationWorkflow(
+      PLATFORM,
+      users.map((u) => ({
+        externalId: u.userId,
+        email: u.email,
+        name: u.displayName,
+        isPending: u.isPending,
+      })),
+    );
 
     return { count: users.length };
   }
@@ -293,7 +307,12 @@ export class AwsProvisioner implements PlatformAdapter {
       isPending: user.isPending,
       groupIds: user.groupIds,
     });
-    await this.notifyUserCreationWorkflow([user]);
+    await notifyUserCreationWorkflow(PLATFORM, [{
+      externalId: user.userId,
+      email: user.email,
+      name: user.displayName,
+      isPending: user.isPending,
+    }]);
     return true;
   }
 
@@ -304,35 +323,7 @@ export class AwsProvisioner implements PlatformAdapter {
    * AWAITING_SETUP/APPROVED account-creation request can advance to COMPLETED.
    * Loaded lazily to avoid a static import cycle; per-user try/catch.
    */
-  private async notifyUserCreationWorkflow(users: IdcUser[]): Promise<void> {
-    // Only users with a tracked account-creation request for this platform can be
-    // advanced. Prefetch those emails once so we don't issue a findUnique per synced
-    // user (handlePlatformUserDetected would otherwise be an O(users) DB storm).
-    const tracked = await prisma.userCreationRequest.findMany({
-      where: { platform: PLATFORM },
-      select: { userEmail: true },
-    });
-    if (tracked.length === 0) return;
-    const trackedEmails = new Set(tracked.map((r) => r.userEmail.toLowerCase()));
 
-    const { default: userCreationService } = await import('./user-creation.service');
-    for (const u of users) {
-      if (!trackedEmails.has(u.email.toLowerCase())) continue;
-      try {
-        await userCreationService.handlePlatformUserDetected(PLATFORM, {
-          externalId: u.userId,
-          email: u.email,
-          name: u.displayName,
-          isPending: u.isPending,
-        });
-      } catch (err: any) {
-        logger.error(
-          { userId: u.userId, email: u.email, error: err.message },
-          'handlePlatformUserDetected (aws) failed for one user; continuing batch',
-        );
-      }
-    }
-  }
 
   /** Resolve the user's immutable id, creating the Identity Store user if absent. */
   private async ensureUser(email: string, name: string): Promise<string> {
@@ -406,27 +397,7 @@ export class AwsProvisioner implements PlatformAdapter {
   }
 
   /** Recompute and persist member counts for every cached AWS group. */
-  private async recomputeGroupMemberCounts(): Promise<void> {
-    const [groups, users] = await Promise.all([
-      prisma.platformExternalGroup.findMany({ where: { platform: PLATFORM }, select: { id: true, externalId: true } }),
-      prisma.platformExternalUser.findMany({ where: { platform: PLATFORM }, select: { externalGroupIds: true } }),
-    ]);
-    // Tally members per group in a single pass over users instead of an
-    // O(groups × users) nested scan.
-    const counts = new Map<string, number>();
-    for (const u of users) {
-      for (const gid of u.externalGroupIds) {
-        counts.set(gid, (counts.get(gid) ?? 0) + 1);
-      }
-    }
-    const updates = groups.map(group =>
-      prisma.platformExternalGroup.update({
-        where: { id: group.id },
-        data: { memberCount: counts.get(group.externalId) ?? 0 },
-      }),
-    );
-    if (updates.length) await prisma.$transaction(updates);
-  }
+
 }
 
 export const awsProvisioner = new AwsProvisioner();

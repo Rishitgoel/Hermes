@@ -8,6 +8,7 @@ import { SkeletonRows } from '../components/common/Skeleton';
 import SectionHeader from '../components/common/SectionHeader';
 import PlatformTabs from '../components/common/PlatformTabs';
 import { queryKeys } from '../lib/queryKeys';
+import { fetchPlatforms } from '../services/api/platforms';
 import { prettyPlatform, cleanName, groupIconName } from '../components/admin/adminUtils';
 import GroupDrawer from '../components/admin/GroupDrawer';
 import GroupFormModal from '../components/admin/GroupFormModal';
@@ -46,6 +47,11 @@ export const AdminManagement: React.FC = () => {
     queryKey: queryKeys.adminPlatforms(),
     queryFn: listManageablePlatforms,
   });
+
+  // Warms lib/platforms' live-displayName cache (e.g. "redash-qa" → "Redash
+  // (QA)") so prettyPlatform() below shows real adapter names even if this
+  // page is opened directly, without waiting on Dashboard/Groups to fetch it.
+  useQuery({ queryKey: queryKeys.platforms(), queryFn: fetchPlatforms });
 
   // Default to the first platform once they load.
   useEffect(() => {
@@ -103,7 +109,7 @@ export const AdminManagement: React.FC = () => {
   // Dry-run previews; Apply writes. Idempotent.
   const [importReport, setImportReport] = useState<RedashImportReport | null>(null);
   const importMutation = useMutation({
-    mutationFn: (apply: boolean) => importRedashMemberships(apply),
+    mutationFn: (apply: boolean) => importRedashMemberships(apply, activePlatform ?? 'redash'),
     onSuccess: (report) => {
       setImportReport(report);
       toast.success(
@@ -115,7 +121,7 @@ export const AdminManagement: React.FC = () => {
         queryClient.invalidateQueries({ queryKey: queryKeys.adminGroups(activePlatform ?? '') });
       }
     },
-    onError: (e: any) => toast.error(e.message || 'Redash membership import failed.'),
+    onError: (e: any) => toast.error(e.message || 'Membership import failed.'),
   });
 
   // ZooKeeper ACL migration — a rarely-used maintenance tool that updates existing
@@ -342,8 +348,8 @@ export const AdminManagement: React.FC = () => {
 
       {/* Maintenance: Redash membership import. Intentionally tucked away in a
           collapsed disclosure at the bottom — a rarely-used backfill tool, super
-          admin + Redash only. Closed by default so it stays out of the way. */}
-      {superAdmin && activePlatform === 'redash' && (
+          admin + Redash/Redash-QA only. Closed by default so it stays out of the way. */}
+      {superAdmin && (activePlatform === 'redash' || activePlatform === 'redash-qa') && (
         <details
           style={{
             marginTop: '8px',
@@ -354,7 +360,7 @@ export const AdminManagement: React.FC = () => {
         >
           <summary style={{ cursor: 'pointer', userSelect: 'none' }}>
             <Icons.Wrench size={12} style={{ verticalAlign: 'middle', marginRight: '6px' }} />
-            Maintenance — import existing Redash memberships
+            Maintenance — import existing {activePlatform === 'redash-qa' ? 'Redash QA' : 'Redash'} memberships
           </summary>
           <div
             style={{
@@ -365,7 +371,7 @@ export const AdminManagement: React.FC = () => {
             }}
           >
             <p style={{ margin: '0 0 12px', lineHeight: 1.5 }}>
-              Backfill existing Redash accounts + group memberships into Hermes so users keep
+              Backfill existing {activePlatform === 'redash-qa' ? 'Redash QA' : 'Redash'} accounts + group memberships into Hermes so users keep
               access they already have. Run <strong>Dry run</strong> to preview, then{' '}
               <strong>Apply</strong> to write. Idempotent — safe to re-run.
             </p>
@@ -385,7 +391,7 @@ export const AdminManagement: React.FC = () => {
                 onClick={() => {
                   if (
                     window.confirm(
-                      'Apply Redash membership import? This writes grants + completed account requests to the database. It is idempotent (safe to re-run), but real.',
+                      `Apply ${activePlatform === 'redash-qa' ? 'Redash QA' : 'Redash'} membership import? This writes grants + completed account requests to the database. It is idempotent (safe to re-run), but real.`,
                     )
                   ) {
                     importMutation.mutate(true);
@@ -400,7 +406,7 @@ export const AdminManagement: React.FC = () => {
               <div className="table-container" style={{ padding: '12px', marginTop: '12px' }}>
                 <div style={{ marginBottom: '8px' }}>
                   <strong>{importReport.apply ? 'Applied' : 'Dry run'}</strong> — mapped groups:{' '}
-                  {importReport.mappedGroups}, cached Redash users: {importReport.cachedUsers},
+                  {importReport.mappedGroups}, cached {activePlatform === 'redash-qa' ? 'Redash QA' : 'Redash'} users: {importReport.cachedUsers},
                   matched to Keycloak: {importReport.usersMatched}, grants{' '}
                   {importReport.apply ? 'created' : 'to create'}: {importReport.grantsCreated},
                   already present: {importReport.grantsAlreadyPresent}, account requests{' '}
@@ -413,7 +419,7 @@ export const AdminManagement: React.FC = () => {
                 )}
                 {importReport.usersSkippedDisabled.length > 0 && (
                   <div style={{ color: 'var(--status-pending-text, #b9770e)' }}>
-                    Skipped (disabled in Redash): {importReport.usersSkippedDisabled.join(', ')}
+                    Skipped (disabled in {activePlatform === 'redash-qa' ? 'Redash QA' : 'Redash'}): {importReport.usersSkippedDisabled.join(', ')}
                   </div>
                 )}
                 {importReport.membershipsUnmapped.length > 0 && (

@@ -3,7 +3,7 @@ import config from '../config/config';
 
 /**
  * Rewrite a Redash-issued invite link so its protocol + host + port match the
- * configured `REDASH_BASE_URL`.
+ * configured or provided `baseUrl`.
  *
  * Why: Redash sometimes hands back invite URLs whose host/port doesn't match
  * the URL Hermes was configured to talk to (e.g. an internal docker hostname,
@@ -14,22 +14,25 @@ import config from '../config/config';
  *
  * Rules:
  *  - Empty / null / undefined → returned unchanged.
- *  - Relative (`/invite/<token>`) → prefixed with `REDASH_BASE_URL`.
+ *  - Relative (`/invite/<token>`) → prefixed with the given `baseUrl`.
  *  - Absolute → its protocol + host (which includes port) are overridden to
- *    match `REDASH_BASE_URL`; path + query + fragment are preserved.
+ *    match `baseUrl`; path + query + fragment are preserved.
  *
  * Safe: any URL parse failure is logged at warn level and the original string
  * is returned. Callers don't need their own try/catch.
  */
-export function normalizeRedashInviteLink<T extends string | null | undefined>(link: T): T {
+export function normalizeRedashInviteLink<T extends string | null | undefined>(
+  link: T,
+  baseUrl: string = config.redash.baseUrl,
+): T {
   if (!link) return link;
   try {
     if (link.startsWith('/')) {
-      const base = config.redash.baseUrl.replace(/\/$/, '');
+      const base = baseUrl.replace(/\/$/, '');
       return (`${base}${link}`) as T;
     }
     const parsedUrl = new URL(link);
-    const configuredUrl = new URL(config.redash.baseUrl);
+    const configuredUrl = new URL(baseUrl);
     parsedUrl.protocol = configuredUrl.protocol;
     parsedUrl.host = configuredUrl.host;
     return parsedUrl.toString() as T;

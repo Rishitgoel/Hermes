@@ -2,7 +2,6 @@ import prisma from '../config/prisma';
 import provisioningRegistry from './provisioning.registry';
 import keycloakAdminService from './keycloak-admin.service';
 import logger from '../utils/logger';
-import config from '../config/config';
 
 export interface ReconcileCounts {
   /** Mirror rows added (a Keycloak role mapping had no mirror row). */
@@ -87,18 +86,26 @@ export class AdminReconciliationService {
     const counts = zero();
     const tag = dryRun ? '[dry-run] would' : '';
 
-    for (const platform of provisioningRegistry.listPlatforms()) {
-      if (platform === 'aws' && !config.aws.isEnabled) {
-        logger.debug('🔁 Reconcile: Skipping platform-admin reconciliation for AWS because it is disabled.');
-        continue;
+    const platforms = provisioningRegistry.listPlatforms().filter((platform) => {
+      const adapter = provisioningRegistry.tryGet(platform);
+      if (adapter?.isEnabled && !adapter.isEnabled()) {
+        logger.debug(`🔁 Reconcile: Skipping platform-admin reconciliation for ${platform} because it is disabled.`);
+        return false;
       }
-      try {
+      return true;
+    });
+
+    // Each platform's reconciliation touches only its own PlatformAdmin rows and
+    // its own Keycloak role — independent work, run concurrently. allSettled keeps
+    // one platform's failure from blocking the others' counts.
+    const results = await Promise.allSettled(
+      platforms.map(async (platform): Promise<ReconcileCounts> => {
         const kcIds = new Set(await keycloakAdminService.getUsersInRole(platformAdminRole(platform)));
         const mirror = await prisma.platformAdmin.findMany({ where: { platform } });
         const mirrorIds = new Set(mirror.map((m) => m.userId));
-        counts.checked += 1;
+        const platformCounts = zero();
+        platformCounts.checked += 1;
 
-        // In Keycloak but missing a mirror row → add it.
         for (const userId of kcIds) {
           if (mirrorIds.has(userId)) continue;
           if (!dryRun) {
@@ -109,21 +116,30 @@ export class AdminReconciliationService {
               create: { userId, platform, userName: p.userName, userEmail: p.userEmail, assignedBy: 'reconcile' },
             });
           }
-          counts.added += 1;
+          platformCounts.added += 1;
           logger.warn(`🔁 Reconcile: ${tag} add missing platform_admin mirror (${userId} / ${platform}).`);
         }
 
-        // In the mirror but no Keycloak role → stale, remove it.
         for (const m of mirror) {
           if (kcIds.has(m.userId)) continue;
           if (!dryRun) await prisma.platformAdmin.delete({ where: { id: m.id } });
-          counts.removed += 1;
+          platformCounts.removed += 1;
           logger.warn(`🔁 Reconcile: ${tag} remove stale platform_admin mirror (${m.userId} / ${platform}).`);
         }
-      } catch (err: any) {
-        logger.error(`🔁 Reconcile: platform-admin reconcile failed for "${platform}": ${err.message}`);
+
+        return platformCounts;
+      }),
+    );
+
+    results.forEach((result, i) => {
+      if (result.status === 'fulfilled') {
+        counts.checked += result.value.checked;
+        counts.added += result.value.added;
+        counts.removed += result.value.removed;
+      } else {
+        logger.error(`🔁 Reconcile: platform-admin reconcile failed for "${platforms[i]}": ${result.reason?.message ?? result.reason}`);
       }
-    }
+    });
 
     return counts;
   }
@@ -131,12 +147,13 @@ export class AdminReconciliationService {
   private async reconcileGroupAdmins(dryRun: boolean): Promise<ReconcileCounts> {
     const counts = zero();
     const tag = dryRun ? '[dry-run] would' : '';
+    const disabledPlatforms = provisioningRegistry.listPlatforms().filter((key) => {
+      const adapter = provisioningRegistry.tryGet(key);
+      return !!(adapter?.isEnabled && !adapter.isEnabled());
+    });
     const groups = await prisma.group.findMany({
       where: {
-        OR: [
-          { platform: { not: 'aws' } },
-          ...(config.aws.isEnabled ? [{ platform: 'aws' }] : []),
-        ],
+        platform: { notIn: disabledPlatforms },
       },
       select: { id: true, slug: true, platform: true },
     });

@@ -32,26 +32,39 @@ export class SyncService {
     return this.lastSyncedAt;
   }
 
-  /** Refresh the cache for every registered platform. */
+  /** Refresh the cache for every registered platform. Each platform's sync runs
+   *  concurrently — platforms are independent (different cache rows, different
+   *  adapters). Per-platform failures are isolated via Promise.allSettled so one
+   *  bad platform can't block or fail the rest. */
   async syncAllPlatforms(): Promise<{ usersSynced: number; groupsSynced: number }> {
     logger.info('🔄 SyncService: Starting sync across all platforms...');
+
+    const platforms = provisioningRegistry.listPlatforms().filter((platform) => {
+      const adapter = provisioningRegistry.tryGet(platform);
+      if (adapter?.isEnabled && !adapter.isEnabled()) {
+        logger.info(`🔄 SyncService: Skipping ${platform} sync because it is disabled.`);
+        return false;
+      }
+      return true;
+    });
+
+    const results = await Promise.allSettled(
+      platforms.map((platform) => this.syncSinglePlatform(platform)),
+    );
+
     let usersSynced = 0;
     let groupsSynced = 0;
-
-    for (const platform of provisioningRegistry.listPlatforms()) {
-      if (platform === 'aws' && !config.aws.isEnabled) {
-        logger.info('🔄 SyncService: Skipping AWS sync because it is disabled.');
-        continue;
+    results.forEach((result, i) => {
+      if (result.status === 'fulfilled') {
+        usersSynced += result.value.usersSynced;
+        groupsSynced += result.value.groupsSynced;
+      } else {
+        logger.error(
+          { platform: platforms[i], error: result.reason?.message ?? String(result.reason) },
+          '🔄 SyncService: Platform sync failed',
+        );
       }
-      try {
-        const result = await this.syncSinglePlatform(platform);
-        usersSynced += result.usersSynced;
-        groupsSynced += result.groupsSynced;
-      } catch (err: any) {
-        // Isolate per-platform failures so one bad platform can't block the rest.
-        logger.error({ platform, error: err.message }, '🔄 SyncService: Platform sync failed');
-      }
-    }
+    });
 
     this.lastSyncedAt = new Date();
     logger.info(`🔄 SyncService: Sync complete — ${usersSynced} users, ${groupsSynced} groups.`);

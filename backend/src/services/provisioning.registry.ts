@@ -1,7 +1,9 @@
 import { PlatformAdapter } from './provisioner.interface';
-import { redashProvisioner } from './redash.provisioner';
+import { createRedashProvisioner } from './redash.provisioner';
+import { getRedashService } from './redash.service';
 import { awsProvisioner } from './aws.provisioner';
 import { zookeeperProvisioner } from './zookeeper.provisioner';
+import config from '../config/config';
 import logger from '../utils/logger';
 
 /**
@@ -13,12 +15,23 @@ import logger from '../utils/logger';
  * adding a platform is a one-line `register(...)` call in the constructor — no
  * caller needs to change. Lookups are case-insensitive.
  */
-class ProvisioningRegistry {
+export class ProvisioningRegistry {
   private registry = new Map<string, PlatformAdapter>();
 
   constructor() {
-    // Register standard platform provisioners.
-    this.register('redash', redashProvisioner);
+    // Register every configured Redash instance (prod always; additional
+    // instances like QA are opt-in — an instance with no baseUrl configured is
+    // skipped so an unconfigured entry never registers a dead adapter). Each
+    // instance gets its own RedashService (own HTTP client / cache) and its own
+    // RedashProvisioner (own platform key), so prod and QA never share state.
+    for (const instance of config.redashInstances) {
+      if (!instance.baseUrl) {
+        logger.info(`🔌 Provisioning Registry: Skipping Redash instance "${instance.key}" (no base URL configured)`);
+        continue;
+      }
+      const service = getRedashService(instance);
+      this.register(instance.key, createRedashProvisioner({ ...instance, service }));
+    }
     this.register('aws', awsProvisioner);
     this.register('zookeeper', zookeeperProvisioner);
   }
@@ -28,6 +41,19 @@ class ProvisioningRegistry {
     const key = platform.toLowerCase();
     this.registry.set(key, adapter);
     logger.info(`🔌 Provisioning Registry: Registered provisioner for platform "${key}"`);
+  }
+
+  /**
+   * Remove a platform's adapter. Primarily for test cleanup: a test that
+   * registers a throwaway fake adapter on the shared singleton (register()
+   * mutates the real exported registry — there's no per-test instance) must undo
+   * it in afterEach, since vi.restoreAllMocks() does not touch a plain Map.set.
+   * No-op if the platform was never registered.
+   */
+  unregister(platform: string): void {
+    const key = platform.toLowerCase();
+    this.registry.delete(key);
+    logger.info(`🔌 Provisioning Registry: Unregistered provisioner for platform "${key}"`);
   }
 
   get(platform: string): PlatformAdapter {

@@ -1,8 +1,12 @@
 /** Shared formatting helpers for the Admin Management components. */
 
 import type { ReconciliationSummary } from '../../services/api/admin';
+import { platformDisplayName } from '../../lib/platforms';
 
-export const prettyPlatform = (p: string) => p.charAt(0).toUpperCase() + p.slice(1);
+/** Alias for platformDisplayName — prefers the live adapter's own displayName
+ *  (correct for multi-instance keys like "redash-qa" → "Redash (QA)") over a
+ *  naive capitalize, which broke on multi-word/hyphenated platform keys. */
+export const prettyPlatform = platformDisplayName;
 
 /**
  * Build a user-facing toast from a member-reconciliation summary (ZooKeeper path edits),

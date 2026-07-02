@@ -12,6 +12,7 @@ import { queryKeys } from '../lib/queryKeys';
 import { fetchPlatforms } from '../services/api/platforms';
 import { getMyUserCreations } from '../services/api/userCreation';
 import * as Icons from 'lucide-react';
+import { platformDisplayName } from '../lib/platforms';
 
 interface GroupData {
   id: string;
@@ -105,13 +106,7 @@ export const Dashboard: React.FC = () => {
   const groups = groupsQuery.data ?? [];
   const pendingReviewCount = pendingQuery.data?.length ?? 0;
   const livePlatforms = platformsQuery.data ?? [];
-  const platformsByKey = new Map(livePlatforms.map((p) => [p.key, p]));
   const accountByPlatform = new Map((accountsQuery.data ?? []).map((a) => [a.platform, a]));
-
-  // Human label for a platform key — prefer the adapter-owned displayName, fall back
-  // to a title-cased key for anything not in the live registry.
-  const platformLabel = (key: string) =>
-    platformsByKey.get(key)?.displayName ?? key.charAt(0).toUpperCase() + key.slice(1);
 
   // Group active grants by platform so the access list is platform-aware instead of a
   // single undifferentiated table. Sorted by platform label for a stable order.
@@ -120,11 +115,11 @@ export const Dashboard: React.FC = () => {
     return acc;
   }, {});
   const platformGroups = Object.entries(accessesByPlatform).sort((a, b) =>
-    platformLabel(a[0]).localeCompare(platformLabel(b[0])),
+    platformDisplayName(a[0]).localeCompare(platformDisplayName(b[0])),
   );
 
   // "Redash 2 · AWS 1" — makes the bare Active Accesses count meaningful at a glance.
-  const accessBreakdown = platformGroups.map(([key, list]) => `${platformLabel(key)} ${list.length}`).join(' · ');
+  const accessBreakdown = platformGroups.map(([key, list]) => `${platformDisplayName(key)} ${list.length}`).join(' · ');
 
   const isLoading =
     accessesQuery.isLoading ||
@@ -332,7 +327,7 @@ export const Dashboard: React.FC = () => {
         />
       ) : (
         platformGroups.map(([platformKey, platformAccesses]) => {
-          const plat = platformsByKey.get(platformKey);
+          const plat = livePlatforms.find((p) => p.key === platformKey);
           return (
             <div key={platformKey} style={{ marginBottom: '24px' }}>
               {/* Platform section header: name + grant count + launch link. */}
@@ -347,7 +342,7 @@ export const Dashboard: React.FC = () => {
                 }}
               >
                 <Icons.Server size={16} style={{ color: 'var(--primary)' }} />
-                <span style={{ fontWeight: 700, color: 'var(--text-main)' }}>{platformLabel(platformKey)}</span>
+                <span style={{ fontWeight: 700, color: 'var(--text-main)' }}>{platformDisplayName(platformKey)}</span>
                 <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>
                   {platformAccesses.length} grant(s)
                 </span>

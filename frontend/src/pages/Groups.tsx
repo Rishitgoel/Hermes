@@ -3,11 +3,12 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import apiClient from '../services/apiClient';
 import { getMyUserCreation } from '../services/api/userCreation';
-import { fetchPlatforms } from '../services/api/platforms';
+import { fetchPlatforms, type LivePlatform } from '../services/api/platforms';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import EmptyState from '../components/common/EmptyState';
 import SectionHeader from '../components/common/SectionHeader';
 import PlatformInviteModal from '../components/access/PlatformInviteModal';
+import PlatformInstanceModal from '../components/access/PlatformInstanceModal';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../lib/queryKeys';
 import { PLATFORMS, DEFAULT_PLATFORM, type PlatformMetadata } from '../lib/platforms';
@@ -58,6 +59,9 @@ export const Groups: React.FC = () => {
   const [activePopupGroupId, setActivePopupGroupId] = useState<string | null>(null);
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [bulkSuccess, setBulkSuccess] = useState<string | null>(null);
+  // Set when a clicked platform card has more than one live instance (e.g. Redash
+  // Prod + QA) — the chooser lets the user pick which instance's groups to view.
+  const [platformChooser, setPlatformChooser] = useState<{ meta: PlatformMetadata; instances: LivePlatform[] } | null>(null);
 
   // Custom reason popup state (temporary input before clicking "Save")
   const [tempReason, setTempReason] = useState('');
@@ -74,7 +78,17 @@ export const Groups: React.FC = () => {
     queryKey: queryKeys.platforms(),
     queryFn: fetchPlatforms,
   });
-  const livePlatforms = new Set((livePlatformsQuery.data ?? []).map((p) => p.key));
+  const livePlatformsList = livePlatformsQuery.data ?? [];
+  // Group live platforms by family so a card represents ALL instances of one
+  // platform (e.g. redash + redash-qa both group under family "redash"). A
+  // single-instance platform's family defaults to its own key, so it's still a
+  // group of exactly one — the chooser only opens when a family has >1 instance.
+  const liveByFamily = new Map<string, LivePlatform[]>();
+  for (const p of livePlatformsList) {
+    const arr = liveByFamily.get(p.family) ?? [];
+    arr.push(p);
+    liveByFamily.set(p.family, arr);
+  }
 
   // Gate group requests by the user's account-creation status FOR THE PLATFORM
   // being viewed (per-platform): viewing AWS groups checks the AWS account, Redash
@@ -160,9 +174,12 @@ export const Groups: React.FC = () => {
   const isPlatformUser = !activePlatform || !needsAccountAction;
 
   const handleSelectPlatform = (platform: PlatformMetadata | null) => {
-    if (platform && livePlatforms.has(platform.id)) {
-      setSearchParams({ platform: platform.id });
+    const instances = platform ? liveByFamily.get(platform.id) ?? [] : [];
+    if (platform && instances.length === 1) {
+      setSearchParams({ platform: instances[0].key });
       setInfoMessage(null);
+    } else if (platform && instances.length > 1) {
+      setPlatformChooser({ meta: platform, instances });
     } else if (platform) {
       setInfoMessage(`Integration with ${platform.fullName} is planned for a future release. Stay tuned!`);
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -177,8 +194,15 @@ export const Groups: React.FC = () => {
   }
 
   // Metadata for the platform currently being viewed (drives the page heading
-  // and the invite-modal labels instead of hardcoding "Redash").
-  const activePlatformMeta = PLATFORMS.find((p) => p.id === activePlatform) ?? null;
+  // and the invite-modal labels instead of hardcoding "Redash"). `activePlatform`
+  // is an instance key (e.g. "redash-qa") — resolve its family for icon/color/
+  // description, but use the adapter's own displayName (e.g. "Redash (QA)") so
+  // the heading reflects which instance is being browsed.
+  const activeLiveEntry = livePlatformsList.find((p) => p.key === activePlatform);
+  const activePlatformFamilyMeta = PLATFORMS.find((p) => p.id === (activeLiveEntry?.family ?? activePlatform)) ?? null;
+  const activePlatformMeta = activePlatformFamilyMeta
+    ? { ...activePlatformFamilyMeta, name: activeLiveEntry?.displayName ?? activePlatformFamilyMeta.name }
+    : null;
 
   // Filter groups: only those belonging to the active platform, then by search.
   const filteredGroups = groups
@@ -317,11 +341,13 @@ export const Groups: React.FC = () => {
 
         {/* Platform Grid */}
         <div className="cards-grid">
-          {PLATFORMS.filter((platform) => livePlatforms.has(platform.id)).map((platform) => {
-            const isActive = livePlatforms.has(platform.id);
-            // Count only the groups that belong to this platform, so each card
-            // reflects its own platform once AWS / Jira groups exist alongside Redash.
-            const platformGroups = groups.filter((g) => g.platform === platform.id);
+          {PLATFORMS.filter((platform) => liveByFamily.has(platform.id)).map((platform) => {
+            const instances = liveByFamily.get(platform.id) ?? [];
+            const isActive = instances.length > 0;
+            // Count groups across every instance in this family, so a
+            // multi-instance card (Redash Prod + QA) reflects both together.
+            const instanceKeys = new Set(instances.map((i) => i.key));
+            const platformGroups = groups.filter((g) => instanceKeys.has(g.platform));
             const groupCount = platformGroups.length;
             const memberCount = platformGroups.reduce((acc, curr) => acc + curr.memberCount, 0);
 
@@ -387,6 +413,18 @@ export const Groups: React.FC = () => {
             );
           })}
         </div>
+
+        {/* Platform Instance Chooser (Prod/QA, etc.) — only opens for multi-instance families */}
+        <PlatformInstanceModal
+          isOpen={!!platformChooser}
+          onClose={() => setPlatformChooser(null)}
+          platformName={platformChooser?.meta.name ?? ''}
+          instances={platformChooser?.instances ?? []}
+          onSelect={(key) => {
+            setSearchParams({ platform: key });
+            setInfoMessage(null);
+          }}
+        />
       </div>
     );
   }
@@ -425,8 +463,8 @@ export const Groups: React.FC = () => {
           <Icons.AlertTriangle size={20} />
           <span className="banner-body">
             {userCreationStatus === 'REJECTED'
-              ? 'Your account request was rejected. Contact an admin before requesting group access.'
-              : 'Submit a Hermes account request before you can queue group access requests.'}
+              ? `Your ${activePlatformMeta?.name ?? 'platform'} account request was rejected. Contact an admin before requesting group access.`
+              : `Submit a ${activePlatformMeta?.name ?? 'platform'} account request before you can queue group access requests.`}
           </span>
           <button
             type="button"

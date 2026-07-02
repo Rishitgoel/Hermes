@@ -59,6 +59,8 @@ Everything below is on `main` / `origin/main`. Verified present in the tree on 2
 | **P2-4** | **CI on push** — GitHub Actions on push + PR to `main`: backend/frontend typecheck, backend/frontend lint, prisma-validate, backend tests (testcontainers), frontend tests. Node 22, per-project npm cache. Also fixed pre-existing breakage so the typecheck/build are green (see note below). | `.github/workflows/ci.yml` |
 | **P2-5** | **Audit log filtering** — extended `auditQuerySchema` + controller with `performerId`, `fromDate`, `toDate`, `groupId`, `platform` (platform resolved to its group ids since `AuditEntry` has no platform column); AuditLog UI gained date range + platform + group selectors + Clear filters. | `backend/src/validations/audit.validation.ts`, `controllers/audit.controller.ts`; `frontend/src/pages/AuditLog.tsx`, `lib/queryKeys.ts` |
 | **P2-6** | **SSE instead of polling** — `GET /api/notifications/stream` (Server-Sent Events) replaces the 60s `NotificationContext` poll. `createNotification` emits a scoped `notification.created`; a single-listener `notification-stream.service` fans out per user. EventSource authenticates via `?token=` (header-injection middleware reuses the normal auth chain); the client re-hydrates on (re)connect. In-process today; subscribes to the queue when P3-2 (BullMQ) lands. | `backend/src/services/notification-stream.service.ts`, `event-bus.ts`, `notification.service.ts`, `controllers/notification.controller.ts`, `routes/notification.route.ts`, `middleware/auth.middleware.ts`; `frontend/src/contexts/NotificationContext.tsx` |
+| **P3-7** | **ZooKeeper value change-requests** — approval-only config edits under user's scoped grants using a world-open znode model. | `backend/src/services/zookeeper-config.service.ts`, `frontend/src/pages/ZookeeperConfig.tsx` (commits `64d7ca0f`, `247090cf`) |
+| **Win-1** | **Replace window.prompt** — revoke-reason input replaced with a proper `<ReasonModal>` component in GroupDetail page. | `frontend/src/pages/GroupDetail.tsx` (L441-456) |
 
 **Completed "smaller wins"** (were in the original tail list, now verified done): `process.env.NODE_ENV` reads consolidated into `config.isDev`/`config.isProd` (only `config.ts` reads the raw env); `expireAccess` calls parallelised with `Promise.allSettled` in the scheduler; `ErrorBoundary` added (`frontend/src/components/common/ErrorBoundary.tsx`, wired in `App.tsx`); redash provisioner no longer hardcodes `groupIds: [1]` for invited users; Slack/email message strings extracted to `backend/src/utils/email-templates.ts`.
 
@@ -86,7 +88,7 @@ Everything below is on `main` / `origin/main`. Verified present in the tree on 2
 | P3-4 | Split large pages (Groups, GroupDetail, PendingApprovals) | M | Low |
 | P3-5 | OpenAPI spec from Zod | M | Low |
 | P3-6 | OpenTelemetry traces | M | Low |
-| P3-7 | ZooKeeper value change-requests (approval-gated edits) | L | Med |
+| ~~P3-7~~ | ~~ZooKeeper value change-requests (approval-gated edits)~~ — **Done** (see Done table) | — | — |
 
 Effort: XS ≈ 15 min · S ≈ 1–2 h · M ≈ half day · L ≈ 1–2 days. Risk = chance of breaking existing flows.
 
@@ -94,122 +96,7 @@ Effort: XS ≈ 15 min · S ≈ 1–2 h · M ≈ half day · L ≈ 1–2 days. Ri
 
 # P2 — Hardening
 
-## P2-1 — Tests (vitest)
-
-**Why:** zero test coverage today (verified 2026-06-11 — no `*.test.ts` / `*.spec.ts` anywhere). The access workflow (request → approve → provision → revoke → expire) is the riskiest code and has the most state transitions. Regressions here will silently break authorization. The **user-creation**, **admin-tier authorization**, **level-change (admin set-level + renewal)**, and **AWS provisioner** paths are now equally worth covering.
-
-**Stack:**
-- **vitest** for both backend and frontend (same runner, simpler than jest + babel).
-- **@testcontainers/postgresql** for backend integration tests against a real Postgres. ⚠️ Don't point integration tests at the dev Docker Postgres — spin up an ephemeral container so tests can't pollute dev data.
-- **@testing-library/react** for component tests.
-
-**Backend tests, in priority order:**
-1. **Unit:** `AccessWorkflowService.calculateExpiry` — pure function, easy first win. Also `backend/src/utils/authz.ts` helpers (`isSuperAdmin`, `isPlatformAdminOf`, `isGroupAdminOf`) — pure-ish and security-critical.
-2. **Integration (high-value):** full lifecycle
-   - Seed: a group + a regular user.
-   - `createRequest()` → assert request row exists with status PENDING, audit entry created.
-   - `reviewRequest(id, reviewer, 'APPROVED')` → assert PROVISIONED + UserAccess row + audit entry + event emitted.
-   - Advance system clock OR call `expireAccess(userAccessId)` directly → assert UserAccess.isActive=false + access request status=EXPIRED + audit entry.
-3. **Failure paths:**
-   - Re-requesting access when already active → ConflictError.
-   - Approving as wrong group admin → AuthorizationError.
-   - Provisioner throwing → request goes to PROVISION_FAILED, audit entry includes error.
-   - Auto-expiry retry cap (`MAX_EXPIRY_ATTEMPTS=3`) → force-expire after max retries, `ACCESS_EXPIRY_FAILED` audit + admin alert.
-4. **(New) user-creation flow:** request account → admin approve → invite link issued; reject path; duplicate-request guard. Test **both** completion paths: Redash (setup link → AWAITING_SETUP → sync → COMPLETED) and AWS (instant COMPLETED).
-5. **(New) level-change flow:** `_swapGrant` atomicity via admin set-member-level (`adminSetMemberLevel`) and renewals — verify old level is deprovisioned and new one provisioned, exactly one active grant per group is preserved, and the `ACCESS_LEVEL_CHANGED` / `ACCESS_RENEWED` audit entry is written. (Self-service promote/demote was removed.)
-6. **(New) AWS provisioner sim:** provision/deprovision through the AWS simulation store; `EntityAlreadyExists` conflict handling; idempotent group add/remove.
-7. **(New) admin-management authorization:** tier enforcement — platform admin can't manage another platform's groups; group admin can't manage sibling groups; super admin can do everything.
-
-**Frontend tests:**
-1. `AuthContext` simulation-mode role switcher (four roles: super_admin / platform_admin / group_admin / user).
-2. Each page renders without crashing given a mocked `apiClient`.
-3. (Stretch) one Playwright/Cypress happy-path end-to-end run.
-
-**Done when:**
-- `npm test` runs in <60 s and covers grant/revoke/expire.
-- The CI job (P2-4) fails on red tests.
-
----
-
-## P2-2 — Bulk endpoints
-
-**Why:** verified still N parallel HTTP calls. `Groups.tsx` bulk-requests groups via `Promise.allSettled(requestsToSubmit.map(...))` (`frontend/src/pages/Groups.tsx:102`), and `PendingApprovals.tsx` does the same for review (`:121`). Each call hits the DB independently, fires its own events, sends its own Slack/email — no transaction, partial failures are confusing, and notifications get N pings for what should be one summary.
-
-**Files:**
-- `backend/src/routes/access-request.route.ts` — add `POST /bulk` and `PUT /bulk/review`.
-- `backend/src/controllers/access-request.controller.ts` — new controller methods.
-- `backend/src/services/access-workflow.service.ts` — `createRequestsBulk` and `reviewRequestsBulk` inside a single Prisma transaction.
-- `frontend/src/pages/Groups.tsx` — replace the `Promise.allSettled(...)` with a single call.
-- `frontend/src/pages/PendingApprovals.tsx` — same for review.
-
-**Approach:**
-- Wrap in `prisma.$transaction(async (tx) =>{...})`. If any item validates as a duplicate or violates an invariant, fail the whole batch and return per-item error details so the UI can show "3 succeeded, 2 had errors: ...".
-- Bulk validation must check `levelId` for leveled groups (groups with active levels require a level choice) and per-platform account status (reject if no account for that group's platform).
-- The event bus emits one summary event per bulk call (`requests.bulk.created` with `{requestIds[]}`) instead of N. Notification service formats it as one Slack/email message.
-- Audit log gets one bulk audit entry referencing all the request IDs in `details`.
-
-**Done when:** one HTTP call from the frontend; one transaction in the DB; one Slack message; one audit entry referencing all items.
-
----
-
-## P2-3 — Backend lint + Prettier
-
-**Why:** verified — frontend has ESLint (`npm run lint` works), backend has **none** (no `.eslintrc*` / `eslint.config.*` / `.prettierrc`, no `lint`/`format` scripts in `backend/package.json`).
-
-**Files:**
-- `backend/eslint.config.js` (flat config, to match frontend)
-- `backend/.prettierrc`
-- `backend/package.json` — add `lint` and `format` scripts.
-
-**Approach:** mirror the frontend's eslint flat config; add `@typescript-eslint` recommended rules. Turn on `@typescript-eslint/no-floating-promises` — routes use `.catch(next)` everywhere; this rule will catch the missing ones.
-
-**Done when:** `npm run lint` in `backend/` runs and either passes or produces an actionable list.
-
----
-
-## P2-4 — CI on push
-
-**Why:** verified — no `.github/workflows/` at all.
-
-**File:** `.github/workflows/ci.yml` (new).
-
-**Approach:**
-- Trigger on PR to `main` + push to `main`.
-- Jobs (in parallel where possible): `backend-typecheck`, `frontend-typecheck`, `backend-lint` (after P2-3), `frontend-lint`, `prisma-validate`, (eventually) `backend-tests`, `frontend-tests` (after P2-1).
-- Use `actions/setup-node@v4` with Node 22 (matches `@types/node@22.15.19`).
-- Cache `node_modules` keyed on `package-lock.json` hash and Prisma generation cache.
-- `prisma-validate` runs `npx prisma validate --schema=prisma/hermes/schema.prisma` (non-default path — see CLAUDE.md).
-
-**Done when:** any push or PR shows a green/red CI status icon on GitHub.
-
----
-
-## P2-5 — Audit log filtering
-
-**Why:** verified — `auditQuerySchema` (`backend/src/validations/audit.validation.ts`) still only accepts `action` and `search`. When investigating an incident, the most common questions are "what happened on date X", "what did user Y do", and — now that two platforms are live — "what happened on AWS vs Redash". None of which the UI supports.
-
-**Files:**
-- `backend/src/validations/audit.validation.ts` — extend schema with `performerId`, `fromDate`, `toDate`, `groupId`, `platform`.
-- `backend/src/controllers/audit.controller.ts` — wire all filters into the `where` clause.
-- `frontend/src/pages/AuditLog.tsx` — add filter UI (date pickers, performer search input, group dropdown, platform selector).
-
-**Done when:** filtering by `(performerId, fromDate, toDate, platform)` correctly narrows the audit table.
-
----
-
-## P2-6 — Replace polling with SSE
-
-**Why:** verified — `NotificationContext.tsx:76` still polls via `setInterval(fetchNotifications, 60000)` for every authenticated user. Wasteful, laggy, and gets worse as users grow.
-
-**Approach:**
-- Server: `GET /api/notifications/stream` using Server-Sent Events. The handler subscribes to the in-process event bus for `notification.*` events scoped to `req.user.id` and writes them to the response.
-- Frontend: replace `setInterval(fetchNotifications, 60000)` with an `EventSource('/api/notifications/stream?token=' + keycloak.token)`. EventSource doesn't support custom headers, so token-as-query-param is the standard pattern; rotate on token refresh.
-- Keep the initial `fetchNotifications()` call so the unread list is populated on mount.
-- Watch for: connection drop reconnect logic (`EventSource` retries automatically with backoff, but token may have expired — handle 401 by closing and re-opening).
-
-**Caveat:** if you later move to BullMQ (P3-2), the SSE handler needs to subscribe to the Redis queue events instead of the in-process emitter. Worth doing P3-2 first, or at least planning for it.
-
-**Done when:** marking a notification as read in one tab updates an open tab in another within ~1 s, with no polling visible in the network tab.
+All hardening (P2) tasks have been completed. Refer to the Done table above.
 
 ---
 
@@ -293,75 +180,10 @@ Then `GroupDetail.tsx` (members table, level-change panel, settings drawer → s
 
 ---
 
-## P3-7 — ZooKeeper value change-requests (approval-gated edits)
-
-**Why / what it is:** ZooKeeper access today is purely *access management* — Hermes grants/revokes per-path ACLs and never touches znode **data**. The next step users have asked for is a governed way to **edit a value**: a member sees a key, proposes a new value, and a **group admin approves** before it's written. This is the "PR for ZooKeeper config" model.
-
-**Why it can't live in ZooNavigator (decided 2026-06-22):** ZooNavigator (and zkui, and every off-the-shelf ZK browser) is a *direct-write* tool — editing a value immediately does `setData` against ZK, and there is **no plugin / edit-hook / webhook** to divert that write into an approval queue. Intercepting writes would mean forking ZooNavigator. So the approval flow lives in **Hermes**, and — crucially — it does **not** require building a ZK tree browser: Hermes already authenticates to ZK as an admin identity (it holds ADMIN on every managed znode), so it can read the current value and apply the approved write itself. **ZooNavigator stays as the read-only browser**; Hermes owns the governed write path.
-
-**How it composes with what's already shipped (subtree-read expansion):** in this model users are **READ-only everywhere** (the granted node + its subtree + ancestors — already implemented), and *every* value change funnels through this approval flow, applied by Hermes. So there is no direct user write at all, which also sidesteps "does write cascade to the subtree?" — nobody writes directly. (If P3-7 is adopted, the granted node's perms can stay read; write perms on the node itself become unnecessary.)
-
-**Data model** — new Prisma model in `backend/prisma/hermes/schema.prisma` (then `npm run prisma:migrate`):
-```prisma
-model ZkChangeRequest {
-  id              String    @id @default(uuid())
-  userId          String    // requester
-  groupId         String    // the Hermes group whose admin approves (path → group mapping)
-  levelId         String?   // optional: the level whose mapping covers the path
-  path            String    // the znode path to change
-  currentValue    String?   // value snapshot at request time (drives the admin's diff)
-  proposedValue   String    // new value (UTF-8 text assumed; see caveat)
-  expectedVersion Int       // znode dataVersion at request time (optimistic concurrency)
-  reason          String?
-  status          String    @default("PENDING") // PENDING | APPROVED | REJECTED | STALE | APPLY_FAILED
-  reviewedById    String?
-  reviewedAt      DateTime?
-  reviewNote      String?
-  appliedAt       DateTime?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  @@index([groupId, status])
-  @@index([userId])
-  @@map("zk_change_requests")
-}
-```
-
-**Backend — service** (`zookeeper.service.ts`, mirroring the existing ACL methods + sim branch):
-- `getData(path): Promise<{ exists: boolean; value: string | null; version: number }>` — live `client.getData` (returns data + `stat.version`); sim reads the in-process store (extend `SimNode` with a `data`/`version` field).
-- `setData(path, value, expectedVersion): Promise<{ version: number }>` — live `client.setData(path, Buffer.from(value, 'utf8'), expectedVersion, cb)`; a ZK `BAD_VERSION` becomes a `ConflictError` (someone changed the value since the snapshot). `expectedVersion` is the snapshot version, so writes are **optimistic-concurrency checked**, not blind.
-
-**Backend — controller + routes** (`zk-change-request.controller.ts` / `.route.ts`, all `authenticateToken`, tier checks in-controller via `authz.ts`):
-- `GET /api/zookeeper/data?path=…` — current value + version. Authz: requester must hold an active grant on a group whose mapping covers the path (equal to, or under, one of the group's/levels' `externalGroupId` paths — reuse `zookeeperService.parseExternalGroupIds`).
-- `POST /api/zookeeper/change-requests` — `{ groupId, path, proposedValue, reason? }`. Validates access + that `path` is covered by the group's mapping, snapshots `currentValue`/`expectedVersion`, stores PENDING, emits `zk.change.requested` → notify group admins.
-- `GET /api/zookeeper/change-requests/pending` — the admin queue, filtered to `getManageablePlatforms`/manageable groups (super → all, platform admin → their platform's groups, group admin → their group).
-- `GET /api/zookeeper/change-requests/mine` — the requester's own.
-- `PUT /api/zookeeper/change-requests/:id/review` — `{ decision: APPROVED | REJECTED, note? }`, gated on `isGroupAdminOf(user, groupId)`. On **approve**: re-read the live version; if it differs from `expectedVersion` → mark `STALE` and tell the admin to re-review (never apply a stale diff); else `setData(path, proposedValue, expectedVersion)` → `APPROVED`/applied, audit `ZK_VALUE_CHANGED`, notify requester. Apply failure → `APPLY_FAILED`. On **reject** → `REJECTED` + notify.
-
-**Validation** (`zk-change-request.validation.ts`): `createZkChangeRequestSchema` and `reviewZkChangeRequestSchema`, called via `this.validateWithZod`.
-
-**Events / notifications / audit:** emit `zk.change.requested` and `zk.change.reviewed` on `event-bus.ts`; add the notification + email copy in `notification.service.ts` / `email-templates.ts`. New audit actions: `ZK_CHANGE_REQUESTED`, `ZK_CHANGE_APPROVED`, `ZK_CHANGE_REJECTED`, `ZK_VALUE_CHANGED`, `ZK_CHANGE_APPLY_FAILED`. (Structurally a twin of the access-request → review flow — lean on that code.)
-
-**Frontend:**
-- *Propose change*: from the group detail page (a small "ZooKeeper keys" view listing the group's mapped paths, with read-only subtree navigation via a new `getChildren`-backed endpoint, or just paste a path) → a form that shows the current value (`GET …/data`), a textarea for the new value, and a reason → submit.
-- *Admin queue*: a "ZooKeeper Changes" section (in `AdminManagement.tsx` or `PendingApprovals.tsx`) listing pending requests with an **old → new diff** and approve/reject. Add TanStack Query keys.
-
-**Caveats / open decisions to settle when picked up:**
-- **Values are UTF-8 text.** ZK data is raw bytes; binary or very large values are out of scope for v1 (consider base64 + a flag later).
-- **v1 is value edits only** — creating/deleting znodes via the same approval flow is a later extension.
-- **Key discovery:** v1 can rely on ZooNavigator for browsing + paste-the-path, or a thin Hermes-side `getChildren` list scoped to the group's paths. Decide based on how much you want to keep users out of ZooNavigator.
-- **Live-only in practice**, but `getData`/`setData` must work against the sim store so the whole flow is testable locally (mirror the ACL methods).
-
-**Effort:** L. **Risk:** Med — this is the first Hermes-owned **write** to live platform *data* (not just ACLs); mitigated by the group-admin gate, version-checked writes, and sim coverage.
-
-**Done when:** a member proposes a value change → the group admin sees the old→new diff and approves → Hermes writes it (version-checked) and audits `ZK_VALUE_CHANGED` → the requester is notified; a concurrent external edit makes the approval go `STALE` instead of clobbering.
-
----
-
 # Smaller wins (open — each ~5–15 min)
 
-The rest of the original tail list is done (see the note under the Done table). These two remain:
+The rest of the original tail list is done (see the note under the Done table). This remains:
 
-- **`frontend/src/pages/GroupDetail.tsx:115`**: replace `window.prompt('...Enter a reason')` with a proper modal for the revoke-reason input (matches the modal pattern used elsewhere).
 - **Frontend inline styles**: lift the large inline-style objects in `Groups.tsx`, `GroupDetail.tsx`, `AdminManagement.tsx`, and `Dashboard.tsx` into the existing `frontend/src/styles/global.css` (CSS variables already defined there). You're already loading it; it's barely used. Scope is larger than originally estimated — Groups.tsx alone has 50+ inline style objects.
 
 ---
@@ -371,7 +193,7 @@ The rest of the original tail list is done (see the note under the Done table). 
 | Week | Items | Why |
 |------|-------|-----|
 | 1 | P2-3 + P2-4 | Lint + CI. Sets up the rails everything after rides on. Mechanical, low risk. |
-| 2 | P2-5 + Win 1 (`window.prompt`) | Operational visibility (audit filters) + quick UX cleanup. |
+| 2 | P2-5 | Operational visibility (audit filters) + quick UX cleanup. |
 | 3+ | P2-1 (tests) | Biggest investment. Prioritize: access-workflow lifecycle, authz helpers, AWS provisioner sim, level-swap atomicity. |
 | then | P2-2 | Bulk endpoints. Benefits from tests being in place to validate transaction correctness. |
 | then | P3-4 | Split Groups.tsx + GroupDetail.tsx. Makes future changes and testing much easier. |

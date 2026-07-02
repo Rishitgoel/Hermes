@@ -187,6 +187,121 @@ services:
         condition: service_healthy
     restart: always
 
+  # ── Redash QA (second, independent instance for the redash-qa platform key) ──
+  # A full second stack (own Redis, own Postgres, own server/worker/scheduler) so
+  # QA never shares state with prod. Distinct container names/ports/volume so both
+  # stacks run side by side. Host ports: redis-qa 16380, postgres-qa 15435,
+  # server-qa 5501 (prod uses 16379/15434/5500).
+  redis-qa:
+    image: redis:7-alpine
+    container_name: hermes_redis_qa
+    ports:
+      - '16380:6379'
+    restart: always
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redash-qa-postgres:
+    image: postgres:15-alpine
+    container_name: hermes_redash_qa_postgres
+    environment:
+      POSTGRES_USER: ${REDASH_QA_POSTGRES_USER:-redash_qa}
+      POSTGRES_PASSWORD: ${REDASH_QA_POSTGRES_PASSWORD:-redash_qa_pass}
+      POSTGRES_DB: ${REDASH_QA_POSTGRES_DB:-redash_qa}
+    ports:
+      - '15435:5432'
+    volumes:
+      - redash_qa_postgres_data:/var/lib/postgresql/data
+    restart: always
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${REDASH_QA_POSTGRES_USER:-redash_qa} -d ${REDASH_QA_POSTGRES_DB:-redash_qa}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redash-qa-create-db:
+    image: redash/redash:latest
+    container_name: hermes_redash_qa_create_db
+    command: create_db
+    environment:
+      REDASH_DATABASE_URL: 'postgresql://${REDASH_QA_POSTGRES_USER:-redash_qa}:${REDASH_QA_POSTGRES_PASSWORD:-redash_qa_pass}@redash-qa-postgres:5432/${REDASH_QA_POSTGRES_DB:-redash_qa}'
+      REDASH_REDIS_URL: 'redis://redis-qa:6379/0'
+    depends_on:
+      redis-qa:
+        condition: service_healthy
+      redash-qa-postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  redash-qa:
+    image: redash/redash:latest
+    container_name: hermes_redash_qa
+    command: server
+    environment:
+      REDASH_DATABASE_URL: 'postgresql://${REDASH_QA_POSTGRES_USER:-redash_qa}:${REDASH_QA_POSTGRES_PASSWORD:-redash_qa_pass}@redash-qa-postgres:5432/${REDASH_QA_POSTGRES_DB:-redash_qa}'
+      REDASH_REDIS_URL: 'redis://redis-qa:6379/0'
+      REDASH_WEB_WORKERS: '4'
+      REDASH_COOKIE_SECRET: ${REDASH_QA_COOKIE_SECRET:-hermes_qa_local_dev_cookie_secret_987654321}
+      PYTHONUNBUFFERED: '0'
+    ports:
+      - '5501:5000'
+    depends_on:
+      redash-qa-create-db:
+        condition: service_completed_successfully
+      redis-qa:
+        condition: service_healthy
+      redash-qa-postgres:
+        condition: service_healthy
+    restart: always
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:5000/ping']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  redash-qa-worker:
+    image: redash/redash:latest
+    container_name: hermes_redash_qa_worker
+    command: worker
+    environment:
+      REDASH_DATABASE_URL: 'postgresql://${REDASH_QA_POSTGRES_USER:-redash_qa}:${REDASH_QA_POSTGRES_PASSWORD:-redash_qa_pass}@redash-qa-postgres:5432/${REDASH_QA_POSTGRES_DB:-redash_qa}'
+      REDASH_REDIS_URL: 'redis://redis-qa:6379/0'
+      REDASH_WEB_WORKERS: '1'
+      REDASH_COOKIE_SECRET: ${REDASH_QA_COOKIE_SECRET:-hermes_qa_local_dev_cookie_secret_987654321}
+      PYTHONUNBUFFERED: '0'
+      QUEUES: 'queries,scheduled_queries,celery'
+      WORKERS_COUNT: '2'
+    depends_on:
+      redash-qa-create-db:
+        condition: service_completed_successfully
+      redis-qa:
+        condition: service_healthy
+      redash-qa-postgres:
+        condition: service_healthy
+    restart: always
+
+  redash-qa-scheduler:
+    image: redash/redash:latest
+    container_name: hermes_redash_qa_scheduler
+    command: scheduler
+    environment:
+      REDASH_DATABASE_URL: 'postgresql://${REDASH_QA_POSTGRES_USER:-redash_qa}:${REDASH_QA_POSTGRES_PASSWORD:-redash_qa_pass}@redash-qa-postgres:5432/${REDASH_QA_POSTGRES_DB:-redash_qa}'
+      REDASH_REDIS_URL: 'redis://redis-qa:6379/0'
+      REDASH_COOKIE_SECRET: ${REDASH_QA_COOKIE_SECRET:-hermes_qa_local_dev_cookie_secret_987654321}
+    depends_on:
+      redash-qa-create-db:
+        condition: service_completed_successfully
+      redis-qa:
+        condition: service_healthy
+      redash-qa-postgres:
+        condition: service_healthy
+    restart: always
+
 volumes:
   postgres_data:
   redash_postgres_data:
+  redash_qa_postgres_data:

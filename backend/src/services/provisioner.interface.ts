@@ -145,6 +145,24 @@ export interface PlatformAdapter {
    */
   readonly displayName: string;
 
+  /**
+   * Optional: UI-grouping key for a platform that has multiple registered
+   * instances (e.g. both `redash` and `redash-qa` set `family = "redash"`).
+   * The frontend collapses every adapter that shares a family into one
+   * platform card with an instance chooser. Adapters that omit this default
+   * to grouping by their own `platform` key (i.e. they render as a single,
+   * ungrouped card) — so a single-instance platform (AWS, ZooKeeper) needs
+   * no change to stay that way.
+   */
+  readonly family?: string;
+
+  /**
+   * Optional: human label distinguishing this instance within its `family`
+   * (e.g. "Prod", "QA"). Only meaningful alongside `family`; omit for a
+   * single-instance platform.
+   */
+  readonly label?: string;
+
   /** Add an existing user to a group on the platform. */
   provision(ctx: ProvisionContext): Promise<ProvisionResult>;
   /** Remove a user from a group on the platform. */
@@ -229,6 +247,18 @@ export interface PlatformAdapter {
    * the admin reconciliation follows. Adapters that omit it are treated as live.
    */
   isSimulation?(): boolean;
+
+  /**
+   * Optional: whether this platform is currently administratively enabled. AWS is
+   * the only adapter that can be toggled off (config.aws.isEnabled, driven by
+   * AWS_ENABLED via scripts/toggle-aws.ts) without being unregistered — a disabled
+   * platform must still resolve via the registry (existing grants/history reference
+   * it) but should be hidden from sync, admin-manageable-platform lists, and
+   * platform-admin reconciliation. Adapters that omit this are treated as always
+   * enabled (undefined ⇒ enabled) — only an adapter with a real on/off switch needs
+   * to implement it.
+   */
+  isEnabled?(): boolean;
 
   /**
    * Optional: marks a platform group that must NEVER surface as a requestable

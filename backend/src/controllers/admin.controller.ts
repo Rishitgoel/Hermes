@@ -5,7 +5,7 @@ import adminReconciliationService from '../services/admin-reconciliation.service
 import { importRedashMemberships } from '../services/redash-import.service';
 import { migrateZookeeperAcls } from '../services/zookeeper-migration.service';
 import prisma from '../config/prisma';
-import { AuthorizationError } from '../utils/errors';
+import { AuthorizationError, ValidationError } from '../utils/errors';
 import { isSuperAdmin } from '../utils/authz';
 import logger from '../utils/logger';
 
@@ -118,15 +118,23 @@ export class AdminController extends BaseController {
 
       if (!isSuperAdmin(this.user!)) {
         throw new AuthorizationError(
-          'Only super admins can import Redash memberships',
+          'Only super admins can import memberships',
         );
       }
 
       const apply = req.body?.apply === true;
+      const platform = typeof req.body?.platform === 'string' ? req.body.platform : 'redash';
+
+      if (platform !== 'redash' && platform !== 'redash-qa') {
+        throw new ValidationError('Invalid platform for membership import');
+      }
+
+      const displayName = platform === 'redash-qa' ? 'Redash QA' : 'Redash';
       logger.info(
-        `Super admin ${this.user!.username} triggered Redash membership import${apply ? ' (APPLY)' : ' (dry-run)'}`,
+        `Super admin ${this.user!.username} triggered ${displayName} membership import${apply ? ' (APPLY)' : ' (dry-run)'}`,
       );
       const report = await importRedashMemberships({
+        platform,
         apply,
         performerId: userId,
         performerName: this.user!.username,
@@ -137,7 +145,7 @@ export class AdminController extends BaseController {
       if (apply) {
         await prisma.auditEntry.create({
           data: {
-            action: 'REDASH_IMPORT_TRIGGERED',
+            action: platform === 'redash-qa' ? 'REDASH_QA_IMPORT_TRIGGERED' : 'REDASH_IMPORT_TRIGGERED',
             performerId: userId,
             performerName: this.user!.username,
             details: report as object,
@@ -148,11 +156,11 @@ export class AdminController extends BaseController {
       this.sendResponse(
         report,
         apply
-          ? 'Redash membership import completed'
-          : 'Redash membership import dry-run completed (no changes made)',
+          ? `${displayName} membership import completed`
+          : `${displayName} membership import dry-run completed (no changes made)`,
       );
     } catch (error) {
-      this.handleError(error, 'Redash membership import failed');
+      this.handleError(error, 'Membership import failed');
     }
   }
 

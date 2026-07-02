@@ -16,13 +16,11 @@
  *    (admin credential) — it throws ConflictError otherwise.
  */
 import prisma from '../config/prisma';
-import { redashProvisioner } from './redash.provisioner';
+import provisioningRegistry from './provisioning.registry';
 import syncService from './sync.service';
 import keycloakAdminService from './keycloak-admin.service';
-import { ConflictError } from '../utils/errors';
+import { ConflictError, ValidationError } from '../utils/errors';
 import logger from '../utils/logger';
-
-const PLATFORM = 'redash';
 
 /** A Hermes grant target a Redash group id maps to. rank = level rank (-1 = base, level-less). */
 interface Target {
@@ -48,19 +46,28 @@ export interface RedashImportReport {
 }
 
 export async function importRedashMemberships(opts: {
+  platform?: string;
   apply: boolean;
   performerId: string;
   performerName: string;
 }): Promise<RedashImportReport> {
-  const { apply } = opts;
+  const { apply, platform = 'redash' } = opts;
+  const lowerPlatform = platform.toLowerCase();
+
+  if (lowerPlatform !== 'redash' && lowerPlatform !== 'redash-qa') {
+    throw new ValidationError('Invalid platform for membership import');
+  }
+
+  const displayName = lowerPlatform === 'redash-qa' ? 'Redash QA' : 'Redash';
   logger.info(
-    `🚚 Redash membership import — ${apply ? 'APPLY (writing)' : 'DRY RUN (no writes)'} (by ${opts.performerName})`,
+    `🚚 ${displayName} membership import — ${apply ? 'APPLY (writing)' : 'DRY RUN (no writes)'} (by ${opts.performerName})`,
   );
 
   // ── Guards ──────────────────────────────────────────────────────────────────
-  if (redashProvisioner.isSimulation?.()) {
+  const provisioner = provisioningRegistry.get(lowerPlatform);
+  if (provisioner.isSimulation?.()) {
     throw new ConflictError(
-      'Redash is in SIMULATION mode. Set a real REDASH_API_KEY and REDASH_SIMULATION=false before importing.',
+      `${displayName} is in SIMULATION mode. Set a real API key and simulation=false before importing.`,
     );
   }
   if (!keycloakAdminService.isLive) {
@@ -71,17 +78,19 @@ export async function importRedashMemberships(opts: {
 
   // ── 1. Refresh live state: cache the real Redash users/groups, then reconcile
   //       Hermes groups so their externalGroupId actually points at real Redash ids.
-  logger.info('Refreshing Redash groups + users and reconciling Hermes groups…');
-  await redashProvisioner.syncGroups?.();
-  await redashProvisioner.syncUsers?.();
-  await syncService.reconcileHermesGroups(PLATFORM, redashProvisioner);
+  logger.info(
+    `Refreshing ${displayName} groups + users and reconciling Hermes groups…`,
+  );
+  await provisioner.syncGroups?.();
+  await provisioner.syncUsers?.();
+  await syncService.reconcileHermesGroups(lowerPlatform, provisioner);
 
   // ── 2. Build externalGroupId → Hermes grant target. A Group's own externalGroupId
   //       is a level-less grant; each level's externalGroupId is a leveled grant.
   //       Full mirror: archived groups/levels (incl. the built-in default/admin) are
   //       included, so the Hermes view matches Redash reality 1:1.
   const groups = await prisma.group.findMany({
-    where: { platform: PLATFORM },
+    where: { platform: lowerPlatform },
     include: { levels: true },
   });
   const targetByExtId = new Map<string, Target>();
@@ -107,11 +116,13 @@ export async function importRedashMemberships(opts: {
       }
     }
   }
-  logger.info(`Mapped ${targetByExtId.size} Redash group id(s) to Hermes groups/levels.`);
+  logger.info(
+    `Mapped ${targetByExtId.size} ${displayName} group id(s) to Hermes groups/levels.`,
+  );
 
   // ── 3. Walk the cached Redash users (populated by syncUsers above).
-  const users = await prisma.platformExternalUser.findMany({ where: { platform: PLATFORM } });
-  logger.info(`Found ${users.length} cached Redash user(s).`);
+  const users = await prisma.platformExternalUser.findMany({ where: { platform: lowerPlatform } });
+  logger.info(`Found ${users.length} cached ${displayName} user(s).`);
 
   const report: RedashImportReport = {
     apply,
@@ -143,7 +154,7 @@ export async function importRedashMemberships(opts: {
 
     // 3a. Account gate: COMPLETED UserCreationRequest (idempotent on userId+platform).
     const existingReq = await prisma.userCreationRequest.findUnique({
-      where: { userId_platform: { userId: sub, platform: PLATFORM } },
+      where: { userId_platform: { userId: sub, platform: lowerPlatform } },
     });
     if (!existingReq) {
       report.accountRequestsCreated++;
@@ -153,12 +164,12 @@ export async function importRedashMemberships(opts: {
             userId: sub,
             userName,
             userEmail: u.email,
-            platform: PLATFORM,
-            justification: 'Imported: pre-existing Redash account',
+            platform: lowerPlatform,
+            justification: `Imported: pre-existing ${displayName} account`,
             status: 'COMPLETED',
             externalUserId: u.externalId,
             reviewerId: 'system_import',
-            reviewerName: 'Redash Import',
+            reviewerName: `${displayName} Import`,
             submittedAt: now,
             approvedAt: now,
             completedAt: now,
@@ -172,7 +183,7 @@ export async function importRedashMemberships(opts: {
     for (const extId of u.externalGroupIds) {
       const t = targetByExtId.get(extId);
       if (!t) {
-        report.membershipsUnmapped.push(`${u.email} → redash group ${extId}`);
+        report.membershipsUnmapped.push(`${u.email} → ${lowerPlatform} group ${extId}`);
         continue;
       }
       const existing = perGroup.get(t.groupId);
@@ -221,17 +232,17 @@ export async function importRedashMemberships(opts: {
           data: {
             action: 'ACCESS_IMPORTED',
             performerId: 'system_import',
-            performerName: 'Redash Import',
+            performerName: `${displayName} Import`,
             targetUserId: sub,
             targetUserName: userName,
             details: {
-              platform: PLATFORM,
+              platform: lowerPlatform,
               groupId: t.groupId,
               groupName: t.groupName,
               levelId: t.levelId,
               levelName: t.levelName,
               externalUserId: u.externalId,
-              source: 'redash-membership-import',
+              source: `${lowerPlatform}-membership-import`,
             },
           },
         });
@@ -240,7 +251,7 @@ export async function importRedashMemberships(opts: {
   }
 
   logger.info(
-    `Redash import ${apply ? 'applied' : 'dry-run'}: matched=${report.usersMatched}, ` +
+    `${displayName} import ${apply ? 'applied' : 'dry-run'}: matched=${report.usersMatched}, ` +
       `accountReqs=${report.accountRequestsCreated}, grants=${report.grantsCreated}, ` +
       `alreadyPresent=${report.grantsAlreadyPresent}`,
   );

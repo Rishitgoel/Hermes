@@ -16,9 +16,11 @@ const RESEND_COOLDOWN_MS = 60 * 1000; // 60s rate-limit on Resend Invite
  * with `inviteLink` rewritten to match REDASH_BASE_URL so historical rows
  * with stale links (e.g. wrong port from earlier bugs) come out clean.
  */
-function normalizeInviteLink<T extends { inviteLink?: string | null }>(row: T): T {
+function normalizeInviteLink<T extends { inviteLink?: string | null; platform: string }>(row: T): T {
   if (row.inviteLink) {
-    row.inviteLink = normalizeRedashInviteLink(row.inviteLink);
+    const adapter = provisioningRegistry.tryGet(row.platform);
+    const baseUrl = adapter?.getLaunchUrl?.() || config.redash.baseUrl;
+    row.inviteLink = normalizeRedashInviteLink(row.inviteLink, baseUrl);
   }
   return row;
 }
@@ -238,7 +240,7 @@ export class UserCreationService {
    * passes no filter and sees every platform.
    */
   async listPending(platforms?: string[]) {
-    return prisma.userCreationRequest.findMany({
+    const rows = await prisma.userCreationRequest.findMany({
       where: {
         ...(platforms ? { platform: { in: platforms } } : {}),
         OR: [
@@ -248,6 +250,7 @@ export class UserCreationService {
       },
       orderBy: { submittedAt: 'asc' },
     });
+    return rows.map(normalizeInviteLink);
   }
 
   /**

@@ -306,8 +306,8 @@ export interface RedashImportReport {
   levelConflicts: string[];
 }
 
-export async function importRedashMemberships(apply: boolean): Promise<RedashImportReport> {
-  const res = await apiClient.post('/api/admin/import-redash-memberships', { apply });
+export async function importRedashMemberships(apply: boolean, platform = 'redash'): Promise<RedashImportReport> {
+  const res = await apiClient.post('/api/admin/import-redash-memberships', { apply, platform });
   return res.data as RedashImportReport;
 }
 

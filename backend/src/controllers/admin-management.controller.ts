@@ -1517,15 +1517,22 @@ export class AdminManagementController extends BaseController {
       // Validate a changed externalGroupId against the platform's format BEFORE persisting,
       // so a malformed paste can't be saved and then break reconciliation + every future
       // provision of this level.
+      const adapter = provisioningRegistry.tryGet(group.platform);
+      const externalGroupIdChangedForGuard =
+        data.externalGroupId !== undefined &&
+        data.externalGroupId !== existing.externalGroupId;
+      if (externalGroupIdChangedForGuard && !adapter?.reconcileMembers) {
+        throw new ValidationError(
+          `The external group mapping is immutable for the "${group.platform}" platform.`,
+        );
+      }
+
       if (
         data.externalGroupId !== undefined &&
         data.externalGroupId !== existing.externalGroupId
       ) {
-        const validateAdapter = provisioningRegistry.has(group.platform)
-          ? provisioningRegistry.get(group.platform)
-          : null;
         if (data.externalGroupId)
-          {validateAdapter?.validateExternalGroupId?.(data.externalGroupId);}
+          {adapter?.validateExternalGroupId?.(data.externalGroupId);}
       }
 
       let level;

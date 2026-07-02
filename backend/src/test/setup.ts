@@ -39,6 +39,24 @@ try {
 // 3. Dynamically import the Prisma Client so it initializes with the Testcontainer connection string
 const { default: prisma } = await import('../config/prisma');
 
+// 4. Create custom partial unique indexes that prisma db push misses (as they are SQL-only migrations)
+try {
+  await prisma.$executeRawUnsafe(`
+    CREATE UNIQUE INDEX IF NOT EXISTS "user_accesses_user_id_group_id_active_unique"
+    ON "user_accesses" ("user_id", "group_id")
+    WHERE "is_active" = true;
+  `);
+  await prisma.$executeRawUnsafe(`
+    CREATE UNIQUE INDEX IF NOT EXISTS "access_requests_requester_group_open_unique"
+    ON "access_requests" ("requester_id", "group_id")
+    WHERE "status" IN ('PENDING', 'WAITING_FOR_SETUP');
+  `);
+} catch (err) {
+  console.error('Failed to create custom partial unique indexes on the test database:', err);
+  await container.stop();
+  process.exit(1);
+}
+
 // Global hooks
 afterAll(async () => {
   if (prisma) {

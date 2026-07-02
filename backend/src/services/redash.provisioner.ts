@@ -6,18 +6,12 @@ import {
   PlatformUserStatus,
   OnboardingMessage,
 } from './provisioner.interface';
-import redashService from './redash.service';
+import redashService, { RedashService } from './redash.service';
 import prisma from '../config/prisma';
 import logger from '../utils/logger';
 import config from '../config/config';
 import * as templates from '../utils/email-templates';
-
-/**
- * Platform key this adapter is registered under. The provisioning registry,
- * the cache rows in `platform_external_*`, and `Group.platform` all use this
- * exact lowercase string to route to this adapter.
- */
-const PLATFORM = 'redash';
+import { notifyUserCreationWorkflow, recomputeGroupMemberCounts } from './adapter-helpers';
 
 /**
  * Don't prune a cache row that was written within this window. A user invited
@@ -32,26 +26,44 @@ const PRUNE_GRACE_MS = 10 * 60 * 1000; // 10 minutes
  * Redash implementation of {@link PlatformAdapter}.
  *
  * Fulfills the platform-agnostic adapter contract against Redash's HTTP API
- * (via {@link redashService}). All cached state lives in the shared
- * `platform_external_users` / `platform_external_groups` tables, tagged with
- * `platform = "redash"` — there are no Redash-specific tables anymore, so a
- * second adapter (AWS, Jira) slots in alongside without schema changes.
+ * (via an injected {@link RedashService} instance). All cached state lives in
+ * the shared `platform_external_users` / `platform_external_groups` tables,
+ * tagged with this adapter's `platform` key — there are no Redash-specific
+ * tables anymore, so a second adapter (AWS, Jira) — or a second Redash
+ * *instance* (QA) — slots in alongside without schema changes.
+ *
+ * One `RedashProvisioner` is constructed per registered Redash instance (prod,
+ * qa, ...) — see {@link createRedashProvisioner} and provisioning.registry.ts.
+ * `platform` is that instance's unique registry key (e.g. "redash" for prod,
+ * "redash-qa" for QA); every cache row and DB lookup is tagged with it, so
+ * prod and QA never share cache state despite running the same adapter code.
  *
  * Redash IDs are integers on the wire; the generic cache stores `externalId`
  * as a string, so this adapter converts at the boundary (`String(id)` when
  * writing, `parseInt(id, 10)` when calling the Redash API).
  */
 export class RedashProvisioner implements PlatformAdapter {
-  readonly platform = PLATFORM;
-  readonly displayName = 'Redash';
+  readonly platform: string;
+  readonly displayName: string;
+  readonly family: string;
+  readonly label?: string;
+  private readonly service: RedashService;
+
+  constructor(opts: { platform: string; displayName: string; family: string; label?: string; service: RedashService }) {
+    this.platform = opts.platform;
+    this.displayName = opts.displayName;
+    this.family = opts.family;
+    this.label = opts.label;
+    this.service = opts.service;
+  }
 
   // ── Provisioning lifecycle ────────────────────────────────────────────────
 
   /** Ensure the user exists on Redash, then add them to the target group. */
   async provision(ctx: ProvisionContext): Promise<ProvisionResult> {
-    const { id: redashUserId } = await redashService.findOrInviteUser(ctx.email, ctx.name);
+    const { id: redashUserId } = await this.service.findOrInviteUser(ctx.email, ctx.name);
     if (ctx.externalGroupId) {
-      await redashService.addUserToGroup(redashUserId, parseInt(ctx.externalGroupId, 10));
+      await this.service.addUserToGroup(redashUserId, parseInt(ctx.externalGroupId, 10));
     }
     return { externalUserId: redashUserId.toString() };
   }
@@ -59,7 +71,7 @@ export class RedashProvisioner implements PlatformAdapter {
   /** Remove the user from the target group on Redash. */
   async deprovision(ctx: DeprovisionContext): Promise<void> {
     if (ctx.externalGroupId) {
-      await redashService.removeUserFromGroup(
+      await this.service.removeUserFromGroup(
         parseInt(ctx.externalUserId, 10),
         parseInt(ctx.externalGroupId, 10),
       );
@@ -73,19 +85,19 @@ export class RedashProvisioner implements PlatformAdapter {
 
   /** Create a backing Redash group; returns its id as a string. */
   async createExternalGroup(name: string): Promise<{ externalGroupId: string; name?: string }> {
-    const group = await redashService.createGroup(name);
+    const group = await this.service.createGroup(name);
     return { externalGroupId: group.id.toString(), name: group.name };
   }
 
   /** Delete a backing Redash group by its external id. */
   async deleteExternalGroup(externalGroupId: string): Promise<void> {
-    await redashService.deleteGroup(parseInt(externalGroupId, 10));
+    await this.service.deleteGroup(parseInt(externalGroupId, 10));
   }
 
   /** Look up whether a user exists on Redash, using the local cache. */
   async checkUserStatus(email: string, _userId?: string): Promise<PlatformUserStatus> {
     const cached = await prisma.platformExternalUser.findUnique({
-      where: { platform_email: { platform: PLATFORM, email: email.toLowerCase() } },
+      where: { platform_email: { platform: this.platform, email: email.toLowerCase() } },
     });
     return {
       exists: !!cached,
@@ -96,10 +108,10 @@ export class RedashProvisioner implements PlatformAdapter {
 
   /** Invite a brand-new user to Redash and seed a cache row for them. */
   async inviteUser(email: string, name: string): Promise<ProvisionResult> {
-    const { id: redashUserId, inviteLink } = await redashService.findOrInviteUser(email, name);
+    const { id: redashUserId, inviteLink } = await this.service.findOrInviteUser(email, name);
     const externalId = redashUserId.toString();
     await prisma.platformExternalUser.upsert({
-      where: { platform_externalId: { platform: PLATFORM, externalId } },
+      where: { platform_externalId: { platform: this.platform, externalId } },
       update: {
         name,
         email: email.toLowerCase(),
@@ -107,13 +119,20 @@ export class RedashProvisioner implements PlatformAdapter {
         lastSyncedAt: new Date(),
       },
       create: {
-        platform: PLATFORM,
+        platform: this.platform,
         externalId,
         name,
         email: email.toLowerCase(),
         isDisabled: false,
         isPending: true,
-        externalGroupIds: ['1'], // Redash "default" group
+        // No group membership is known yet at invite time — querying Redash's real
+        // "default" group id synchronously here would mean an extra API round-trip
+        // before the cache is even populated, and the id isn't guaranteed to be the
+        // same across instances (prod vs QA may seed differently). Leaving this
+        // empty is accurate: a brand-new invited user isn't confirmed to be in any
+        // group yet. The next syncUsers() cycle populates the real value from the
+        // Redash API's user.groups field — the source of truth.
+        externalGroupIds: [],
         lastSyncedAt: new Date(),
       },
     });
@@ -129,19 +148,19 @@ export class RedashProvisioner implements PlatformAdapter {
    * the stored token always points at the configured Redash instance.
    */
   async regenerateInvite(email: string, name: string): Promise<ProvisionResult> {
-    const { id: redashUserId } = await redashService.findOrInviteUser(email, name);
-    const inviteLink = await redashService.regenerateInviteLink(redashUserId);
+    const { id: redashUserId } = await this.service.findOrInviteUser(email, name);
+    const inviteLink = await this.service.regenerateInviteLink(redashUserId);
     return { externalUserId: redashUserId.toString(), metadata: { inviteLink } };
   }
 
   /** The Redash UI users open to run queries / view dashboards. */
   getLaunchUrl(): string | null {
-    return config.redash.baseUrl || null;
+    return this.service.getBaseUrl() || null;
   }
 
   async healthCheck(): Promise<{ healthy: boolean; message?: string }> {
     try {
-      await redashService.syncGroups(); // lightweight probe against the Redash API
+      await this.service.syncGroups(); // lightweight probe against the Redash API
       return { healthy: true };
     } catch (err: any) {
       return { healthy: false, message: err.message };
@@ -150,7 +169,7 @@ export class RedashProvisioner implements PlatformAdapter {
 
   /** Whether the adapter is returning mock data instead of hitting Redash. */
   isSimulation(): boolean {
-    return config.redash.isSimulation;
+    return this.service.getIsSimulation();
   }
 
   /**
@@ -184,17 +203,17 @@ export class RedashProvisioner implements PlatformAdapter {
   /** Pull all Redash groups into the cache and prune ones that disappeared. */
   async syncGroups(): Promise<{ count: number }> {
     const now = new Date();
-    const redashGroups = await redashService.syncGroups();
-    logger.info(`🔄 RedashProvisioner: Fetched ${redashGroups.length} groups from Redash.`);
+    const redashGroups = await this.service.syncGroups();
+    logger.info(`🔄 RedashProvisioner[${this.platform}]: Fetched ${redashGroups.length} groups from Redash.`);
 
     // Batch the upserts into chunked transactions instead of one serial
     // round-trip per group (same pattern as the AWS adapter).
     const upserts = redashGroups.map((group) => {
       const externalId = group.id.toString();
       return prisma.platformExternalGroup.upsert({
-        where: { platform_externalId: { platform: PLATFORM, externalId } },
+        where: { platform_externalId: { platform: this.platform, externalId } },
         update: { name: group.name, type: group.type, lastSyncedAt: now },
-        create: { platform: PLATFORM, externalId, name: group.name, type: group.type, lastSyncedAt: now },
+        create: { platform: this.platform, externalId, name: group.name, type: group.type, lastSyncedAt: now },
       });
     });
     for (let i = 0; i < upserts.length; i += 100) {
@@ -209,7 +228,7 @@ export class RedashProvisioner implements PlatformAdapter {
     if (activeIds.length > 0) {
       await prisma.platformExternalGroup.deleteMany({
         where: {
-          platform: PLATFORM,
+          platform: this.platform,
           externalId: { notIn: activeIds },
           lastSyncedAt: { lt: new Date(now.getTime() - PRUNE_GRACE_MS) },
         },
@@ -226,8 +245,8 @@ export class RedashProvisioner implements PlatformAdapter {
    */
   async syncUsers(): Promise<{ count: number }> {
     const now = new Date();
-    const redashUsers = await redashService.syncUsers();
-    logger.info(`🔄 RedashProvisioner: Fetched ${redashUsers.length} users from Redash.`);
+    const redashUsers = await this.service.syncUsers();
+    logger.info(`🔄 RedashProvisioner[${this.platform}]: Fetched ${redashUsers.length} users from Redash.`);
 
     // Batch the upserts into chunked transactions instead of awaiting one per
     // user sequentially (O(users) serial DB round-trips on every sync cycle).
@@ -244,7 +263,7 @@ export class RedashProvisioner implements PlatformAdapter {
     if (activeIds.length > 0) {
       await prisma.platformExternalUser.deleteMany({
         where: {
-          platform: PLATFORM,
+          platform: this.platform,
           externalId: { notIn: activeIds },
           isPending: false,
           lastSyncedAt: { lt: new Date(now.getTime() - PRUNE_GRACE_MS) },
@@ -252,8 +271,17 @@ export class RedashProvisioner implements PlatformAdapter {
       });
     }
 
-    await this.recomputeGroupMemberCounts();
-    await this.notifyUserCreationWorkflow(redashUsers);
+    await recomputeGroupMemberCounts(this.platform);
+    await notifyUserCreationWorkflow(
+      this.platform,
+      redashUsers.map((u) => ({
+        externalId: u.id.toString(),
+        email: u.email,
+        name: u.name,
+        isPending: u.is_invitation_pending,
+        isDisabled: u.is_disabled,
+      })),
+    );
 
     return { count: redashUsers.length };
   }
@@ -264,14 +292,20 @@ export class RedashProvisioner implements PlatformAdapter {
    * Returns false if the user isn't on Redash yet.
    */
   async syncSingleUser(email: string): Promise<boolean> {
-    const user = await redashService.fetchUserByEmail(email);
+    const user = await this.service.fetchUserByEmail(email);
     if (!user) {
-      logger.warn({ email }, '🔄 RedashProvisioner: User not found in Redash during single sync.');
+      logger.warn({ email, platform: this.platform }, '🔄 RedashProvisioner: User not found in Redash during single sync.');
       return false;
     }
     await this.upsertUserRow(user, new Date());
     if (!user.is_disabled) {
-      await this.notifyUserCreationWorkflow([user]);
+      await notifyUserCreationWorkflow(this.platform, [{
+        externalId: user.id.toString(),
+        email: user.email,
+        name: user.name,
+        isPending: user.is_invitation_pending,
+        isDisabled: user.is_disabled,
+      }]);
     }
     return true;
   }
@@ -294,9 +328,9 @@ export class RedashProvisioner implements PlatformAdapter {
       lastSyncedAt: now,
     };
     return prisma.platformExternalUser.upsert({
-      where: { platform_externalId: { platform: PLATFORM, externalId } },
+      where: { platform_externalId: { platform: this.platform, externalId } },
       update: row,
-      create: { platform: PLATFORM, externalId, ...row },
+      create: { platform: this.platform, externalId, ...row },
     });
   }
 
@@ -308,69 +342,38 @@ export class RedashProvisioner implements PlatformAdapter {
     await this.buildUserUpsert(user, now);
   }
 
-  /** Recompute and persist member counts for every cached Redash group. */
-  private async recomputeGroupMemberCounts(): Promise<void> {
-    const [groups, users] = await Promise.all([
-      prisma.platformExternalGroup.findMany({ where: { platform: PLATFORM }, select: { id: true, externalId: true } }),
-      prisma.platformExternalUser.findMany({ where: { platform: PLATFORM }, select: { externalGroupIds: true } }),
-    ]);
-    // Tally members per group in a single pass over users instead of an
-    // O(groups × users) nested scan (same pattern as the AWS adapter).
-    const counts = new Map<string, number>();
-    for (const u of users) {
-      for (const gid of u.externalGroupIds) {
-        counts.set(gid, (counts.get(gid) ?? 0) + 1);
-      }
-    }
-    const updates = groups.map(group =>
-      prisma.platformExternalGroup.update({
-        where: { id: group.id },
-        data: { memberCount: counts.get(group.externalId) ?? 0 },
-      }),
-    );
-    if (updates.length) await prisma.$transaction(updates);
-  }
 
-  /**
-   * Notify the user-creation workflow about every active Redash user so any
-   * APPROVED/AWAITING_SETUP request can advance to COMPLETED. Loaded lazily to
-   * avoid a static import cycle (user-creation → sync → registry → this adapter).
-   * The handler is a cheap no-op for users with no pending request; per-user
-   * try/catch so one failure can't break the rest of the batch.
-   */
-  private async notifyUserCreationWorkflow(
-    users: Array<{ id: number; email: string; name: string; is_disabled?: boolean; is_invitation_pending: boolean }>,
-  ): Promise<void> {
-    // Only users with a tracked account-creation request for this platform can be
-    // advanced. Prefetch those emails once so we don't issue a findUnique per
-    // synced user (an O(users) DB storm on every sync — same guard as AWS).
-    const tracked = await prisma.userCreationRequest.findMany({
-      where: { platform: PLATFORM },
-      select: { userEmail: true },
-    });
-    if (tracked.length === 0) return;
-    const trackedEmails = new Set(tracked.map((r) => r.userEmail.toLowerCase()));
-
-    const { default: userCreationService } = await import('./user-creation.service');
-    for (const u of users) {
-      if (u.is_disabled) continue;
-      if (!trackedEmails.has(u.email.toLowerCase())) continue;
-      try {
-        await userCreationService.handlePlatformUserDetected(PLATFORM, {
-          externalId: u.id.toString(),
-          email: u.email,
-          name: u.name,
-          isPending: u.is_invitation_pending,
-        });
-      } catch (err: any) {
-        logger.error(
-          { redashUserId: u.id, email: u.email, error: err.message },
-          'handlePlatformUserDetected failed for one user; continuing batch',
-        );
-      }
-    }
-  }
 }
 
-export const redashProvisioner = new RedashProvisioner();
+/**
+ * Build a {@link RedashProvisioner} for one registered Redash instance.
+ * The `displayName` is supplied explicitly from config (e.g. "Redash", "Redash (QA)") or derived from `label`.
+ */
+export function createRedashProvisioner(instance: {
+  key: string;
+  family: string;
+  label: string;
+  displayName?: string;
+  service: RedashService;
+}): RedashProvisioner {
+  const displayName = instance.displayName ?? (instance.label === 'Prod' ? 'Redash' : `Redash (${instance.label})`);
+  return new RedashProvisioner({
+    platform: instance.key,
+    displayName,
+    family: instance.family,
+    label: instance.label,
+    service: instance.service,
+  });
+}
+
+// Back-compat default export: the prod instance, sourced from config.redash /
+// the default redashService. Existing callers (redash-import.service.ts, the
+// prod-only maintenance script) keep working unchanged.
+export const redashProvisioner = createRedashProvisioner({
+  key: 'redash',
+  family: 'redash',
+  label: 'Prod',
+  displayName: 'Redash',
+  service: redashService,
+});
 export default redashProvisioner;

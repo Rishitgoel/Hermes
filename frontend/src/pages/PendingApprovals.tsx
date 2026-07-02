@@ -9,6 +9,7 @@ import { useAuth } from '../contexts/AuthContext';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../lib/queryKeys';
 import { fetchPlatforms, LivePlatform } from '../services/api/platforms';
+import { platformDisplayName } from '../lib/platforms';
 import SectionHeader from '../components/common/SectionHeader';
 import ZkChangeApprovals from '../components/zookeeper/ZkChangeApprovals';
 
@@ -61,13 +62,10 @@ export const PendingApprovals: React.FC = () => {
     refetchOnMount: 'always',
   });
 
-  const { data: livePlatforms = [] } = useQuery<LivePlatform[]>({
+  useQuery<LivePlatform[]>({
     queryKey: queryKeys.platforms(),
     queryFn: fetchPlatforms,
   });
-  const platformsByKey = new Map(livePlatforms.map((p) => [p.key, p]));
-  const platformLabel = (key: string) =>
-    platformsByKey.get(key)?.displayName ?? key.charAt(0).toUpperCase() + key.slice(1);
 
   // Set of userIds whose group requests are blocked (no approved user-creation row yet).
   // We treat anyone with a row in PENDING as "blocked"; admin must approve user-creation first.
@@ -414,7 +412,7 @@ export const PendingApprovals: React.FC = () => {
                     </td>
                     <td>
                       <span className="badge badge-admin badge-sm" style={{ textTransform: 'none' }}>
-                        {platformLabel(req.group.platform)}
+                        {platformDisplayName(req.group.platform)}
                       </span>
                     </td>
                     <td>

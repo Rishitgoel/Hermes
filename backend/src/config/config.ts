@@ -94,6 +94,45 @@ export const config = {
     },
   },
 
+  // Every registered Redash instance (prod + any additional environments like QA),
+  // keyed by its provisioning-registry platform key. `redash` (prod) is sourced
+  // from config.redash above so existing installs need no env changes. Additional
+  // instances (e.g. `redash-qa`) are opt-in: an instance with an empty baseUrl is
+  // skipped at registration (provisioning.registry.ts) so an unconfigured entry
+  // never registers a dead adapter. Add more entries here for further instances —
+  // nothing else needs to change to support them.
+  get redashInstances() {
+    return [
+      {
+        key: 'redash',
+        family: 'redash',
+        label: 'Prod',
+        displayName: 'Redash',
+        baseUrl: config.redash.baseUrl,
+        apiKey: config.redash.apiKey,
+        isSimulation: config.redash.isSimulation,
+      },
+      {
+        key: 'redash-qa',
+        family: 'redash',
+        label: 'QA',
+        displayName: 'Redash (QA)',
+        get baseUrl() {
+          return process.env.REDASH_QA_BASE_URL || '';
+        },
+        get apiKey() {
+          return process.env.REDASH_QA_API_KEY || 'dummy-key-for-development';
+        },
+        get isSimulation() {
+          return (
+            process.env.REDASH_QA_SIMULATION === 'true' ||
+            this.apiKey === 'dummy-key-for-development'
+          );
+        },
+      },
+    ];
+  },
+
   // NOTE: slack + email values are read lazily via getters (not captured once at
   // import). loadSecrets() injects these from AWS Secrets Manager *after* this
   // module is imported, so a static capture would be stale ('') in production.
