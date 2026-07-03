@@ -9,10 +9,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * every user past the first page.
  */
 const mockGet = vi.fn();
+const mockDelete = vi.fn();
 vi.mock('axios', () => ({
   default: {
     create: () => ({
       get: mockGet,
+      delete: mockDelete,
       interceptors: { response: { use: vi.fn() } },
     }),
   },
@@ -71,5 +73,35 @@ describe('RedashService.syncUsers — pagination', () => {
 
     expect(users).toHaveLength(0);
     expect(mockGet).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * Regression coverage for the revoke false-drop bug: removeUserFromGroup used to
+ * throw on ANY error, including a 404 for a membership that was already gone (user
+ * removed from the group, or deleted, directly on Redash). That forced revokeAccess
+ * to guess from a possibly-stale cache whether the membership was really absent,
+ * which could silently drop a grant while the user still had platform access.
+ * Making removal idempotent to a 404 (like disableUser/deleteGroup) fixes it at the
+ * source: an already-gone membership is a clean no-op, a real error still throws.
+ */
+describe('RedashService.removeUserFromGroup — idempotent on already-gone membership', () => {
+  beforeEach(() => {
+    mockDelete.mockReset();
+  });
+
+  function makeService() {
+    return new RedashService({ key: 'redash', baseUrl: 'https://redash.example.com', apiKey: 'key', isSimulation: false });
+  }
+
+  it('swallows a 404 (membership/user already absent) instead of throwing', async () => {
+    mockDelete.mockRejectedValueOnce({ response: { status: 404 }, message: 'Not Found' });
+    await expect(makeService().removeUserFromGroup(7, 5)).resolves.toBeUndefined();
+    expect(mockDelete).toHaveBeenCalledWith('/api/groups/5/members/7');
+  });
+
+  it('still throws on a real (non-404) error so a transient failure is not mistaken for success', async () => {
+    mockDelete.mockRejectedValueOnce({ response: { status: 500 }, message: 'Server Error' });
+    await expect(makeService().removeUserFromGroup(7, 5)).rejects.toThrow('removeUserFromGroup error');
   });
 });

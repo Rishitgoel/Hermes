@@ -97,8 +97,7 @@ export const RedashResyncModal: React.FC<RedashResyncModalProps> = ({ platform, 
             grants {report.apply ? 'created' : 'to create'}: {report.grantsCreated}, already present: {report.grantsAlreadyPresent},
             account requests {report.apply ? 'created' : 'to create'}: {report.accountRequestsCreated}
             <br />
-            grants {report.apply ? 'deactivated' : 'to deactivate'}: {report.grantsDeactivated}
-            {report.grantsDeactivatedDisabled > 0 ? ` (${report.grantsDeactivatedDisabled} disabled)` : ''}, level swaps{' '}
+            grants {report.apply ? 'deactivated' : 'to deactivate'}: {report.grantsDeactivated}, level swaps{' '}
             {report.apply ? 'applied' : 'to apply'}: {report.levelsSwapped}, external id{' '}
             {report.apply ? 'refreshes' : 'refreshes to apply'}: {report.externalUserIdsRefreshed}, requests{' '}
             {report.apply ? 'reconciled' : 'to reconcile'}: {report.requestsReconciled}

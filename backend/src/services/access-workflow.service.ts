@@ -1550,36 +1550,26 @@ export class AccessWorkflowService {
       },
     });
 
-    let platformMembershipAbsent = false;
     if (externalUserId && externalGroupId) {
       try {
         await this.deprovisionWithRetain(access.userId, platform, userAccessId, externalUserId, externalGroupId);
       } catch (err: any) {
         logger.error(`Failed to deprovision user from platform ${platform} during revocation of ${userAccessId}:`, err.message);
         if (!force) {
-          // Before rolling back, check whether the membership is already gone on
-          // the platform (e.g. the user was removed from the group — or deleted —
-          // directly in Redash, outside Hermes). If so, the deprovision "failure"
-          // just means there's nothing left to remove: keep the Hermes deactivation
-          // instead of blocking the admin from clearing an orphaned grant.
-          const cachedUser = await prisma.platformExternalUser.findUnique({
-            where: { platform_externalId: { platform, externalId: externalUserId } },
+          // A genuinely-absent membership (user removed from the group, or deleted,
+          // directly on the platform) is NOT a failure: the adapters' deprovision
+          // paths are idempotent — Redash/AWS both tolerate an already-gone
+          // membership and return cleanly. So a throw here means a real, likely
+          // transient platform error; roll back the deactivation and surface it
+          // rather than silently dropping a grant the user may still hold.
+          await prisma.userAccess.update({
+            where: { id: userAccessId },
+            data: {
+              isActive: true,
+              revokedAt: null,
+            },
           });
-          platformMembershipAbsent = !cachedUser || !cachedUser.externalGroupIds.includes(externalGroupId);
-          if (!platformMembershipAbsent) {
-            // Revert deactivation on failure
-            await prisma.userAccess.update({
-              where: { id: userAccessId },
-              data: {
-                isActive: true,
-                revokedAt: null,
-              },
-            });
-            throw err;
-          }
-          logger.warn(
-            `Platform membership for ${userAccessId} was already absent on ${platform}; keeping the Hermes deactivation instead of rolling back.`,
-          );
+          throw err;
         }
       }
     }
@@ -1611,7 +1601,6 @@ export class AccessWorkflowService {
           userAccessId,
           levelId: access.levelId ?? null,
           levelName: access.level?.name ?? null,
-          ...(platformMembershipAbsent ? { platformMembershipAbsent: true } : {}),
         },
       },
     });

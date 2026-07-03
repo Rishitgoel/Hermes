@@ -1394,7 +1394,10 @@ export class AdminManagementController extends BaseController {
       if (!isSuperAdmin(this.user!)) {
         where.group = { platform: { in: manageable } };
       }
-      if (userAccessIds && userAccessIds.length > 0) {
+      // A provided array (even empty) is an explicit subset — an empty selection must
+      // match nothing, NOT fall through to "revoke everything". Only an OMITTED
+      // (undefined) userAccessIds means "revoke every grant the caller can see".
+      if (Array.isArray(userAccessIds)) {
         where.id = { in: userAccessIds };
       }
 
@@ -1571,11 +1574,25 @@ export class AdminManagementController extends BaseController {
 
       const profile = await this.resolveUserProfile(userId);
 
+      // Single effective platform filter. Two rules combined so neither is lost to
+      // an object-spread key collision:
+      //  - Scope: a non-super admin is always confined to their manageable platforms.
+      //  - Selection: a provided `platforms` array (even empty) is an explicit subset;
+      //    an empty selection must match nothing, and a requested platform outside the
+      //    caller's scope is dropped (never trusted from the client). Omitted = every
+      //    account the caller can see.
+      const scope = isSuperAdmin(this.user!) ? null : manageable;
+      let platformFilter: { in: string[] } | undefined;
+      if (Array.isArray(platforms)) {
+        platformFilter = { in: scope ? platforms.filter((p) => scope.includes(p)) : platforms };
+      } else if (scope) {
+        platformFilter = { in: scope };
+      }
+
       const requests = await prisma.userCreationRequest.findMany({
         where: {
           userId,
-          ...(isSuperAdmin(this.user!) ? {} : { platform: { in: manageable } }),
-          ...(platforms && platforms.length > 0 ? { platform: { in: platforms } } : {}),
+          ...(platformFilter ? { platform: platformFilter } : {}),
           status: { in: ACCOUNT_HOLDING_STATUSES },
           externalUserId: { not: null },
         },
@@ -1636,22 +1653,34 @@ export class AdminManagementController extends BaseController {
           }
 
           disabled.push({ platform: row.platform, reversible, grantsRevoked });
-          await prisma.auditEntry.create({
-            data: {
-              action: 'PLATFORM_ACCOUNT_DISABLED',
-              performerId,
-              performerName: this.user!.username,
-              targetUserId: userId,
-              targetUserName: profile.userName,
-              details: {
-                platform: row.platform,
-                externalUserId: row.externalUserId,
-                reversible,
-                reason,
-                grantsRevoked,
+
+          // Best-effort audit: the account is already disabled/deleted (and any
+          // grants revoked) by this point, so an audit-write failure must NOT flip a
+          // completed — and for AWS, irreversible — offboard into a reported "failed"
+          // that invites a confusing (no-op-able) retry. Log it and move on.
+          try {
+            await prisma.auditEntry.create({
+              data: {
+                action: 'PLATFORM_ACCOUNT_DISABLED',
+                performerId,
+                performerName: this.user!.username,
+                targetUserId: userId,
+                targetUserName: profile.userName,
+                details: {
+                  platform: row.platform,
+                  externalUserId: row.externalUserId,
+                  reversible,
+                  reason,
+                  grantsRevoked,
+                },
               },
-            },
-          });
+            });
+          } catch (auditErr: any) {
+            logger.error(
+              { platform: row.platform, userId, error: auditErr.message },
+              'Offboard: platform account was disabled but writing its PLATFORM_ACCOUNT_DISABLED audit failed',
+            );
+          }
         } catch (err: any) {
           logger.error(
             { platform: row.platform, userId, error: err.message },

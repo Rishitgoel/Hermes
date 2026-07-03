@@ -351,6 +351,15 @@ export class RedashService {
         await client.delete(`/api/groups/${redashGroupId}/members/${redashUserId}`);
         logger.info(`📊 Redash[${this.key}]: Successfully removed User ${redashUserId} from Group ${redashGroupId}`);
       } catch (error: any) {
+        // Tolerate a 404 (membership/user already gone) so removal is idempotent —
+        // matches disableUser/deleteGroup here and AWS's removeUserFromGroup. This is
+        // what lets a revoke succeed cleanly when the user was removed from the group
+        // (or deleted) directly in Redash, without the caller having to guess from a
+        // possibly-stale cache whether the membership was really absent.
+        if (error.response && error.response.status === 404) {
+          logger.info(`📊 Redash[${this.key}]: User ${redashUserId} already absent from Group ${redashGroupId}; nothing to remove`);
+          return;
+        }
         logger.error(`Failed to remove user ${redashUserId} from group ${redashGroupId} in Redash[${this.key}]:`, error.message);
         throw new Error(`Redash[${this.key}] API removeUserFromGroup error: ${error.message}`);
       }

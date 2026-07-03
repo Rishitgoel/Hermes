@@ -22,9 +22,13 @@
  *      which level), so without this the user would end up with zero access
  *      until a second resync run. Deactivates the old grant + creates the new
  *      one atomically, carrying over the original expiry.
- *    - REMOVE: everything else that's no longer a member anywhere in the
- *      group, OR whose Redash account is now disabled, is deactivated. No
- *      platform call — the membership/account is already gone/disabled.
+ *    - REMOVE: everything else whose group MEMBERSHIP is genuinely gone is
+ *      deactivated. No platform call — the membership is already gone. A merely
+ *      DISABLED account is NOT removed here: Redash keeps its group membership
+ *      while disabled and offboarding's reversible-disable deliberately leaves
+ *      grants intact (see CLAUDE.md), so deactivating on `isDisabled` would
+ *      silently revoke grants that flow promises to keep. Membership is the only
+ *      signal that deactivates a grant.
  *  Pass C — FIX STUCK: flips AccessRequests stuck in WAITING_FOR_SETUP /
  *    PROVISIONING / PROVISION_FAILED to PROVISIONED when the requester's
  *    membership is now confirmed (via Pass A's grant creation).
@@ -70,9 +74,9 @@ import { ConflictError } from '../utils/errors';
 import logger from '../utils/logger';
 
 export interface RedashResyncReport extends RedashImportReport {
-  // Pass B — remove (includes both "no longer a member" and "account disabled")
+  // Pass B — remove (grants whose Redash group membership is genuinely gone; a
+  // merely-disabled-but-still-member account is intentionally left alone).
   grantsDeactivated: number;
-  grantsDeactivatedDisabled: number;
   deactivatedGrants: string[];
   activeGrantsSkippedUnmapped: string[];
   removePassSkippedEmptyCache: boolean;
@@ -123,7 +127,6 @@ type GrantWithGroupAndLevel = Prisma.UserAccessGetPayload<{
 }>;
 
 type AlternateTarget = { levelId: string | null; levelName: string | null; externalGroupId: string };
-type OrphanReason = 'removed' | 'disabled';
 
 /**
  * A grant's own group/level is no longer in the user's cached memberships —
@@ -192,7 +195,6 @@ async function runResync(opts: {
   const report: RedashResyncReport = {
     ...importReport,
     grantsDeactivated: 0,
-    grantsDeactivatedDisabled: 0,
     deactivatedGrants: [],
     activeGrantsSkippedUnmapped: [],
     removePassSkippedEmptyCache: false,
@@ -253,7 +255,7 @@ async function runResync(opts: {
       // Classify every grant BEFORE writing anything, so the safety cap sees
       // the true removal count up front — checking it after partial writes
       // would be meaningless.
-      const orphans: { grant: GrantWithGroupAndLevel; label: string; reason: OrphanReason }[] = [];
+      const orphans: { grant: GrantWithGroupAndLevel; label: string }[] = [];
       const swaps: { grant: GrantWithGroupAndLevel; label: string; target: AlternateTarget; freshExternalId: string }[] = [];
       const refreshes: { grant: GrantWithGroupAndLevel; newExternalId: string }[] = [];
 
@@ -280,21 +282,19 @@ async function runResync(opts: {
         }
 
         const cachedGroupIds = new Set(cachedUser?.externalGroupIds ?? []);
-        const isDisabled = !!cachedUser?.isDisabled;
         const stillMember = cachedGroupIds.has(externalGroupId);
 
-        if (stillMember && !isDisabled) {
+        if (stillMember) {
+          // A disabled-but-still-member account keeps its grant on purpose. Redash
+          // retains group membership while an account is disabled, and offboarding's
+          // reversible-disable (see CLAUDE.md) deliberately leaves grants intact so
+          // re-enabling the account restores the access Hermes still shows. Keying
+          // deactivation off `isDisabled` here would silently revoke exactly the
+          // grants that flow promises to leave untouched — so we only deactivate a
+          // grant when the group MEMBERSHIP is genuinely gone (below).
           if (externalUserIdStale && cachedUser) {
             refreshes.push({ grant, newExternalId: cachedUser.externalId });
           }
-          continue;
-        }
-
-        if (isDisabled && cachedUser) {
-          // Disabled directly on Redash — deactivate regardless of which
-          // group(s) they're nominally still a member of; a disabled account
-          // can't use the platform, so the grant shouldn't stay active.
-          orphans.push({ grant, label, reason: 'disabled' });
           continue;
         }
 
@@ -304,7 +304,7 @@ async function runResync(opts: {
           continue;
         }
 
-        orphans.push({ grant, label, reason: 'removed' });
+        orphans.push({ grant, label });
       }
 
       report.levelsSwapped = swaps.length;
@@ -394,9 +394,8 @@ async function runResync(opts: {
       const overCap = orphans.length > threshold;
 
       report.grantsDeactivated = orphans.length;
-      report.grantsDeactivatedDisabled = orphans.filter((o) => o.reason === 'disabled').length;
       report.deactivatedGrants = orphans.map(
-        (o) => `${o.grant.userEmail} → ${o.label} (${o.reason === 'disabled' ? `disabled on ${displayName}` : `no longer on ${displayName}`})`,
+        (o) => `${o.grant.userEmail} → ${o.label} (no longer on ${displayName})`,
       );
 
       if (apply && overCap && !force) {
@@ -407,7 +406,7 @@ async function runResync(opts: {
         );
       } else {
         for (const o of orphans) {
-          const reasonText = o.reason === 'disabled' ? `disabled on ${displayName}` : `no longer on ${displayName}`;
+          const reasonText = `no longer on ${displayName}`;
           logger.info(`  ${apply ? '－' : 'would deactivate'} grant: ${o.grant.userEmail} → ${o.label} (${reasonText})`);
           if (!apply) continue;
           try {
@@ -417,7 +416,7 @@ async function runResync(opts: {
                 where: { id: o.grant.accessRequestId },
                 data: {
                   status: RequestStatus.REVOKED,
-                  revokeReason: `${displayName} resync: ${o.reason === 'disabled' ? 'account disabled on' : 'membership no longer present on'} ${displayName}`,
+                  revokeReason: `${displayName} resync: membership no longer present on ${displayName}`,
                   revokedAt: now,
                 },
               });
@@ -437,7 +436,7 @@ async function runResync(opts: {
                   levelId: o.grant.levelId ?? null,
                   levelName: o.grant.level?.name ?? null,
                   source: `${lowerPlatform}-resync`,
-                  orphanReason: o.reason,
+                  orphanReason: 'removed',
                 },
               },
             });
@@ -522,7 +521,7 @@ async function runResync(opts: {
 
   logger.info(
     `${displayName} resync ${apply ? 'applied' : 'dry-run'}: created=${report.grantsCreated}, ` +
-      `deactivated=${report.grantsDeactivated} (disabled=${report.grantsDeactivatedDisabled}), swapped=${report.levelsSwapped}, ` +
+      `deactivated=${report.grantsDeactivated}, swapped=${report.levelsSwapped}, ` +
       `refreshed=${report.externalUserIdsRefreshed}, requestsReconciled=${report.requestsReconciled}, ` +
       `stuckUnresolved=${report.stuckReported.length}, accountDrift=${report.accountRequestDrift.length}, errors=${report.errors.length}`,
   );

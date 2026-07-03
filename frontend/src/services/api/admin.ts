@@ -403,10 +403,10 @@ export async function importRedashMemberships(apply: boolean, platform = 'redash
 // reconciles requests stuck in WAITING_FOR_SETUP/PROVISIONING/PROVISION_FAILED.
 // Manually triggered — not a cron job. Surfaced as a prominent button in the UI.
 export interface RedashResyncReport extends RedashImportReport {
+  // Grants deactivated because their Redash group membership is genuinely gone. A
+  // merely-disabled-but-still-member account is intentionally left alone (its grant
+  // is preserved so re-enabling the account restores access — see offboarding).
   grantsDeactivated: number;
-  // Subset of grantsDeactivated whose Redash account was disabled (rather than
-  // just removed from the group) — same list, distinguishable by label suffix.
-  grantsDeactivatedDisabled: number;
   deactivatedGrants: string[];
   activeGrantsSkippedUnmapped: string[];
   removePassSkippedEmptyCache: boolean;

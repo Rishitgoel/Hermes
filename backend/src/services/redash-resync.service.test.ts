@@ -179,11 +179,14 @@ describe('redash-resync.service', () => {
   });
 
   describe('Pass B — disabled Redash account', () => {
-    it('deactivates a grant whose Redash account is disabled, even though the user is still nominally a group member', async () => {
+    it('leaves a grant intact when the account is disabled but still a group member (offboarding keeps it; re-enable restores access)', async () => {
       const group = await prisma.group.create({
         data: { name: 'Growth', slug: 'growth', description: 'd', platform: 'redash', externalGroupId: 'ext-growth' },
       });
-      // Still listed as a member of the group, but the account is disabled.
+      // Still listed as a member of the group, but the account is disabled — a
+      // reversible offboarding-disable. Redash keeps the membership, so the grant
+      // must survive (re-enabling the account restores access). Deactivating on
+      // `isDisabled` here would silently break offboarding's "grants untouched" promise.
       await prisma.platformExternalUser.create({
         data: {
           platform: 'redash',
@@ -208,9 +211,42 @@ describe('redash-resync.service', () => {
       });
 
       const applied = await resyncRedashMemberships({ platform: 'redash', apply: true, ...performer });
+      expect(applied.grantsDeactivated).toBe(0);
+
+      const updated = await prisma.userAccess.findUnique({ where: { id: access.id } });
+      expect(updated?.isActive).toBe(true);
+    });
+
+    it('still deactivates a disabled account that is ALSO no longer a group member (membership is the signal)', async () => {
+      const group = await prisma.group.create({
+        data: { name: 'Growth', slug: 'growth', description: 'd', platform: 'redash', externalGroupId: 'ext-growth' },
+      });
+      // Disabled AND removed from the group → genuinely gone, so the grant is deactivated.
+      await prisma.platformExternalUser.create({
+        data: {
+          platform: 'redash',
+          externalId: 'ext-user-gone',
+          email: 'gone@bachatt.app',
+          name: 'Gone User',
+          isDisabled: true,
+          externalGroupIds: [],
+          lastSyncedAt: new Date(),
+        },
+      });
+      const access = await prisma.userAccess.create({
+        data: {
+          userId: 'usr-gone',
+          userName: 'Gone User',
+          userEmail: 'gone@bachatt.app',
+          groupId: group.id,
+          externalUserId: 'ext-user-gone',
+          isActive: true,
+          grantedBy: 'admin.user',
+        },
+      });
+
+      const applied = await resyncRedashMemberships({ platform: 'redash', apply: true, ...performer });
       expect(applied.grantsDeactivated).toBe(1);
-      expect(applied.grantsDeactivatedDisabled).toBe(1);
-      expect(applied.deactivatedGrants[0]).toContain('disabled on Redash');
 
       const updated = await prisma.userAccess.findUnique({ where: { id: access.id } });
       expect(updated?.isActive).toBe(false);

@@ -324,7 +324,7 @@ describe('AccessWorkflowService Integration Tests', () => {
       expect(auditFailed).not.toBeNull();
     });
 
-    it('revokeAccess should keep the deactivation (not roll back) when the platform membership is already gone', async () => {
+    it('revokeAccess succeeds when the platform deprovision is a no-op (membership already gone)', async () => {
       await prisma.userCreationRequest.create({
         data: {
           userId: testUser.id,
@@ -342,11 +342,10 @@ describe('AccessWorkflowService Integration Tests', () => {
         where: { userId: testUser.id, groupId: group.id, isActive: true },
       });
 
-      // No platform_external_users cache row for this externalUserId — simulates
-      // the user having been removed from Redash (or deleted) directly, outside
-      // Hermes. The deprovision call still fails (mock throws), but the cache
-      // shows the membership is already gone, so revoke should succeed anyway.
-      deprovisionShouldThrow = true;
+      // A user removed from the group (or deleted) directly on Redash surfaces as an
+      // idempotent no-op from the adapter's deprovision (removeUserFromGroup tolerates
+      // a 404), NOT a throw — so revoke completes cleanly without any cache guessing.
+      deprovisionShouldThrow = false;
 
       const revoked = await accessWorkflowService.revokeAccess(userAccess!.id, adminUser, 'cleanup');
       expect(revoked.isActive).toBe(false);
@@ -355,10 +354,10 @@ describe('AccessWorkflowService Integration Tests', () => {
       const audit = await prisma.auditEntry.findFirst({
         where: { action: 'ACCESS_REVOKED', targetUserId: testUser.id },
       });
-      expect((audit?.details as any)?.platformMembershipAbsent).toBe(true);
+      expect(audit).not.toBeNull();
     });
 
-    it('revokeAccess should still roll back and throw when the platform membership is genuinely present', async () => {
+    it('revokeAccess rolls back and re-throws when the platform deprovision fails for real', async () => {
       await prisma.userCreationRequest.create({
         data: {
           userId: testUser.id,
@@ -376,19 +375,9 @@ describe('AccessWorkflowService Integration Tests', () => {
         where: { userId: testUser.id, groupId: group.id, isActive: true },
       });
 
-      // Cache shows the user IS still a member — a genuine platform error, not an
-      // already-gone membership, so the old rollback-and-throw behavior must hold.
-      await prisma.platformExternalUser.create({
-        data: {
-          platform: 'redash',
-          externalId: userAccess!.externalUserId!,
-          email: testUser.email,
-          name: testUser.username,
-          externalGroupIds: [group.externalGroupId],
-          lastSyncedAt: new Date(),
-        },
-      });
-
+      // A genuine (non-404) platform error must NOT silently drop the grant: roll back
+      // the deactivation and surface the error so the user isn't left with platform
+      // access Hermes believes is revoked.
       deprovisionShouldThrow = true;
 
       await expect(accessWorkflowService.revokeAccess(userAccess!.id, adminUser, 'cleanup')).rejects.toThrow('Deprovision failed');
