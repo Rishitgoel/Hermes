@@ -162,7 +162,7 @@ export const Dashboard: React.FC = () => {
         return { label: 'Active', color: 'var(--status-approved-text)', bg: 'var(--status-approved-bg)' };
       case 'AWAITING_SETUP':
         return {
-          label: 'Finish setup',
+          label: 'Create password',
           color: 'var(--status-pending-text)',
           bg: 'var(--status-pending-bg)',
           onClick: () => navigate('/my-requests'),

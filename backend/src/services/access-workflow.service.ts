@@ -1550,21 +1550,36 @@ export class AccessWorkflowService {
       },
     });
 
+    let platformMembershipAbsent = false;
     if (externalUserId && externalGroupId) {
       try {
         await this.deprovisionWithRetain(access.userId, platform, userAccessId, externalUserId, externalGroupId);
       } catch (err: any) {
         logger.error(`Failed to deprovision user from platform ${platform} during revocation of ${userAccessId}:`, err.message);
         if (!force) {
-          // Revert deactivation on failure
-          await prisma.userAccess.update({
-            where: { id: userAccessId },
-            data: {
-              isActive: true,
-              revokedAt: null,
-            },
+          // Before rolling back, check whether the membership is already gone on
+          // the platform (e.g. the user was removed from the group — or deleted —
+          // directly in Redash, outside Hermes). If so, the deprovision "failure"
+          // just means there's nothing left to remove: keep the Hermes deactivation
+          // instead of blocking the admin from clearing an orphaned grant.
+          const cachedUser = await prisma.platformExternalUser.findUnique({
+            where: { platform_externalId: { platform, externalId: externalUserId } },
           });
-          throw err;
+          platformMembershipAbsent = !cachedUser || !cachedUser.externalGroupIds.includes(externalGroupId);
+          if (!platformMembershipAbsent) {
+            // Revert deactivation on failure
+            await prisma.userAccess.update({
+              where: { id: userAccessId },
+              data: {
+                isActive: true,
+                revokedAt: null,
+              },
+            });
+            throw err;
+          }
+          logger.warn(
+            `Platform membership for ${userAccessId} was already absent on ${platform}; keeping the Hermes deactivation instead of rolling back.`,
+          );
         }
       }
     }
@@ -1591,7 +1606,13 @@ export class AccessWorkflowService {
         targetUserName: access.userName,
         groupId: access.groupId,
         accessRequestId: access.accessRequestId,
-        details: { reason, userAccessId, levelId: access.levelId ?? null, levelName: access.level?.name ?? null },
+        details: {
+          reason,
+          userAccessId,
+          levelId: access.levelId ?? null,
+          levelName: access.level?.name ?? null,
+          ...(platformMembershipAbsent ? { platformMembershipAbsent: true } : {}),
+        },
       },
     });
 

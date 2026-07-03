@@ -29,3 +29,23 @@ export const addGroupMemberSchema = z.object({
     errorMap: () => ({ message: 'Invalid access duration value' }),
   }),
 });
+
+// Revoke some/all of a user's active access grants across platforms (Admin
+// Management → "User access" tool). userAccessIds omitted = revoke everything the
+// caller can see for this user; provided = revoke just that subset.
+export const revokeUserAccessSchema = z.object({
+  userId: z.string().trim().min(1, 'userId is required'),
+  userAccessIds: z.array(z.string().uuid('Invalid access id')).optional(),
+  reason: z.string().trim().max(500, 'Reason is too long').optional(),
+});
+
+// Disable/delete a user's ACCOUNT on some/all platforms that support it (Admin
+// Management → "User access" tool's offboarding section). platforms omitted =
+// every eligible account the caller can see for this user; provided = just that
+// subset. Semantics per platform: Redash disables (reversible), AWS permanently
+// deletes (see PlatformAdapter.disableUser / disableUserIsReversible).
+export const disableUserAccountsSchema = z.object({
+  userId: z.string().trim().min(1, 'userId is required'),
+  platforms: z.array(z.string().trim().min(1)).optional(),
+  reason: z.string().trim().max(500, 'Reason is too long').optional(),
+});

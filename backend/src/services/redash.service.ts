@@ -105,9 +105,27 @@ export class RedashService {
 
     try {
       const client = this.getClient();
-      // Redash users API uses pagination
-      const response = await client.get('/api/users?page_size=250');
-      return response.data.results.map((u: any) => ({
+      // Redash's /api/users is paginated ({count, page, page_size, results}) —
+      // fetching only page 1 silently truncates any roster over one page. A
+      // truncated fetch isn't just an incomplete cache: the resync's remove
+      // pass treats "missing from the fetch" as "no longer a member" and would
+      // deactivate every grant for every user past the first page. Loop until
+      // every page is collected (or the count is satisfied).
+      const pageSize = 250;
+      const MAX_PAGES = 200; // sanity bound (50k users) against a runaway/misbehaving API
+      const results: any[] = [];
+      let page = 1;
+      for (; page <= MAX_PAGES; page++) {
+        const response = await client.get(`/api/users?page_size=${pageSize}&page=${page}`);
+        const pageResults = response.data.results ?? [];
+        results.push(...pageResults);
+        const count = typeof response.data.count === 'number' ? response.data.count : results.length;
+        if (pageResults.length === 0 || results.length >= count) break;
+      }
+      if (page > MAX_PAGES) {
+        logger.error(`Redash[${this.key}] syncUsers: hit the ${MAX_PAGES}-page safety cap — the user list may be truncated.`);
+      }
+      return results.map((u: any) => ({
         id: u.id,
         name: u.name,
         email: u.email,
@@ -357,6 +375,33 @@ export class RedashService {
     } catch (error: any) {
       logger.error(`Failed to create group "${name}" in Redash[${this.key}]:`, error.message);
       throw new Error(`Redash[${this.key}] API createGroup error: ${error.message}`);
+    }
+  }
+
+  /**
+   * Disable a Redash user's ACCOUNT (offboarding — not group membership, which is
+   * addUserToGroup/removeUserFromGroup). Redash's `DELETE /api/users/:id` is a
+   * soft-disable: it sets `is_disabled=true` and blocks sign-in, but doesn't purge
+   * the user or their history — an admin can flip it back in Redash's own admin
+   * panel. Tolerates a 404 (already gone) so it's safe to call twice.
+   */
+  async disableUser(redashUserId: number): Promise<void> {
+    if (this.isSimulation) {
+      logger.info(`📊 Redash[${this.key}] disableUser (Simulation): Disabled User ID ${redashUserId}`);
+      return;
+    }
+
+    try {
+      const client = this.getClient();
+      await client.delete(`/api/users/${redashUserId}`);
+      logger.info(`📊 Redash[${this.key}]: Disabled User ID ${redashUserId}`);
+    } catch (error: any) {
+      if (error.response && error.response.status === 404) {
+        logger.info(`📊 Redash[${this.key}]: User ID ${redashUserId} already absent; nothing to disable`);
+        return;
+      }
+      logger.error(`Failed to disable user ${redashUserId} in Redash[${this.key}]:`, error.message);
+      throw new Error(`Redash[${this.key}] API disableUser error: ${error.message}`);
     }
   }
 

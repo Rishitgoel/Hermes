@@ -23,6 +23,8 @@ import {
   assignGroupAdminSchema,
   setMemberLevelSchema,
   addGroupMemberSchema,
+  revokeUserAccessSchema,
+  disableUserAccountsSchema,
 } from '../validations/admin.validation';
 import {
   createGroupLevelSchema,
@@ -33,7 +35,7 @@ import {
   updateGroupSchema,
 } from '../validations/group.validation';
 import logger from '../utils/logger';
-import { RequestStatus } from '../../generated/hermes';
+import { RequestStatus, UserCreationStatus } from '../../generated/hermes';
 
 
 const PLATFORM_ADMIN_MARKER = 'hermes_platform_admin';
@@ -51,6 +53,15 @@ const TERMINAL_REQUEST_STATUSES: RequestStatus[] = [
   RequestStatus.PROVISION_FAILED,
   RequestStatus.EXPIRED,
   RequestStatus.REVOKED,
+];
+
+// UserCreationStatus values under which the user has (or is finishing getting) a
+// live account on the platform — i.e. an externalUserId that account-level
+// offboarding (disableUser) can act on. DRAFT/PENDING/REJECTED never reached one.
+const ACCOUNT_HOLDING_STATUSES: UserCreationStatus[] = [
+  UserCreationStatus.APPROVED,
+  UserCreationStatus.AWAITING_SETUP,
+  UserCreationStatus.COMPLETED,
 ];
 
 const platformAdminRole = (platform: string) =>
@@ -1276,6 +1287,408 @@ export class AdminManagementController extends BaseController {
       this.sendResponse({ id: userAccessId }, 'Member removed from group');
     } catch (error) {
       this.handleError(error, 'Failed to remove group member');
+    }
+  }
+
+  // ── User access (cross-platform view + bulk revoke) ───────────────────────
+  // Lets an admin audit or revoke everything a single user holds — across every
+  // group/platform they administer — from one place, instead of hunting through
+  // each group's member list. Scope is the same as everywhere else in this
+  // controller: super admins see/revoke every platform, a platform admin only
+  // their own platform(s). There is no group-admin entry point here (they'd only
+  // ever see a slice of one user's access, which isn't the point of this tool).
+
+  // GET /api/admin/user-access?userId=
+  async listUserAccess(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      if (!this.getUserId()) {return;}
+
+      const manageable = await getManageablePlatforms(this.user!);
+      if (manageable.length === 0) {
+        throw new AuthorizationError('You do not administer any platforms');
+      }
+
+      const userId = String(req.query.userId ?? '').trim();
+      if (!userId) {throw new ValidationError('userId is required');}
+
+      const where: {
+        userId: string;
+        isActive: boolean;
+        group?: { platform: { in: string[] } };
+      } = { userId, isActive: true };
+      if (!isSuperAdmin(this.user!)) {
+        where.group = { platform: { in: manageable } };
+      }
+
+      const accesses = await prisma.userAccess.findMany({
+        where,
+        include: {
+          group: {
+            select: { id: true, name: true, slug: true, platform: true, color: true, icon: true },
+          },
+          level: { select: { id: true, name: true, permission: true } },
+        },
+        orderBy: { grantedAt: 'desc' },
+      });
+
+      this.sendResponse(
+        accesses.map(a => ({
+          id: a.id,
+          groupId: a.groupId,
+          groupName: a.group.name,
+          groupSlug: a.group.slug,
+          groupColor: a.group.color,
+          groupIcon: a.group.icon,
+          platform: a.group.platform,
+          levelId: a.levelId,
+          levelName: a.level?.name ?? null,
+          levelPermission: a.level?.permission ?? null,
+          externalUserId: a.externalUserId,
+          grantedAt: a.grantedAt,
+          expiresAt: a.expiresAt,
+          grantedBy: a.grantedBy,
+        })),
+        'User access retrieved successfully',
+      );
+    } catch (error) {
+      this.handleError(error, 'Failed to retrieve user access');
+    }
+  }
+
+  // POST /api/admin/user-access/revoke  { userId, userAccessIds?, reason? }
+  // userAccessIds omitted ⇒ revoke every active grant the caller can see for this
+  // user (still scoped by platform for a platform admin); provided ⇒ revoke just
+  // that subset. Grants outside the caller's manageable platforms, or belonging to
+  // a different user, are silently excluded rather than trusted from the client.
+  async revokeUserAccess(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      const performerId = this.getUserId();
+      if (!performerId) {return;}
+
+      const manageable = await getManageablePlatforms(this.user!);
+      if (manageable.length === 0) {
+        throw new AuthorizationError('You do not administer any platforms');
+      }
+
+      const validated = this.validateWithZod(
+        revokeUserAccessSchema,
+        this.req.body,
+      );
+      if (!validated.success) {return;}
+      const { userId, userAccessIds, reason } = validated.data;
+
+      const where: {
+        userId: string;
+        isActive: boolean;
+        group?: { platform: { in: string[] } };
+        id?: { in: string[] };
+      } = { userId, isActive: true };
+      if (!isSuperAdmin(this.user!)) {
+        where.group = { platform: { in: manageable } };
+      }
+      if (userAccessIds && userAccessIds.length > 0) {
+        where.id = { in: userAccessIds };
+      }
+
+      const targets = await prisma.userAccess.findMany({
+        where,
+        select: { id: true, userName: true, group: { select: { name: true } } },
+      });
+
+      if (targets.length === 0) {
+        throw new NotFoundError(
+          'No matching active access found to revoke',
+        );
+      }
+
+      const revoker = { id: performerId, username: this.user!.username };
+      const revoked: string[] = [];
+      const failed: { id: string; groupName: string; error: string }[] = [];
+
+      // Sequential, not Promise.allSettled: revokeAccess's ZooKeeper "retain other
+      // paths" logic (deprovisionWithRetain) reads the user's still-active grants
+      // at call time, so revoking this user's grants concurrently would race that
+      // snapshot and could strip a path that a later-completing revoke still needed.
+      for (const target of targets) {
+        try {
+          await accessWorkflowService.revokeAccess(target.id, revoker, reason);
+          revoked.push(target.id);
+        } catch (err: any) {
+          logger.error(
+            { userAccessId: target.id, error: err.message },
+            'Bulk user-access revoke: failed to revoke one grant',
+          );
+          failed.push({
+            id: target.id,
+            groupName: target.group.name,
+            error: err.message || 'Unknown error',
+          });
+        }
+      }
+
+      await prisma.auditEntry.create({
+        data: {
+          action: 'ACCESS_BULK_REVOKED',
+          performerId,
+          performerName: this.user!.username,
+          targetUserId: userId,
+          targetUserName: targets[0]?.userName,
+          details: {
+            reason,
+            requested: targets.length,
+            revokedCount: revoked.length,
+            failedCount: failed.length,
+            userAccessIds: targets.map(t => t.id),
+          },
+        },
+      });
+
+      this.sendResponse(
+        { revoked, failed },
+        `${revoked.length} access grant(s) revoked${failed.length ? `, ${failed.length} failed` : ''}`,
+      );
+    } catch (error) {
+      this.handleError(error, 'Failed to revoke user access');
+    }
+  }
+
+  // GET /api/admin/user-platform-accounts?userId= — every platform account this
+  // user holds (in scope), for the offboarding section of the "User access" tool.
+  async listUserPlatformAccounts(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      if (!this.getUserId()) {return;}
+
+      const manageable = await getManageablePlatforms(this.user!);
+      if (manageable.length === 0) {
+        throw new AuthorizationError('You do not administer any platforms');
+      }
+
+      const userId = String(req.query.userId ?? '').trim();
+      if (!userId) {throw new ValidationError('userId is required');}
+
+      const requests = await prisma.userCreationRequest.findMany({
+        where: {
+          userId,
+          ...(isSuperAdmin(this.user!) ? {} : { platform: { in: manageable } }),
+          status: { in: ACCOUNT_HOLDING_STATUSES },
+        },
+        orderBy: { platform: 'asc' },
+      });
+
+      // Best-effort "already disabled" flag from the cache (Redash's own is_disabled,
+      // refreshed by sync). An AWS row here always reads false — a disabled AWS
+      // account has no cache row at all (deleteUser removes it), so it wouldn't
+      // reach ACCOUNT_HOLDING_STATUSES in the first place after the next sync prunes it.
+      const withExternalId = requests.filter(r => r.externalUserId);
+      const disabledSet = new Set<string>();
+      if (withExternalId.length > 0) {
+        const cacheRows = await prisma.platformExternalUser.findMany({
+          where: { OR: withExternalId.map(r => ({ platform: r.platform, externalId: r.externalUserId! })) },
+          select: { platform: true, externalId: true, isDisabled: true },
+        });
+        for (const c of cacheRows) {
+          if (c.isDisabled) {disabledSet.add(`${c.platform}:${c.externalId}`);}
+        }
+      }
+
+      // How many active UserAccess grants this user still holds per platform —
+      // surfaced so the UI can warn before disabling ("also revokes N grants" for
+      // an irreversible delete, "N grant(s) will remain untouched" for a reversible
+      // disable). Disabling/deleting the ACCOUNT never implicitly touches these.
+      const grantCounts = new Map<string, number>();
+      if (requests.length > 0) {
+        const grants = await prisma.userAccess.findMany({
+          where: {
+            userId,
+            isActive: true,
+            group: { platform: { in: requests.map(r => r.platform) } },
+          },
+          select: { group: { select: { platform: true } } },
+        });
+        for (const g of grants) {
+          grantCounts.set(g.group.platform, (grantCounts.get(g.group.platform) ?? 0) + 1);
+        }
+      }
+
+      this.sendResponse(
+        requests.map(r => {
+          const adapter = provisioningRegistry.tryGet(r.platform);
+          return {
+            platform: r.platform,
+            status: r.status,
+            externalUserId: r.externalUserId,
+            supportsDisable: !!adapter?.disableUser,
+            disableIsReversible: !!adapter?.disableUserIsReversible,
+            isDisabled: r.externalUserId ? disabledSet.has(`${r.platform}:${r.externalUserId}`) : false,
+            activeGrantCount: grantCounts.get(r.platform) ?? 0,
+          };
+        }),
+        'User platform accounts retrieved successfully',
+      );
+    } catch (error) {
+      this.handleError(error, 'Failed to retrieve user platform accounts');
+    }
+  }
+
+  // POST /api/admin/user-access/disable-accounts  { userId, platforms?, reason? }
+  // Offboarding: disable/delete a user's ACCOUNT on some/all platforms that support
+  // it (not group membership — that's revokeUserAccess). platforms omitted =
+  // every eligible account the caller can see for this user; provided = that
+  // subset. Semantics differ per adapter (see disableUserIsReversible) — the
+  // caller is trusted to have already shown the admin which is which.
+  async disableUserAccounts(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      const performerId = this.getUserId();
+      if (!performerId) {return;}
+
+      const manageable = await getManageablePlatforms(this.user!);
+      if (manageable.length === 0) {
+        throw new AuthorizationError('You do not administer any platforms');
+      }
+
+      const validated = this.validateWithZod(
+        disableUserAccountsSchema,
+        this.req.body,
+      );
+      if (!validated.success) {return;}
+      const { userId, platforms, reason } = validated.data;
+
+      const profile = await this.resolveUserProfile(userId);
+
+      const requests = await prisma.userCreationRequest.findMany({
+        where: {
+          userId,
+          ...(isSuperAdmin(this.user!) ? {} : { platform: { in: manageable } }),
+          ...(platforms && platforms.length > 0 ? { platform: { in: platforms } } : {}),
+          status: { in: ACCOUNT_HOLDING_STATUSES },
+          externalUserId: { not: null },
+        },
+      });
+
+      if (requests.length === 0) {
+        throw new NotFoundError(
+          'No matching platform account found to disable',
+        );
+      }
+
+      const revoker = { id: performerId, username: this.user!.username };
+      const disabled: { platform: string; reversible: boolean; grantsRevoked: string[] }[] = [];
+      const failed: { platform: string; error: string }[] = [];
+      const unsupported: string[] = [];
+
+      for (const row of requests) {
+        const adapter = provisioningRegistry.tryGet(row.platform);
+        if (!adapter?.disableUser) {
+          unsupported.push(row.platform);
+          continue;
+        }
+        const reversible = !!adapter.disableUserIsReversible;
+        try {
+          await adapter.disableUser(row.externalUserId!);
+
+          // A PERMANENTLY deleted account (AWS) can never again validly back an
+          // active UserAccess grant — the external id it points to no longer
+          // exists. Leaving the grant active would (a) keep showing this person
+          // as a current member everywhere, and (b) block re-onboarding them
+          // later via the "you already have active access" guard in
+          // access-workflow.service.ts, since that check only looks at
+          // isActive, not whether the platform account behind it still exists.
+          // So an irreversible disable auto-revokes; a reversible one (Redash)
+          // deliberately does NOT — group membership survives a re-enable there,
+          // so forcing a revoke would just be extra, unrequested destruction.
+          const grantsRevoked: string[] = [];
+          if (!reversible) {
+            const grants = await prisma.userAccess.findMany({
+              where: { userId, isActive: true, group: { platform: row.platform } },
+              select: { id: true },
+            });
+            for (const g of grants) {
+              try {
+                await accessWorkflowService.revokeAccess(
+                  g.id,
+                  revoker,
+                  reason ?? `Account permanently deleted on ${row.platform}`,
+                );
+                grantsRevoked.push(g.id);
+              } catch (err: any) {
+                logger.error(
+                  { userAccessId: g.id, platform: row.platform, error: err.message },
+                  'Offboard: failed to auto-revoke a grant after its platform account was permanently deleted',
+                );
+              }
+            }
+          }
+
+          disabled.push({ platform: row.platform, reversible, grantsRevoked });
+          await prisma.auditEntry.create({
+            data: {
+              action: 'PLATFORM_ACCOUNT_DISABLED',
+              performerId,
+              performerName: this.user!.username,
+              targetUserId: userId,
+              targetUserName: profile.userName,
+              details: {
+                platform: row.platform,
+                externalUserId: row.externalUserId,
+                reversible,
+                reason,
+                grantsRevoked,
+              },
+            },
+          });
+        } catch (err: any) {
+          logger.error(
+            { platform: row.platform, userId, error: err.message },
+            'Failed to disable one platform account during offboarding',
+          );
+          failed.push({ platform: row.platform, error: err.message || 'Unknown error' });
+        }
+      }
+
+      const totalGrantsRevoked = disabled.reduce((n, d) => n + d.grantsRevoked.length, 0);
+
+      await prisma.auditEntry.create({
+        data: {
+          action: 'ACCOUNTS_BULK_DISABLED',
+          performerId,
+          performerName: this.user!.username,
+          targetUserId: userId,
+          targetUserName: profile.userName,
+          details: {
+            reason,
+            requested: requests.length,
+            disabledCount: disabled.length,
+            failedCount: failed.length,
+            autoRevokedGrantCount: totalGrantsRevoked,
+            disabled,
+            failed,
+            unsupported,
+          },
+        },
+      });
+
+      this.sendResponse(
+        { disabled, failed, unsupported },
+        `${disabled.length} account(s) disabled${totalGrantsRevoked ? ` (auto-revoked ${totalGrantsRevoked} grant(s) on permanently-deleted accounts)` : ''}${failed.length ? `, ${failed.length} failed` : ''}${unsupported.length ? `, ${unsupported.length} unsupported` : ''}`,
+      );
+    } catch (error) {
+      this.handleError(error, 'Failed to disable platform accounts');
     }
   }
 

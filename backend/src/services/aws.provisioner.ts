@@ -138,6 +138,23 @@ export class AwsProvisioner implements PlatformAdapter {
     await awsIdentityCenterService.deleteGroup(externalGroupId);
   }
 
+  // ── Account offboarding ───────────────────────────────────────────────────
+  // Identity Store has no "disabled" flag — this PERMANENTLY deletes the user.
+  // disableUserIsReversible is deliberately omitted (defaults to false/irreversible).
+
+  /** Permanently delete the user's AWS Identity Center account (offboarding). */
+  async disableUser(externalUserId: string): Promise<void> {
+    if (!config.aws.isEnabled) {
+      throw new Error('AWS integration is currently disabled');
+    }
+    await awsIdentityCenterService.deleteUser(externalUserId);
+    // The user object is permanently gone — drop the cache row now instead of
+    // waiting for the next sync's prune pass.
+    await prisma.platformExternalUser
+      .deleteMany({ where: { platform: PLATFORM, externalId: externalUserId } })
+      .catch(() => {});
+  }
+
   async healthCheck(): Promise<{ healthy: boolean; message?: string }> {
     return awsIdentityCenterService.healthCheck();
   }

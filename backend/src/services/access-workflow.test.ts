@@ -323,6 +323,78 @@ describe('AccessWorkflowService Integration Tests', () => {
       });
       expect(auditFailed).not.toBeNull();
     });
+
+    it('revokeAccess should keep the deactivation (not roll back) when the platform membership is already gone', async () => {
+      await prisma.userCreationRequest.create({
+        data: {
+          userId: testUser.id,
+          userName: testUser.username,
+          userEmail: testUser.email,
+          platform: 'redash',
+          status: UserCreationStatus.COMPLETED,
+        },
+      });
+
+      const req = await accessWorkflowService.createRequest(testUser, group.id, 'Test', AccessDuration.PERMANENT);
+      await accessWorkflowService.reviewRequest(req.id, adminUser, 'APPROVED');
+
+      const userAccess = await prisma.userAccess.findFirst({
+        where: { userId: testUser.id, groupId: group.id, isActive: true },
+      });
+
+      // No platform_external_users cache row for this externalUserId — simulates
+      // the user having been removed from Redash (or deleted) directly, outside
+      // Hermes. The deprovision call still fails (mock throws), but the cache
+      // shows the membership is already gone, so revoke should succeed anyway.
+      deprovisionShouldThrow = true;
+
+      const revoked = await accessWorkflowService.revokeAccess(userAccess!.id, adminUser, 'cleanup');
+      expect(revoked.isActive).toBe(false);
+      expect(revoked.revokedAt).not.toBeNull();
+
+      const audit = await prisma.auditEntry.findFirst({
+        where: { action: 'ACCESS_REVOKED', targetUserId: testUser.id },
+      });
+      expect((audit?.details as any)?.platformMembershipAbsent).toBe(true);
+    });
+
+    it('revokeAccess should still roll back and throw when the platform membership is genuinely present', async () => {
+      await prisma.userCreationRequest.create({
+        data: {
+          userId: testUser.id,
+          userName: testUser.username,
+          userEmail: testUser.email,
+          platform: 'redash',
+          status: UserCreationStatus.COMPLETED,
+        },
+      });
+
+      const req = await accessWorkflowService.createRequest(testUser, group.id, 'Test', AccessDuration.PERMANENT);
+      await accessWorkflowService.reviewRequest(req.id, adminUser, 'APPROVED');
+
+      const userAccess = await prisma.userAccess.findFirst({
+        where: { userId: testUser.id, groupId: group.id, isActive: true },
+      });
+
+      // Cache shows the user IS still a member — a genuine platform error, not an
+      // already-gone membership, so the old rollback-and-throw behavior must hold.
+      await prisma.platformExternalUser.create({
+        data: {
+          platform: 'redash',
+          externalId: userAccess!.externalUserId!,
+          email: testUser.email,
+          name: testUser.username,
+          externalGroupIds: [group.externalGroupId],
+          lastSyncedAt: new Date(),
+        },
+      });
+
+      deprovisionShouldThrow = true;
+
+      await expect(accessWorkflowService.revokeAccess(userAccess!.id, adminUser, 'cleanup')).rejects.toThrow('Deprovision failed');
+      const stillActive = await prisma.userAccess.findUnique({ where: { id: userAccess!.id } });
+      expect(stillActive?.isActive).toBe(true);
+    });
   });
 
   describe('User-Creation Onboarding Flows', () => {

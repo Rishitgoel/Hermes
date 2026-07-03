@@ -692,7 +692,7 @@ export const Groups: React.FC = () => {
                           className="badge"
                           style={{ gap: '4px', backgroundColor: 'var(--primary-light)', color: 'var(--primary)' }}
                         >
-                          <Icons.Clock size={12} /> Awaiting Setup
+                          <Icons.Clock size={12} /> Awaiting Password
                         </span>
                       )}
                       {group.accessStatus === 'NONE' && (

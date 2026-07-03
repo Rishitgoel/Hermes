@@ -648,6 +648,7 @@ a:hover {
   gap: 4px;
   border-bottom: 1px solid var(--border);
   overflow-x: auto;
+  overflow-y: hidden;
   scrollbar-width: thin;
   margin-bottom: 24px;
 }
@@ -1119,6 +1120,16 @@ a:focus-visible {
   background-color: var(--bg-hover);
 }
 
+/* Clickable audit-log rows — stronger tint than the default row hover so the
+   affordance to open the detail modal reads clearly. */
+.hermes-table tr.audit-row {
+  cursor: pointer;
+}
+
+.hermes-table tr.audit-row:hover td {
+  background-color: var(--primary-light);
+}
+
 .empty-state {
   text-align: center;
   padding: 60px 40px;
@@ -1196,6 +1207,16 @@ a:focus-visible {
   animation: modal-in 0.2s ease-out;
 }
 
+/* Wider variant for content that needs more room, e.g. audit-log diffs. */
+.modal-content--lg {
+  max-width: 860px;
+}
+
+.modal-content--lg .modal-body {
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
 .modal-header {
   padding: 24px;
   border-bottom: 1px solid var(--border);
@@ -1231,6 +1252,49 @@ a:focus-visible {
   display: flex;
   justify-content: flex-end;
   gap: 12px;
+}
+
+/* ── Audit Detail Modal ── */
+/* Scrollable monospace block for a full ZooKeeper old/new value — short diffs render
+   inline via ZkDiff, but long config blobs need their own scroll area. */
+.zk-value-block {
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 220px;
+  overflow: auto;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  margin: 0;
+}
+
+.zk-value-block--old {
+  background-color: #fee2e2;
+  color: #991b1b;
+}
+
+.zk-value-block--new {
+  background-color: #dcfce7;
+  color: #166534;
+}
+
+/* Pretty-printed fallback JSON in the "Raw details" accordion. */
+.raw-json-block {
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow: auto;
+  padding: 16px;
+  border-radius: var(--radius-md);
+  background-color: var(--bg-app);
+  border: 1px solid var(--border);
+  margin: 0;
 }
 
 /* ── Form Inputs ── */

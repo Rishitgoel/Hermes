@@ -37,6 +37,18 @@ router.post(
   },
 );
 
+// Redash full resync: two-way reconciliation (add + remove + fix-stuck-requests)
+// against live Redash state (super admin only). Manually triggered, not a cron job.
+router.post(
+  '/resync-redash-memberships',
+  authenticateToken,
+  requireRole(['hermes_super_admin']),
+  (req: Request, res: Response, next: NextFunction) => {
+    const controller = new AdminController(req, res, next);
+    controller.resyncRedashMemberships(req, res, next).catch(next);
+  },
+);
+
 // ZooKeeper maintenance: migrate existing ZooKeeper ACLs to world-open (super admin only).
 router.post(
   '/migrate-zookeeper-acls',
@@ -74,6 +86,32 @@ router.get(
 );
 router.get('/users', authenticateToken, adminMgmt('searchUsers'));
 router.get('/groups', authenticateToken, adminMgmt('listManageableGroups'));
+
+// User access (cross-platform view + bulk revoke) — super or platform admin
+// (enforced in controller via getManageablePlatforms scoping).
+router.get(
+  '/user-access',
+  authenticateToken,
+  adminMgmt('listUserAccess'),
+);
+router.post(
+  '/user-access/revoke',
+  authenticateToken,
+  adminMgmt('revokeUserAccess'),
+);
+
+// Platform accounts (offboarding: disable/delete the account itself, not just
+// group membership) — same tool, same scoping.
+router.get(
+  '/user-platform-accounts',
+  authenticateToken,
+  adminMgmt('listUserPlatformAccounts'),
+);
+router.post(
+  '/user-access/disable-accounts',
+  authenticateToken,
+  adminMgmt('disableUserAccounts'),
+);
 
 // Platform admins (super admin only — enforced in controller)
 router.get(

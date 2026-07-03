@@ -94,6 +94,24 @@ export class RedashProvisioner implements PlatformAdapter {
     await this.service.deleteGroup(parseInt(externalGroupId, 10));
   }
 
+  // ── Account offboarding ───────────────────────────────────────────────────
+
+  /** Redash's disable is a real, reversible soft-disable — see disableUser. */
+  readonly disableUserIsReversible = true;
+
+  /** Disable the user's Redash account (offboarding, not group membership). */
+  async disableUser(externalUserId: string): Promise<void> {
+    await this.service.disableUser(parseInt(externalUserId, 10));
+    // Best-effort cache update for instant UI feedback; the next sync reconfirms
+    // from Redash's own is_disabled field regardless.
+    await prisma.platformExternalUser
+      .updateMany({
+        where: { platform: this.platform, externalId: externalUserId },
+        data: { isDisabled: true },
+      })
+      .catch(() => {});
+  }
+
   /** Look up whether a user exists on Redash, using the local cache. */
   async checkUserStatus(email: string, _userId?: string): Promise<PlatformUserStatus> {
     const cached = await prisma.platformExternalUser.findUnique({
@@ -248,6 +266,16 @@ export class RedashProvisioner implements PlatformAdapter {
     const redashUsers = await this.service.syncUsers();
     logger.info(`🔄 RedashProvisioner[${this.platform}]: Fetched ${redashUsers.length} users from Redash.`);
 
+    // A user deleted-and-recreated on Redash keeps their email but gets a new
+    // numeric id. buildUserUpsert matches by (platform, externalId), so for the
+    // recreated user that id isn't found → Prisma inserts a new row → collides
+    // with the OLD row's (platform, email) unique constraint (P2002), which
+    // aborts the whole upsert transaction and blocks every sync (cron, manual
+    // Sync, membership import, Full Resync) until someone cleans it up by hand.
+    // Resolve email collisions first: retarget the stale row onto the new id
+    // instead of letting the upsert try to insert a duplicate.
+    await this.reconcileRecreatedUsers(redashUsers, now);
+
     // Batch the upserts into chunked transactions instead of awaiting one per
     // user sequentially (O(users) serial DB round-trips on every sync cycle).
     const upserts = redashUsers.map((user) => this.buildUserUpsert(user, now));
@@ -313,6 +341,41 @@ export class RedashProvisioner implements PlatformAdapter {
   // ── Internal helpers ──────────────────────────────────────────────────────
 
   /** Build the upsert for one Redash user (not awaited — batched by callers). */
+  /**
+   * Retarget cache rows for users who were deleted and recreated on Redash
+   * (same email, new numeric id) before the upsert-by-externalId batch runs —
+   * otherwise the insert for the new id collides with the stale row's
+   * (platform, email) unique constraint. One bulk lookup by email, then only
+   * issues an update for actual collisions (expected to be rare).
+   */
+  private async reconcileRecreatedUsers(
+    users: { id: number; email: string }[],
+    now: Date,
+  ): Promise<void> {
+    if (users.length === 0) return;
+    const emails = users.map((u) => u.email.toLowerCase());
+    const existing = await prisma.platformExternalUser.findMany({
+      where: { platform: this.platform, email: { in: emails } },
+      select: { id: true, email: true, externalId: true },
+    });
+    const existingByEmail = new Map(existing.map((e) => [e.email, e]));
+
+    for (const user of users) {
+      const externalId = user.id.toString();
+      const email = user.email.toLowerCase();
+      const match = existingByEmail.get(email);
+      if (match && match.externalId !== externalId) {
+        logger.warn(
+          `🔄 RedashProvisioner[${this.platform}]: ${email} was recreated on Redash (external id ${match.externalId} → ${externalId}) — retargeting the cache row instead of inserting a duplicate.`,
+        );
+        await prisma.platformExternalUser.update({
+          where: { id: match.id },
+          data: { externalId, lastSyncedAt: now },
+        });
+      }
+    }
+  }
+
   private buildUserUpsert(
     user: { id: number; name: string; email: string; is_disabled: boolean; is_invitation_pending: boolean; groups: number[] },
     now: Date,

@@ -7,20 +7,8 @@ import { Scroll, Search, RefreshCw, ChevronLeft, ChevronRight } from 'lucide-rea
 import { queryKeys } from '../lib/queryKeys';
 import { fetchPlatforms } from '../services/api/platforms';
 import { useToast } from '../contexts/ToastContext';
-
-interface AuditLogEntry {
-  id: string;
-  action: string;
-  performerId: string;
-  performerName: string;
-  targetUserId: string | null;
-  targetUserName: string | null;
-  groupId: string | null;
-  accessRequestId: string | null;
-  details: any;
-  ipAddress: string | null;
-  createdAt: string;
-}
+import { AuditLogEntry, actionBadgeStyle } from '../lib/auditFormat';
+import { AuditDetailModal } from '../components/audit/AuditDetailModal';
 
 interface AuditResponse {
   items: AuditLogEntry[];
@@ -40,6 +28,7 @@ export const AuditLog: React.FC = () => {
   const [groupFilter, setGroupFilter] = useState('');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
+  const [selectedEntry, setSelectedEntry] = useState<AuditLogEntry | null>(null);
 
   // Dropdown data for the platform / group filters.
   const { data: platforms = [] } = useQuery({
@@ -94,6 +83,8 @@ export const AuditLog: React.FC = () => {
   const logs = auditQuery.data?.items ?? [];
   const totalLogs = auditQuery.data?.total ?? 0;
   const isLoading = auditQuery.isLoading;
+  // Background refetch (filter/page change) while stale data is still shown via placeholderData.
+  const isRefetching = auditQuery.isFetching && !isLoading;
 
   const syncMutation = useMutation({
     mutationFn: () => apiClient.post('/api/admin/sync').then((r) => r.data),
@@ -343,7 +334,13 @@ export const AuditLog: React.FC = () => {
         </div>
       ) : (
         <>
-          <div className="table-container">
+          {isRefetching && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+              <RefreshCw size={12} style={{ animation: 'spin 1.5s linear infinite' }} />
+              Updating…
+            </div>
+          )}
+          <div className="table-container" style={{ opacity: isRefetching ? 0.6 : 1, transition: 'opacity 0.15s' }}>
             <table className="hermes-table">
               <thead>
                 <tr>
@@ -356,7 +353,19 @@ export const AuditLog: React.FC = () => {
               </thead>
               <tbody>
                 {logs.map((entry) => (
-                  <tr key={entry.id}>
+                  <tr
+                    key={entry.id}
+                    className="audit-row"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setSelectedEntry(entry)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        setSelectedEntry(entry);
+                      }
+                    }}
+                  >
                     <td style={{ fontSize: '13px', whiteSpace: 'nowrap' }}>
                       {formatDate(entry.createdAt)}
                     </td>
@@ -369,8 +378,7 @@ export const AuditLog: React.FC = () => {
                         fontWeight: 800,
                         padding: '2px 8px',
                         borderRadius: 'var(--radius-sm)',
-                        backgroundColor: entry.action.includes('GRANT') || entry.action.includes('SYNC') ? 'var(--status-approved-bg)' : entry.action.includes('REJECT') || entry.action.includes('REVOKE') ? 'var(--status-rejected-bg)' : 'var(--primary-light)',
-                        color: entry.action.includes('GRANT') || entry.action.includes('SYNC') ? 'var(--status-approved-text)' : entry.action.includes('REJECT') || entry.action.includes('REVOKE') ? 'var(--status-rejected-text)' : 'var(--primary)',
+                        ...actionBadgeStyle(entry.action),
                       }}>
                         {entry.action}
                       </span>
@@ -439,6 +447,11 @@ export const AuditLog: React.FC = () => {
         </>
       )}
 
+      <AuditDetailModal
+        entry={selectedEntry}
+        groupName={selectedEntry ? groupOptions.find((g) => g.id === selectedEntry.groupId)?.name : null}
+        onClose={() => setSelectedEntry(null)}
+      />
     </div>
   );
 };

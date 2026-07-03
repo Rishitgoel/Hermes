@@ -390,7 +390,10 @@ export class ZookeeperConfigService {
               requestId: row.id,
               changeCount: groupChanges.length,
               groupIds: [gid],
-            },
+              groupName: groupChanges[0]?.groupName ?? null,
+              justification: justification?.trim() || null,
+              changes: groupChanges,
+            } as any,
           },
         });
 
@@ -597,7 +600,16 @@ export class ZookeeperConfigService {
         performerId: reviewer.id,
         performerName: reviewer.username,
         groupId: row.groupId,
-        details: { requestId: row.id, approved, applied, rejected, failed },
+        details: {
+          requestId: row.id,
+          approved,
+          applied,
+          rejected,
+          failed,
+          reviewNote: note ?? null,
+          justification: row.justification ?? null,
+          changes,
+        } as any,
       },
     });
 

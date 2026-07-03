@@ -1,6 +1,7 @@
 import {
   IdentitystoreClient,
   CreateUserCommand,
+  DeleteUserCommand,
   DescribeUserCommand,
   GetUserIdCommand,
   ListUsersCommand,
@@ -330,6 +331,61 @@ export class AwsIdentityCenterService {
         return { userId: existingId };
       }
       this.mapError(err, 'createUser');
+    }
+  }
+
+  /**
+   * PERMANENTLY delete a user from Identity Center (offboarding — not group
+   * membership, which is add/removeUserFromGroup). Identity Store has no
+   * "disabled" flag on a user, so this is the only account-level action available;
+   * it is irreversible — recreating the person later makes a brand-new user with a
+   * new UserId, and any historical linkage by that id is gone. Clears group
+   * memberships first (defensive, mirrors deleteGroup's own cleanup) then deletes
+   * the user. Tolerates an already-absent user so it's safe to call twice.
+   */
+  async deleteUser(userId: string): Promise<void> {
+    if (this.isSimulation) {
+      ensureSimSeeded();
+      for (const [key, m] of sim.memberships) {
+        if (m.userId === userId) sim.memberships.delete(key);
+      }
+      sim.users.delete(userId);
+      logger.info({ userId }, '🧪 AWS IDC (sim): deleted user');
+      return;
+    }
+    try {
+      let nextToken: string | undefined;
+      do {
+        const res = await this.getClient().send(
+          new ListGroupMembershipsForMemberCommand({
+            IdentityStoreId: this.identityStoreId,
+            MemberId: { UserId: userId },
+            MaxResults: 100,
+            NextToken: nextToken,
+          }),
+        );
+        for (const m of res.GroupMemberships ?? []) {
+          if (m.MembershipId) {
+            await this.getClient().send(
+              new DeleteGroupMembershipCommand({
+                IdentityStoreId: this.identityStoreId,
+                MembershipId: m.MembershipId,
+              }),
+            );
+          }
+        }
+        nextToken = res.NextToken;
+      } while (nextToken);
+
+      await this.getClient().send(
+        new DeleteUserCommand({ IdentityStoreId: this.identityStoreId, UserId: userId }),
+      );
+    } catch (err: any) {
+      if (err?.name === ERR_NOT_FOUND) {
+        logger.info({ userId }, 'AWS Identity Center: user already absent; nothing to delete');
+        return;
+      }
+      this.mapError(err, 'deleteUser');
     }
   }
 

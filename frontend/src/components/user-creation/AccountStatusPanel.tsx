@@ -213,7 +213,7 @@ const PlatformAccountRow: React.FC<{ entry: PlatformEntry }> = ({ entry }) => {
     try {
       await resendInvite(platform);
       await refresh();
-      setMessage({ kind: 'success', text: 'Setup link regenerated. Use "Finish setup" below.' });
+      setMessage({ kind: 'success', text: 'Password link regenerated. Use "Create password" below.' });
     } catch (err: any) {
       setMessage({ kind: 'error', text: err.message || 'Retry failed.' });
     } finally {
@@ -240,7 +240,7 @@ const PlatformAccountRow: React.FC<{ entry: PlatformEntry }> = ({ entry }) => {
       case 'COMPLETED':
         return { cls: 'badge-approved', label: 'Active', Icon: Icons.CheckCircle2 };
       case 'AWAITING_SETUP':
-        return { cls: 'badge-pending', label: 'Awaiting setup', Icon: Icons.Clock };
+        return { cls: 'badge-pending', label: 'Awaiting password', Icon: Icons.Clock };
       case 'PENDING':
         return { cls: 'badge-pending', label: 'Pending review', Icon: Icons.Clock };
       case 'APPROVED':
@@ -261,7 +261,7 @@ const PlatformAccountRow: React.FC<{ entry: PlatformEntry }> = ({ entry }) => {
       }
       case 'AWAITING_SETUP':
         return uc?.inviteLink
-          ? 'Approved — finish setup to activate your account'
+          ? 'Approved — create a password to activate your account'
           : `Approved — check your email for ${label} sign-in instructions`;
       case 'PENDING':
         return uc?.submittedAt ? `Submitted ${timeAgo(uc.submittedAt)} · waiting for an admin` : 'Waiting for an admin to review';
@@ -299,7 +299,7 @@ const PlatformAccountRow: React.FC<{ entry: PlatformEntry }> = ({ entry }) => {
                 className="btn btn-primary"
                 style={{ ...btnSm, display: 'inline-flex', alignItems: 'center' }}
               >
-                Finish setup <Icons.ArrowRight size={14} />
+                Create password <Icons.ArrowRight size={14} />
               </a>
             )}
             <button type="button" className="btn btn-outline btn-sm" style={btnSm} onClick={handleSync} disabled={busy !== null}>

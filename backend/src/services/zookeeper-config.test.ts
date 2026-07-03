@@ -152,6 +152,66 @@ describe('ZookeeperConfigService (simulation)', () => {
     expect(await zookeeperService.getData('/hermes/credit-card/timeout')).toBe('');
   });
 
+  it('records rich ZK_CHANGE_SUBMITTED and ZK_CHANGE_<status> audit details', async () => {
+    await setupGrant('/hermes/credit-card#cdrw');
+    await seed('/hermes/credit-card/db-host', 'old');
+
+    const reqs = await zookeeperConfigService.createChangeRequest({
+      requester: USER,
+      justification: 'tune config',
+      changes: [
+        { path: '/hermes/credit-card/db-host', action: 'SET', oldValue: 'old', newValue: '10.0.0.9' },
+      ],
+    });
+    const req = reqs[0];
+
+    const submitted = await prisma.auditEntry.findFirst({
+      where: { action: 'ZK_CHANGE_SUBMITTED', groupId: req.groupId! },
+    });
+    expect(submitted).toBeTruthy();
+    expect(submitted!.details).toMatchObject({
+      requestId: req.id,
+      changeCount: 1,
+      justification: 'tune config',
+      changes: [
+        expect.objectContaining({
+          path: '/hermes/credit-card/db-host',
+          action: 'SET',
+          oldValue: 'old',
+          newValue: '10.0.0.9',
+        }),
+      ],
+    });
+
+    await zookeeperConfigService.reviewChangeRequest(
+      req.id,
+      REVIEWER,
+      [approve('/hermes/credit-card/db-host')],
+      'looks good',
+    );
+
+    const reviewed = await prisma.auditEntry.findFirst({
+      where: { action: 'ZK_CHANGE_APPLIED', groupId: req.groupId! },
+    });
+    expect(reviewed).toBeTruthy();
+    expect(reviewed!.details).toMatchObject({
+      requestId: req.id,
+      approved: 1,
+      applied: 1,
+      rejected: 0,
+      failed: 0,
+      reviewNote: 'looks good',
+      justification: 'tune config',
+      changes: [
+        expect.objectContaining({
+          path: '/hermes/credit-card/db-host',
+          decision: 'APPROVED',
+          applied: true,
+        }),
+      ],
+    });
+  });
+
   it('per-change review: approve one, reject the other → PARTIALLY_APPLIED', async () => {
     await setupGrant('/hermes/credit-card#cdrw');
     await seed('/hermes/credit-card/a', 'a0');

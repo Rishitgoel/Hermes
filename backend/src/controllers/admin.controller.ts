@@ -3,6 +3,7 @@ import BaseController from './base.controller';
 import syncService from '../services/sync.service';
 import adminReconciliationService from '../services/admin-reconciliation.service';
 import { importRedashMemberships } from '../services/redash-import.service';
+import { resyncRedashMemberships } from '../services/redash-resync.service';
 import { migrateZookeeperAcls } from '../services/zookeeper-migration.service';
 import prisma from '../config/prisma';
 import { AuthorizationError, ValidationError } from '../utils/errors';
@@ -161,6 +162,74 @@ export class AdminController extends BaseController {
       );
     } catch (error) {
       this.handleError(error, 'Membership import failed');
+    }
+  }
+
+  // POST /api/admin/resync-redash-memberships  body: { apply?: boolean, platform?: string }
+  // Full two-way resync (super admin only): makes Hermes match Redash reality in
+  // both directions — adds missing grants (same as import), deactivates grants
+  // whose Redash membership is gone, and reconciles requests stuck in
+  // WAITING_FOR_SETUP/PROVISIONING/PROVISION_FAILED. Dry-run unless apply === true.
+  // Manually triggered — not a cron job. Surfaced as a prominent button in the UI.
+  async resyncRedashMemberships(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      const userId = this.getUserId();
+      if (!userId) {return;}
+
+      if (!isSuperAdmin(this.user!)) {
+        throw new AuthorizationError(
+          'Only super admins can resync memberships',
+        );
+      }
+
+      const apply = req.body?.apply === true;
+      const force = req.body?.force === true;
+      const platform = typeof req.body?.platform === 'string' ? req.body.platform : 'redash';
+
+      if (platform !== 'redash' && platform !== 'redash-qa') {
+        throw new ValidationError('Invalid platform for membership resync');
+      }
+
+      const displayName = platform === 'redash-qa' ? 'Redash QA' : 'Redash';
+      logger.info(
+        `Super admin ${this.user!.username} triggered ${displayName} full resync${apply ? ' (APPLY)' : ' (dry-run)'}${force ? ' (force)' : ''}`,
+      );
+      const report = await resyncRedashMemberships({
+        platform,
+        apply,
+        force,
+        performerId: userId,
+        performerName: this.user!.username,
+      });
+
+      // Only audit a real (apply) run — a dry-run writes nothing. Per-grant
+      // ACCESS_IMPORTED/ACCESS_REVOKED/ACCESS_GRANTED/ACCESS_LEVEL_CHANGED entries
+      // are written inside the service.
+      if (apply) {
+        await prisma.auditEntry.create({
+          data: {
+            action: platform === 'redash-qa' ? 'REDASH_QA_RESYNC_TRIGGERED' : 'REDASH_RESYNC_TRIGGERED',
+            performerId: userId,
+            performerName: this.user!.username,
+            details: report as object,
+          },
+        });
+      }
+
+      this.sendResponse(
+        report,
+        !apply
+          ? `${displayName} full resync dry-run completed (no changes made)`
+          : report.removePassBlockedBySafetyCap
+            ? `${displayName} full resync completed, but the remove pass was blocked by the safety cap — re-run with force to proceed`
+            : `${displayName} full resync completed`,
+      );
+    } catch (error) {
+      this.handleError(error, 'Membership resync failed');
     }
   }
 

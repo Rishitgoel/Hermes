@@ -14,17 +14,17 @@ import GroupDrawer from '../components/admin/GroupDrawer';
 import GroupFormModal from '../components/admin/GroupFormModal';
 import ConfirmModal from '../components/admin/ConfirmModal';
 import AssignAdminModal, { type AssignTarget } from '../components/admin/AssignAdminModal';
+import UserAccessModal from '../components/admin/UserAccessModal';
+import RedashResyncModal from '../components/admin/RedashResyncModal';
 import {
   listManageablePlatforms,
   listManageableGroups,
   listPlatformAdmins,
   removePlatformAdmin,
   updateGroup,
-  importRedashMemberships, // Redash maintenance: membership backfill (collapsed disclosure)
   migrateZookeeperAcls, // ZooKeeper maintenance: ACL migration (collapsed disclosure)
   type ManageableGroup,
   type PlatformAdminRow,
-  type RedashImportReport,
   type ZookeeperMigrationReport,
 } from '../services/api/admin';
 
@@ -39,6 +39,8 @@ export const AdminManagement: React.FC = () => {
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [assignTarget, setAssignTarget] = useState<AssignTarget | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  const [showUserAccess, setShowUserAccess] = useState(false);
+  const [showResync, setShowResync] = useState(false);
   const [removePA, setRemovePA] = useState<PlatformAdminRow | null>(null);
   const [search, setSearch] = useState('');
   const [groupView, setGroupView] = useState<'active' | 'archived'>('active');
@@ -101,27 +103,6 @@ export const AdminManagement: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.adminPlatformAdmins(activePlatform ?? '') });
     },
     onError: (e: any) => toast.error(e.message || 'Failed to remove platform admin.'),
-  });
-
-  // Redash membership import — a rarely-used maintenance tool that backfills
-  // existing Redash accounts + group memberships into Hermes. Lives in a collapsed
-  // "Maintenance" disclosure at the bottom of the Redash platform view (see JSX).
-  // Dry-run previews; Apply writes. Idempotent.
-  const [importReport, setImportReport] = useState<RedashImportReport | null>(null);
-  const importMutation = useMutation({
-    mutationFn: (apply: boolean) => importRedashMemberships(apply, activePlatform ?? 'redash'),
-    onSuccess: (report) => {
-      setImportReport(report);
-      toast.success(
-        report.apply
-          ? `Import applied: ${report.grantsCreated} grant(s), ${report.accountRequestsCreated} account(s).`
-          : `Dry run: would create ${report.grantsCreated} grant(s), ${report.accountRequestsCreated} account(s).`,
-      );
-      if (report.apply) {
-        queryClient.invalidateQueries({ queryKey: queryKeys.adminGroups(activePlatform ?? '') });
-      }
-    },
-    onError: (e: any) => toast.error(e.message || 'Membership import failed.'),
   });
 
   // ZooKeeper ACL migration — a rarely-used maintenance tool that updates existing
@@ -268,14 +249,24 @@ export const AdminManagement: React.FC = () => {
           title="Groups"
           icon={<Icons.Layers size={18} />}
           actions={
-            <button
-              type="button"
-              className="btn btn-primary btn-sm"
-              disabled={!activePlatform}
-              onClick={() => setShowCreate(true)}
-            >
-              <Icons.Plus size={15} /> New group
-            </button>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button type="button" className="btn btn-outline btn-sm" onClick={() => setShowUserAccess(true)}>
+                <Icons.UserMinus size={15} /> Revoke access
+              </button>
+              {superAdmin && (activePlatform === 'redash' || activePlatform === 'redash-qa') && (
+                <button type="button" className="btn btn-outline btn-sm" onClick={() => setShowResync(true)}>
+                  <Icons.RefreshCw size={15} /> Sync with {activePlatform === 'redash-qa' ? 'Redash QA' : 'Redash'}
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={!activePlatform}
+                onClick={() => setShowCreate(true)}
+              >
+                <Icons.Plus size={15} /> New group
+              </button>
+            </div>
           }
         />
 
@@ -345,104 +336,6 @@ export const AdminManagement: React.FC = () => {
           </div>
         )}
       </section>
-
-      {/* Maintenance: Redash membership import. Intentionally tucked away in a
-          collapsed disclosure at the bottom — a rarely-used backfill tool, super
-          admin + Redash/Redash-QA only. Closed by default so it stays out of the way. */}
-      {superAdmin && (activePlatform === 'redash' || activePlatform === 'redash-qa') && (
-        <details
-          style={{
-            marginTop: '8px',
-            marginBottom: '24px',
-            fontSize: '12px',
-            color: 'var(--text-muted)',
-          }}
-        >
-          <summary style={{ cursor: 'pointer', userSelect: 'none' }}>
-            <Icons.Wrench size={12} style={{ verticalAlign: 'middle', marginRight: '6px' }} />
-            Maintenance — import existing {activePlatform === 'redash-qa' ? 'Redash QA' : 'Redash'} memberships
-          </summary>
-          <div
-            style={{
-              marginTop: '10px',
-              padding: '14px',
-              border: '1px solid var(--border)',
-              borderRadius: '8px',
-            }}
-          >
-            <p style={{ margin: '0 0 12px', lineHeight: 1.5 }}>
-              Backfill existing {activePlatform === 'redash-qa' ? 'Redash QA' : 'Redash'} accounts + group memberships into Hermes so users keep
-              access they already have. Run <strong>Dry run</strong> to preview, then{' '}
-              <strong>Apply</strong> to write. Idempotent — safe to re-run.
-            </p>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button
-                type="button"
-                className="btn btn-outline btn-sm"
-                disabled={importMutation.isPending}
-                onClick={() => importMutation.mutate(false)}
-              >
-                <Icons.Eye size={15} /> Dry run
-              </button>
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                disabled={importMutation.isPending}
-                onClick={() => {
-                  if (
-                    window.confirm(
-                      `Apply ${activePlatform === 'redash-qa' ? 'Redash QA' : 'Redash'} membership import? This writes grants + completed account requests to the database. It is idempotent (safe to re-run), but real.`,
-                    )
-                  ) {
-                    importMutation.mutate(true);
-                  }
-                }}
-              >
-                <Icons.DatabaseZap size={15} /> Apply import
-              </button>
-            </div>
-            {importMutation.isPending && <LoadingSpinner />}
-            {importReport && (
-              <div className="table-container" style={{ padding: '12px', marginTop: '12px' }}>
-                <div style={{ marginBottom: '8px' }}>
-                  <strong>{importReport.apply ? 'Applied' : 'Dry run'}</strong> — mapped groups:{' '}
-                  {importReport.mappedGroups}, cached {activePlatform === 'redash-qa' ? 'Redash QA' : 'Redash'} users: {importReport.cachedUsers},
-                  matched to Keycloak: {importReport.usersMatched}, grants{' '}
-                  {importReport.apply ? 'created' : 'to create'}: {importReport.grantsCreated},
-                  already present: {importReport.grantsAlreadyPresent}, account requests{' '}
-                  {importReport.apply ? 'created' : 'to create'}: {importReport.accountRequestsCreated}
-                </div>
-                {importReport.usersSkippedNoKeycloak.length > 0 && (
-                  <div style={{ color: 'var(--status-pending-text, #b9770e)' }}>
-                    Skipped (no Keycloak identity): {importReport.usersSkippedNoKeycloak.join(', ')}
-                  </div>
-                )}
-                {importReport.usersSkippedDisabled.length > 0 && (
-                  <div style={{ color: 'var(--status-pending-text, #b9770e)' }}>
-                    Skipped (disabled in {activePlatform === 'redash-qa' ? 'Redash QA' : 'Redash'}): {importReport.usersSkippedDisabled.join(', ')}
-                  </div>
-                )}
-                {importReport.membershipsUnmapped.length > 0 && (
-                  <details style={{ marginTop: '6px' }}>
-                    <summary>{importReport.membershipsUnmapped.length} unmapped membership(s)</summary>
-                    <pre style={{ whiteSpace: 'pre-wrap', margin: '6px 0 0' }}>
-                      {importReport.membershipsUnmapped.join('\n')}
-                    </pre>
-                  </details>
-                )}
-                {importReport.levelConflicts.length > 0 && (
-                  <details style={{ marginTop: '6px' }}>
-                    <summary>{importReport.levelConflicts.length} level conflict(s) resolved by seniority</summary>
-                    <pre style={{ whiteSpace: 'pre-wrap', margin: '6px 0 0' }}>
-                      {importReport.levelConflicts.join('\n')}
-                    </pre>
-                  </details>
-                )}
-              </div>
-            )}
-          </div>
-        </details>
-      )}
 
       {/* Maintenance: ZooKeeper ACL migration to world-open. Collapsed disclosure at the bottom */}
       {superAdmin && activePlatform === 'zookeeper' && (
@@ -569,6 +462,14 @@ export const AdminManagement: React.FC = () => {
           }}
           onError={(msg) => toast.error(msg)}
         />
+      )}
+
+      {/* Cross-platform user access: check/revoke everything a user holds */}
+      {showUserAccess && <UserAccessModal onClose={() => setShowUserAccess(false)} />}
+
+      {/* Redash full resync: two-way reconciliation against live Redash membership */}
+      {showResync && activePlatform && (
+        <RedashResyncModal platform={activePlatform} onClose={() => setShowResync(false)} />
       )}
 
       {/* Remove platform admin confirm */}

@@ -292,6 +292,31 @@ export interface PlatformAdapter {
    * deliver the one-time secret over email/DM. Adapters that don't need it ignore it.
    */
   getOnboardingMessage?(details?: Record<string, unknown>): OnboardingMessage;
+
+  /**
+   * Optional: disable or delete the user's ACCOUNT on this platform — not just
+   * their group membership/data access (that's {@link deprovision}). Used by the
+   * offboarding tool ("this person left the company") to actually shut off login,
+   * not just revoke permissions. Semantics differ per adapter and are declared via
+   * {@link disableUserIsReversible}:
+   *  - Redash: a real, reversible soft-disable (`DELETE /api/users/:id` sets
+   *    `is_disabled=true`; an admin can flip it back in Redash's own admin panel).
+   *  - AWS Identity Center: has no "disabled" concept at all — the only account-level
+   *    action is a PERMANENT delete (`DeleteUserCommand`). Irreversible: recreating
+   *    the person later makes a brand-new user with a new id.
+   * Platforms with no account concept at all (ZooKeeper — no minted credentials, no
+   * per-user object) omit this entirely; offboarding there is fully achieved by
+   * revoking `UserAccess` grants, which the caller does separately.
+   */
+  disableUser?(externalUserId: string): Promise<void>;
+
+  /**
+   * Optional, only meaningful alongside {@link disableUser}: true if disabling is a
+   * soft/reversible action (Redash), false/omitted if it's a permanent delete (AWS).
+   * The offboarding UI uses this to pick "Disable" vs "Permanently delete" copy and
+   * how hard to gate the confirmation — never inferred from the platform string.
+   */
+  readonly disableUserIsReversible?: boolean;
 }
 
 // Keep backward-compat alias

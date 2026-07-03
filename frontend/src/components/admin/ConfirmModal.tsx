@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import Modal from '../common/Modal';
 
 /**
@@ -13,6 +13,12 @@ interface ConfirmModalProps {
   cancelLabel?: string;
   danger?: boolean;
   loading?: boolean;
+  /**
+   * For irreversible actions (e.g. permanently deleting an AWS account): require
+   * the admin to type this exact text (case-insensitive, trimmed) before Confirm
+   * enables. Omit for a normal confirm/cancel dialog.
+   */
+  requireTypedConfirmation?: string;
   onConfirm: () => void;
   onClose: () => void;
 }
@@ -25,9 +31,22 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
   cancelLabel = 'Cancel',
   danger = false,
   loading = false,
+  requireTypedConfirmation,
   onConfirm,
   onClose,
 }) => {
+  const [typed, setTyped] = useState('');
+
+  // Reset the typed text whenever the dialog closes, so it doesn't carry over
+  // (pre-armed) into the next confirmation it's reused for.
+  useEffect(() => {
+    if (!isOpen) setTyped('');
+  }, [isOpen]);
+
+  const typedConfirmed =
+    !requireTypedConfirmation ||
+    typed.trim().toLowerCase() === requireTypedConfirmation.trim().toLowerCase();
+
   return (
     <Modal
       isOpen={isOpen}
@@ -47,7 +66,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
                 : undefined
             }
             onClick={onConfirm}
-            disabled={loading}
+            disabled={loading || !typedConfirmed}
           >
             {loading ? 'Working…' : confirmLabel}
           </button>
@@ -55,6 +74,21 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
       }
     >
       <div style={{ fontSize: '14px', color: 'var(--text-muted)', lineHeight: 1.5 }}>{message}</div>
+      {requireTypedConfirmation && (
+        <div style={{ marginTop: '14px' }}>
+          <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px' }}>
+            Type <strong>{requireTypedConfirmation}</strong> to confirm
+          </label>
+          <input
+            type="text"
+            className="form-input"
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            autoFocus
+            autoComplete="off"
+          />
+        </div>
+      )}
     </Modal>
   );
 };

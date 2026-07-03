@@ -153,7 +153,7 @@ const ZkChangeApprovals: React.FC = () => {
     });
   };
 
-  if (!isLoading && requests.length === 0) return null;
+  if (isLoading || requests.length === 0) return null;
 
   return (
     <div style={{ marginTop: 36 }}>

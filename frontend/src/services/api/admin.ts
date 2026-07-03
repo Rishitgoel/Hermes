@@ -107,6 +107,55 @@ export interface DeleteGroupResult {
   accessCount?: number;
 }
 
+export interface UserAccessRow {
+  id: string; // userAccessId
+  groupId: string;
+  groupName: string;
+  groupSlug: string;
+  groupColor: string | null;
+  groupIcon: string | null;
+  platform: string;
+  levelId: string | null;
+  levelName: string | null;
+  levelPermission: string | null;
+  externalUserId: string | null;
+  grantedAt: string;
+  expiresAt: string | null;
+  grantedBy: string;
+}
+
+export interface RevokeUserAccessResult {
+  revoked: string[]; // userAccessIds successfully revoked
+  failed: { id: string; groupName: string; error: string }[];
+}
+
+/** A platform ACCOUNT the user holds (not group membership — that's UserAccessRow). */
+export interface UserPlatformAccountRow {
+  platform: string;
+  status: 'APPROVED' | 'AWAITING_SETUP' | 'COMPLETED';
+  externalUserId: string | null;
+  // Whether this platform's adapter implements account-level disable at all
+  // (ZooKeeper doesn't — it has no account concept; offboarding there is
+  // achieved by revoking access grants alone).
+  supportsDisable: boolean;
+  // true = a soft, reversible disable (Redash); false = a permanent delete (AWS).
+  // Only meaningful when supportsDisable is true.
+  disableIsReversible: boolean;
+  isDisabled: boolean;
+  // Active UserAccess grants this user still holds on this platform. Disabling
+  // the account never implicitly touches these for a reversible disable (Redash
+  // keeps group membership) — but an irreversible delete (AWS) auto-revokes them
+  // (see DisableUserAccountsResult.disabled[].grantsRevoked), since a deleted
+  // account can never again validly back an active grant.
+  activeGrantCount: number;
+}
+
+export interface DisableUserAccountsResult {
+  disabled: { platform: string; reversible: boolean; grantsRevoked: string[] }[];
+  failed: { platform: string; error: string }[];
+  unsupported: string[];
+}
+
 export interface GroupMember {
   id: string;
   userId: string;
@@ -141,6 +190,42 @@ export async function searchUsers(search: string): Promise<AdminUser[]> {
 export async function listManageableGroups(platform?: string): Promise<ManageableGroup[]> {
   const res = await apiClient.get('/api/admin/groups', { params: platform ? { platform } : {} });
   return res.data as ManageableGroup[];
+}
+
+// ── User access (cross-platform audit + bulk revoke) ───────────────────────
+
+export async function listUserAccess(userId: string): Promise<UserAccessRow[]> {
+  const res = await apiClient.get('/api/admin/user-access', { params: { userId } });
+  return res.data as UserAccessRow[];
+}
+
+/** userAccessIds omitted = revoke every active grant the caller can see for this user. */
+export async function revokeUserAccess(
+  userId: string,
+  opts?: { userAccessIds?: string[]; reason?: string },
+): Promise<RevokeUserAccessResult> {
+  const res = await apiClient.post('/api/admin/user-access/revoke', { userId, ...opts });
+  return res.data as RevokeUserAccessResult;
+}
+
+// ── Offboarding: disable/delete the platform ACCOUNT itself ────────────────
+// Separate from access grants above — a revoked grant still leaves the person's
+// account (and ability to sign in) on the platform. See CLAUDE.md's Offboarding
+// section: Redash disables (reversible), AWS permanently deletes, ZooKeeper has
+// no account concept (reports as `unsupported`, not a failure).
+
+export async function listUserPlatformAccounts(userId: string): Promise<UserPlatformAccountRow[]> {
+  const res = await apiClient.get('/api/admin/user-platform-accounts', { params: { userId } });
+  return res.data as UserPlatformAccountRow[];
+}
+
+/** platforms omitted = disable every eligible account the caller can see for this user. */
+export async function disableUserAccounts(
+  userId: string,
+  opts?: { platforms?: string[]; reason?: string },
+): Promise<DisableUserAccountsResult> {
+  const res = await apiClient.post('/api/admin/user-access/disable-accounts', { userId, ...opts });
+  return res.data as DisableUserAccountsResult;
 }
 
 // ── Group CRUD (super or platform admin of the group's platform) ──────────────
@@ -309,6 +394,52 @@ export interface RedashImportReport {
 export async function importRedashMemberships(apply: boolean, platform = 'redash'): Promise<RedashImportReport> {
   const res = await apiClient.post('/api/admin/import-redash-memberships', { apply, platform });
   return res.data as RedashImportReport;
+}
+
+// Redash full resync: two-way reconciliation. Adds memberships Hermes is missing
+// (same as import), deactivates Hermes grants whose Redash membership is gone,
+// swaps a grant to a different level when the user moved directly on Redash,
+// repairs stale externalUserIds (user deleted + recreated on Redash), and
+// reconciles requests stuck in WAITING_FOR_SETUP/PROVISIONING/PROVISION_FAILED.
+// Manually triggered — not a cron job. Surfaced as a prominent button in the UI.
+export interface RedashResyncReport extends RedashImportReport {
+  grantsDeactivated: number;
+  // Subset of grantsDeactivated whose Redash account was disabled (rather than
+  // just removed from the group) — same list, distinguishable by label suffix.
+  grantsDeactivatedDisabled: number;
+  deactivatedGrants: string[];
+  activeGrantsSkippedUnmapped: string[];
+  removePassSkippedEmptyCache: boolean;
+  // True when the platform's health check failed (or threw) — the remove pass
+  // was skipped entirely since a degraded response can look like valid data.
+  removePassSkippedUnhealthy: boolean;
+  removePassUnhealthyMessage: string | null;
+  // True when the remove pass found more orphaned grants than the safety cap
+  // allows and refused to write them (dry-run/created/swapped/refreshed still
+  // happened) — re-run with force=true to proceed anyway.
+  removePassBlockedBySafetyCap: boolean;
+  removePassSafetyCapThreshold: number | null;
+  levelsSwapped: number;
+  swappedGrants: string[];
+  externalUserIdsRefreshed: number;
+  refreshedExternalUserIds: string[];
+  requestsReconciled: number;
+  reconciledRequests: string[];
+  stuckReported: string[];
+  // Report-only: a DRAFT/PENDING/REJECTED account request whose user already
+  // has a working Redash account (e.g. a rejection bypassed directly on Redash).
+  // Never auto-resolved — surfaced for admin review.
+  accountRequestDrift: string[];
+  errors: string[];
+}
+
+export async function resyncRedashMemberships(
+  apply: boolean,
+  platform = 'redash',
+  force = false,
+): Promise<RedashResyncReport> {
+  const res = await apiClient.post('/api/admin/resync-redash-memberships', { apply, platform, force });
+  return res.data as RedashResyncReport;
 }
 
 // ZooKeeper maintenance: migrate existing ZooKeeper ACLs to world-open (world:anyone:cdrwa)

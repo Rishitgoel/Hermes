@@ -98,17 +98,17 @@ export const PlatformInviteModal: React.FC<PlatformInviteModalProps> = ({
     primary = { label: 'View status', action: goToStatus };
   } else if (uc.status === 'AWAITING_SETUP') {
     icon = <Mail size={20} style={{ color: 'var(--primary)' }} />;
-    title = `Finish setting up ${platformName}`;
+    title = `Create password for ${platformName}`;
     body = (
       <p style={{ fontSize: '14px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
-        Your account was approved. Click the link below to complete your {platformName} setup — once
-        you finish, any approved group memberships will activate automatically.
+        Your account was approved. Click the link below to create your password — once
+        you do, any approved group memberships will activate automatically.
       </p>
     );
     // Prefer opening the platform's setup link directly from here when we have it.
     if (uc.inviteLink) {
       primary = {
-        label: `Continue to ${platformName} setup`,
+        label: `Create password for ${platformName}`,
         action: () => {
           window.open(uc.inviteLink!, '_blank', 'noopener,noreferrer');
         },
@@ -118,10 +118,10 @@ export const PlatformInviteModal: React.FC<PlatformInviteModalProps> = ({
     }
   } else if (uc.status === 'APPROVED') {
     icon = <Mail size={20} style={{ color: 'var(--primary)' }} />;
-    title = `Finish setting up ${platformName}`;
+    title = `Create password for ${platformName}`;
     body = (
       <p style={{ fontSize: '14px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
-        Your account was approved but Hermes hit an error generating your setup link.
+        Your account was approved but Hermes hit an error generating your password link.
         Open account setup to retry.
       </p>
     );

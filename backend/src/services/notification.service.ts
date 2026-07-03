@@ -493,7 +493,7 @@ export class NotificationService {
     await this.createNotification(
       requesterId,
       'Access queued',
-      `${reviewerName} approved your request to ${groupName}. It will activate once you finish setting up your ${label} account.`,
+      `${reviewerName} approved your request to ${groupName}. It will activate once you create a password for your ${label} account.`,
       '/my-requests',
     );
   }
@@ -560,7 +560,7 @@ export class NotificationService {
     await this.createNotification(
       requesterId,
       'Your account is approved',
-      `${reviewerName} approved your Hermes account. Check your email — ${label} has sent you a link to set your password.`,
+      `${reviewerName} approved your Hermes account. Check your email — ${label} has sent you a link to create your password.`,
       '/my-requests',
     );
 

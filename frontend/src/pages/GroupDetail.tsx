@@ -199,7 +199,7 @@ export const GroupDetail: React.FC = () => {
                     className="badge"
                     style={{ gap: '6px', backgroundColor: 'var(--primary-light)', color: 'var(--primary)' }}
                   >
-                    <Icons.Clock size={12} /> Awaiting Setup
+                    <Icons.Clock size={12} /> Awaiting Password
                   </span>
                 )}
                 {group.accessStatus === 'NONE' && (
@@ -299,7 +299,7 @@ export const GroupDetail: React.FC = () => {
           {group.accessStatus === 'AWAITING_SETUP' && (
             <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '12px', lineHeight: 1.5 }}>
               Your access to this group is <strong>approved</strong>. It will activate
-              automatically once you finish setting up your {platformDisplayName(group.platform)} account.
+              automatically once you create a password for your {platformDisplayName(group.platform)} account.
             </p>
           )}
 

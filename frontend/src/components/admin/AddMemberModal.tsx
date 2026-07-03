@@ -4,6 +4,7 @@ import * as Icons from 'lucide-react';
 import { queryKeys } from '../../lib/queryKeys';
 import { cleanName } from './adminUtils';
 import UserPicker from './UserPicker';
+import { SkeletonText } from '../common/Skeleton';
 import {
   addGroupMember,
   listGroupLevels,
@@ -59,13 +60,19 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({ group, existingM
     onError: (e: any) => onError(e.message || 'Failed to add member.'),
   });
 
-  const canSubmit = !!selected && (!needsLevel || !!levelId) && !addMutation.isPending;
+  const canSubmit = !!selected && (!needsLevel || !!levelId) && !addMutation.isPending && !levelsQuery.isLoading;
 
   const submit = () => {
     if (canSubmit) addMutation.mutate();
   };
 
-  const helper = !selected ? 'Select a user to add.' : needsLevel && !levelId ? 'Pick a level below.' : null;
+  const helper = levelsQuery.isLoading
+    ? 'Loading levels…'
+    : !selected
+      ? 'Select a user to add.'
+      : needsLevel && !levelId
+        ? 'Pick a level below.'
+        : null;
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -95,7 +102,12 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({ group, existingM
           />
 
           <div style={{ marginTop: '14px' }}>
-            {needsLevel && (
+            {levelsQuery.isLoading ? (
+              <div className="form-group" style={{ marginBottom: '14px' }}>
+                <label className="form-label">Level</label>
+                <SkeletonText />
+              </div>
+            ) : needsLevel && (
               <div className="form-group" style={{ marginBottom: '14px' }}>
                 <label className="form-label">Level</label>
                 <select className="form-select" value={levelId} onChange={(e) => setLevelId(e.target.value)} disabled={addMutation.isPending}>

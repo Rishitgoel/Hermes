@@ -198,11 +198,11 @@ export function userAccountApproved(opts: { reviewerName: string; platformLabel?
     subject: '[Hermes] Your account has been approved',
     html: layout({
       heading: 'Your account is approved 🎉',
-      bodyHtml: `<p style="margin:0;">${esc(opts.reviewerName)} approved your Hermes account.</p><p style="margin:12px 0 0;">Check your inbox for a separate email from ${esc(label)} with a link to set your password and finish setup.</p>`,
+      bodyHtml: `<p style="margin:0;">${esc(opts.reviewerName)} approved your Hermes account.</p><p style="margin:12px 0 0;">Check your inbox for a separate email from ${esc(label)} with a link to create your password.</p>`,
       ctaLabel: 'View account status',
       ctaHref: href,
     }),
-    text: `${opts.reviewerName} approved your Hermes account. Check your inbox for the ${label} setup email. ${href}`,
+    text: `${opts.reviewerName} approved your Hermes account. Check your inbox for the ${label} link to create your password. ${href}`,
   };
 }
 
@@ -213,11 +213,11 @@ export function userAccountSetupComplete(opts: { platformLabel: string }): Email
     subject: '[Hermes] Your account is fully set up',
     html: layout({
       heading: 'You’re all set 🎉',
-      bodyHtml: `<p style="margin:0;">You’ve finished ${esc(label)} setup — your Hermes account is fully active, and any group memberships already approved by an admin have been provisioned.</p>`,
+      bodyHtml: `<p style="margin:0;">You’ve activated your ${esc(label)} account — your Hermes account is fully active, and any group memberships already approved by an admin have been provisioned.</p>`,
       ctaLabel: 'Open Hermes',
       ctaHref: href,
     }),
-    text: `You've finished ${label} setup — your Hermes account is fully active and any approved group memberships have been provisioned. ${href}`,
+    text: `You've activated your ${label} account — your Hermes account is fully active and any approved group memberships have been provisioned. ${href}`,
   };
 }
 
