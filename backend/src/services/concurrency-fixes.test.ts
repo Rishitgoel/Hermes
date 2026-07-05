@@ -3,7 +3,6 @@ import prisma from '../config/prisma';
 import { ensureDefaultGroupMembership } from './default-membership.service';
 import { AdminManagementController } from '../controllers/admin-management.controller';
 import { Request, Response } from 'express';
-import { ConflictError } from '../utils/errors';
 
 describe('Phase 3 Concurrency & Atomicity Tests', () => {
   describe('ensureDefaultGroupMembership', () => {

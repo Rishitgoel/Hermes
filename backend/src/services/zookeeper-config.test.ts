@@ -284,7 +284,7 @@ describe('ZookeeperConfigService (simulation)', () => {
 
   it('owningGroup picks the deeper directory on overlapping path grants', async () => {
     const externalUserId = await mintUser();
-    const gBroad = await addGroupGrant(externalUserId, '/hermes#cdrw', { slug: 'broad', name: 'Broad' });
+    await addGroupGrant(externalUserId, '/hermes#cdrw', { slug: 'broad', name: 'Broad' });
     const gDeep = await addGroupGrant(externalUserId, '/hermes/credit-card#cdrw', { slug: 'deep', name: 'Deep' });
 
     const reqs = await zookeeperConfigService.createChangeRequest({

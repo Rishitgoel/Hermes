@@ -347,7 +347,7 @@ export function userGroupRejected(opts: { groupName: string; reviewerName: strin
   };
 }
 
-export function userSecretsAccountReady(opts: Record<string, never>): EmailContent {
+export function userSecretsAccountReady(_opts: Record<string, never>): EmailContent {
   const href = url('/secrets');
   return {
     subject: '[Hermes] Your Secret Ingestion access is ready',

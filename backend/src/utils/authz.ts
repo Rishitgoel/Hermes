@@ -86,7 +86,7 @@ export async function isPlatformAdminOf(
 export async function isGroupAdminOf(
   user: AuthenticatedUser,
   groupId: string,
-  groupSlug?: string | null,
+  _groupSlug?: string | null,
 ): Promise<boolean> {
   if (isSuperAdmin(user)) return true;
 

@@ -6,7 +6,6 @@ import {
   GetUserIdCommand,
   ListUsersCommand,
   CreateGroupCommand,
-  DescribeGroupCommand,
   DeleteGroupCommand,
   GetGroupIdCommand,
   ListGroupsCommand,

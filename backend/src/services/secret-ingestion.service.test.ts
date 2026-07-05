@@ -5,7 +5,7 @@ import prisma from '../config/prisma';
 import { secretIngestionService } from './secret-ingestion.service';
 import { secretsManagerService } from './secrets-manager.service';
 import { secretsProvisioner } from './secrets.provisioner';
-import { AuthorizationError, ConflictError } from '../utils/errors';
+import { AuthorizationError } from '../utils/errors';
 
 describe('SecretIngestionService (simulation)', () => {
   const USER = { id: 'usr-secrets-1', username: 'Bob', email: 'bob@bachatt.app' };
@@ -139,7 +139,7 @@ describe('SecretIngestionService (simulation)', () => {
   });
 
   it('reviewIngestionRequest merges approved keys and redacts values post-terminal', async () => {
-    const { group } = await setupGrant();
+    await setupGrant();
     const request = await secretIngestionService.createIngestionRequest({
       requester: { id: USER.id, username: USER.username, email: USER.email, roles: [] },
       secretName: 'payment/gateway',
