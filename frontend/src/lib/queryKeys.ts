@@ -32,6 +32,11 @@ export const queryKeys = {
   zkNodes: (path: string) => ['zk', 'nodes', path] as const,
   zkChangeRequests: (scope: 'mine' | 'review') => ['zk', 'change-requests', scope] as const,
 
+  // Secret Ingestion config management
+  secretsScope: () => ['secrets', 'scope'] as const,
+  secretKeys: (name: string) => ['secrets', 'keys', name] as const,
+  secretIngestionRequests: (scope: 'mine' | 'review') => ['secrets', 'ingestion-requests', scope] as const,
+
   // Admin Management
   adminPlatforms: () => ['admin', 'platforms'] as const,
   adminUsers: (search: string) => ['admin', 'users', search] as const,

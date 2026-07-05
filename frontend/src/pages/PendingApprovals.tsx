@@ -5,6 +5,7 @@ import LoadingSpinner from '../components/common/LoadingSpinner';
 import UserApprovalsTable from '../components/user-creation/UserApprovalsTable';
 import { listPendingUserCreations } from '../services/api/userCreation';
 import { listZkChangeRequests } from '../services/api/zookeeperApi';
+import { listIngestionRequests } from '../services/api/secretsApi';
 import { useAuth } from '../contexts/AuthContext';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../lib/queryKeys';
@@ -12,6 +13,7 @@ import { fetchPlatforms, LivePlatform } from '../services/api/platforms';
 import { platformDisplayName } from '../lib/platforms';
 import SectionHeader from '../components/common/SectionHeader';
 import ZkChangeApprovals from '../components/zookeeper/ZkChangeApprovals';
+import SecretIngestionApprovals from '../components/secrets/SecretIngestionApprovals';
 
 interface PendingRequest {
   id: string;
@@ -45,6 +47,11 @@ export const PendingApprovals: React.FC = () => {
   // group admin of the request's group). The section self-hides when the scoped list
   // is empty, so it's safe to mount for any admin.
   const canReviewZk =
+    !!user?.adminScopes?.superAdmin ||
+    (user?.adminScopes?.platforms?.length ?? 0) > 0 ||
+    (user?.adminScopes?.groups?.length ?? 0) > 0;
+
+  const canReviewSecrets =
     !!user?.adminScopes?.superAdmin ||
     (user?.adminScopes?.platforms?.length ?? 0) > 0 ||
     (user?.adminScopes?.groups?.length ?? 0) > 0;
@@ -87,11 +94,26 @@ export const PendingApprovals: React.FC = () => {
     enabled: canReviewZk,
   });
 
+  const { data: secretsReviewRequests = [], isLoading: loadingSecrets } = useQuery({
+    queryKey: queryKeys.secretIngestionRequests('review'),
+    queryFn: () => listIngestionRequests('review'),
+    enabled: canReviewSecrets,
+  });
+
   const accountCount = canApproveAccounts ? pendingUserCreations.length : 0;
   const zkCount = canReviewZk ? zkReviewRequests.length : 0;
+  const secretsCount = canReviewSecrets ? secretsReviewRequests.length : 0;
   // Don't flash "all caught up" while a secondary queue is still loading.
-  const sectionsLoading = (canApproveAccounts && loadingAccounts) || (canReviewZk && loadingZk);
-  const nothingToReview = !sectionsLoading && requests.length === 0 && accountCount === 0 && zkCount === 0;
+  const sectionsLoading =
+    (canApproveAccounts && loadingAccounts) ||
+    (canReviewZk && loadingZk) ||
+    (canReviewSecrets && loadingSecrets);
+  const nothingToReview =
+    !sectionsLoading &&
+    requests.length === 0 &&
+    accountCount === 0 &&
+    zkCount === 0 &&
+    secretsCount === 0;
 
   // Selection & custom notes state
   const [selectedRequests, setSelectedRequests] = useState<Record<string, boolean>>({});
@@ -537,6 +559,7 @@ export const PendingApprovals: React.FC = () => {
       )}
 
       {canReviewZk && <ZkChangeApprovals />}
+      {canReviewSecrets && <SecretIngestionApprovals />}
 
       {/* One compact, professional placeholder when every queue is empty — no big block. */}
       {nothingToReview && (

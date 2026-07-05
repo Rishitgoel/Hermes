@@ -33,7 +33,7 @@ export const RedashResyncModal: React.FC<RedashResyncModalProps> = ({ platform, 
       setReport(r);
       if (r.apply && r.removePassBlockedBySafetyCap) {
         toast.error(
-          `Resync applied +${r.grantsCreated}/swapped ${r.levelsSwapped}, but ${r.grantsDeactivated} deactivation(s) were blocked by the safety cap (>${r.removePassSafetyCapThreshold}). Re-run with force to proceed.`,
+          `Resync applied +${r.grantsCreated}/swapped ${r.levelsSwapped}, but ${r.removePassOrphansFound} deactivation(s) were blocked by the safety cap (>${r.removePassSafetyCapThreshold}). Re-run with force to proceed.`,
         );
       } else {
         toast.success(
@@ -128,7 +128,7 @@ export const RedashResyncModal: React.FC<RedashResyncModalProps> = ({ platform, 
               }}
             >
               <span>
-                ⚠ {report.grantsDeactivated} grant(s) would be deactivated, over the safety cap of{' '}
+                ⚠ {report.removePassOrphansFound} grant(s) would be deactivated, over the safety cap of{' '}
                 {report.removePassSafetyCapThreshold}. {report.apply ? 'Nothing was deactivated this run.' : ''} A partial/bad{' '}
                 {displayName} fetch can look exactly like this — double-check the list below before forcing.
               </span>
@@ -139,7 +139,7 @@ export const RedashResyncModal: React.FC<RedashResyncModalProps> = ({ platform, 
                 onClick={() => {
                   if (
                     window.confirm(
-                      `Force-apply the remove pass? This will deactivate ${report.grantsDeactivated} grant(s), above the normal safety cap of ${report.removePassSafetyCapThreshold}. Only do this if you've verified the list below is correct.`,
+                      `Force-apply the remove pass? This will deactivate ${report.removePassOrphansFound} grant(s), above the normal safety cap of ${report.removePassSafetyCapThreshold}. Only do this if you've verified the list below is correct.`,
                     )
                   ) {
                     mutation.mutate({ apply: true, force: true });

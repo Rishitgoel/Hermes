@@ -185,11 +185,11 @@ export const UserAccessModal: React.FC<UserAccessModalProps> = ({ onClose }) => 
     <>
       <div className="modal-overlay" onClick={onClose}>
         <div className="modal-content" style={{ maxWidth: '760px' }} onClick={(e) => e.stopPropagation()}>
-          <div className="modal-header" style={{ alignItems: 'flex-start' }}>
+          <div className="modal-header">
             <div>
               <div className="modal-title">User access</div>
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '3px', lineHeight: 1.4 }}>
-                Check what a user has access to, revoke it, or offboard their accounts across every platform you administer.
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                Audit, revoke, and offboard a user across every platform you administer.
               </div>
             </div>
             <button type="button" className="modal-close-btn" onClick={onClose}>
@@ -206,17 +206,17 @@ export const UserAccessModal: React.FC<UserAccessModalProps> = ({ onClose }) => 
                   style={{
                     display: 'flex',
                     alignItems: 'center',
-                    justifyContent: 'space-between',
-                    paddingBottom: '16px',
-                    marginBottom: '18px',
+                    gap: '12px',
+                    paddingBottom: '12px',
+                    marginBottom: '14px',
                     borderBottom: '1px solid var(--border)',
                   }}
                 >
-                  <div>
-                    <div style={{ fontWeight: 700, fontSize: '14px' }}>{cleanName(selectedUser.userName)}</div>
-                    <div style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{selectedUser.userEmail}</div>
+                  <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <span style={{ fontWeight: 700, fontSize: '14px', whiteSpace: 'nowrap' }}>{cleanName(selectedUser.userName)}</span>
+                    <span style={{ color: 'var(--text-muted)', fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selectedUser.userEmail}</span>
                   </div>
-                  <button type="button" className="btn btn-outline btn-sm" onClick={switchUser}>
+                  <button type="button" className="btn btn-outline btn-sm" style={{ flexShrink: 0 }} onClick={switchUser}>
                     Change user
                   </button>
                 </div>

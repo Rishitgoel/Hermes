@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import * as Icons from 'lucide-react';
 import Modal from '../common/Modal';
 import { queryKeys } from '../../lib/queryKeys';
 import { prettyPlatform, slugify } from './adminUtils';
 import {
   createGroup,
   updateGroup,
+  getAwsSecrets,
   type ManageableGroup,
   type CreateGroupInput,
   type UpdateGroupInput,
@@ -47,6 +49,22 @@ export const GroupFormModal: React.FC<GroupFormModalProps> = ({
   const [description, setDescription] = useState(group?.description ?? '');
   const [externalGroupId, setExternalGroupId] = useState('');
 
+  const isSecrets = platform === 'secrets';
+  const [selectedSecrets, setSelectedSecrets] = useState<string[]>([]);
+  const [secretsSearch, setSecretsSearch] = useState('');
+  const [newPattern, setNewPattern] = useState('');
+
+  // A wildcard/prefix scope ('*' or 'foo*') is not a real AWS secret name — kept
+  // separate from the checklist so it's never badged/swept up alongside literal names.
+  const isPatternScope = (s: string) => s === '*' || s.endsWith('*');
+  const patternSecrets = selectedSecrets.filter(isPatternScope);
+
+  const secretsQuery = useQuery({
+    queryKey: ['admin', 'awsSecrets'],
+    queryFn: getAwsSecrets,
+    enabled: isSecrets,
+  });
+
   // Slug is never asked — it's derived from the name on create (immutable after).
   const derivedSlug = slugify(name);
 
@@ -64,7 +82,9 @@ export const GroupFormModal: React.FC<GroupFormModalProps> = ({
         slug: derivedSlug,
         description: description.trim() || undefined,
         platform,
-        externalGroupId: externalGroupId.trim() || undefined,
+        externalGroupId: isSecrets
+          ? selectedSecrets.filter(Boolean).join('\n')
+          : externalGroupId.trim() || undefined,
       };
       return createGroup(body);
     },
@@ -139,7 +159,7 @@ export const GroupFormModal: React.FC<GroupFormModalProps> = ({
           )}
         </div>
 
-        {!isEdit && (
+        {!isEdit && !isSecrets && (
           <div className="form-group" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
             <label className="form-label">External Group ID — optional</label>
             <input
@@ -150,6 +170,155 @@ export const GroupFormModal: React.FC<GroupFormModalProps> = ({
             />
             <div style={{ fontSize: '11px', color: 'var(--text-light)', marginTop: '4px', lineHeight: 1.4 }}>
               Blank → Hermes creates a new {platform ? prettyPlatform(platform) : 'platform'} group. Paste an ID to link an existing one.
+            </div>
+          </div>
+        )}
+
+        {!isEdit && isSecrets && (
+          <div className="form-group" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+            <label className="form-label">Select AWS Secrets — optional</label>
+
+            <div style={{ marginBottom: '10px', padding: '10px 12px', border: '1px dashed var(--border)', borderRadius: 'var(--radius-md)' }}>
+              <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px' }}>
+                Wildcard / prefix scope — optional
+              </div>
+              {patternSecrets.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '8px' }}>
+                  {patternSecrets.map((pattern) => (
+                    <span
+                      key={pattern}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '3px 8px', borderRadius: '999px', border: '1px solid var(--primary)', fontSize: '12px', fontFamily: 'monospace' }}
+                    >
+                      {pattern === '*' ? 'Every secret (*)' : pattern}
+                      <button
+                        type="button"
+                        title="Remove this scope"
+                        onClick={() => setSelectedSecrets((prev) => prev.filter((s) => s !== pattern))}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 0, display: 'flex' }}
+                      >
+                        <Icons.X size={12} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <input
+                  type="text"
+                  value={newPattern}
+                  onChange={(e) => setNewPattern(e.target.value)}
+                  placeholder="e.g. * or investments*"
+                  style={{ flex: 1, maxWidth: 220, fontSize: '12px', fontFamily: 'monospace', padding: '4px 8px', border: '1px solid var(--border)', borderRadius: '4px' }}
+                />
+                <button
+                  type="button"
+                  className="btn btn-outline"
+                  style={{ fontSize: '11px', padding: '2px 8px', minHeight: 'auto', borderRadius: '4px' }}
+                  onClick={() => {
+                    const p = newPattern.trim();
+                    if (!p) return;
+                    if (p !== '*' && !p.endsWith('*')) {
+                      onError('A pattern must be "*" or end with "*" (e.g. investments*).');
+                      return;
+                    }
+                    setSelectedSecrets((prev) => (prev.includes(p) ? prev : [...prev, p]));
+                    setNewPattern('');
+                  }}
+                >
+                  Add
+                </button>
+              </div>
+              <div style={{ fontSize: '11px', color: 'var(--text-light)', marginTop: '6px', lineHeight: 1.4 }}>
+                Matches every current and future AWS secret starting with the prefix (or literally every secret for &quot;*&quot;) — resolved live, no re-sync needed.
+              </div>
+            </div>
+
+            <div className="admin-secrets-selector">
+              <div className="admin-secrets-search-row">
+                <Icons.Search size={14} className="search-icon" />
+                <input
+                  type="text"
+                  className="admin-secrets-search-input"
+                  placeholder="Filter secrets by name..."
+                  value={secretsSearch}
+                  onChange={(e) => setSecretsSearch(e.target.value)}
+                />
+              </div>
+              
+              {!secretsQuery.isLoading && !secretsQuery.isError && (secretsQuery.data ?? []).length > 0 && (
+                <div style={{ display: 'flex', gap: '8px', padding: '6px 14px', borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-inset)', justifyContent: 'flex-end' }}>
+                  <button
+                    type="button"
+                    className="btn btn-outline"
+                    style={{ fontSize: '11px', padding: '2px 8px', minHeight: 'auto', borderRadius: '4px' }}
+                    onClick={() => {
+                      const filtered = (secretsQuery.data ?? []).filter((name) =>
+                        name.toLowerCase().includes(secretsSearch.trim().toLowerCase())
+                      );
+                      setSelectedSecrets((prev) => [...new Set([...prev, ...filtered])]);
+                    }}
+                  >
+                    Select All
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-outline"
+                    style={{ fontSize: '11px', padding: '2px 8px', minHeight: 'auto', borderRadius: '4px' }}
+                    onClick={() => {
+                      const filtered = (secretsQuery.data ?? []).filter((name) =>
+                        name.toLowerCase().includes(secretsSearch.trim().toLowerCase())
+                      );
+                      setSelectedSecrets((prev) => prev.filter((s) => !filtered.includes(s)));
+                    }}
+                  >
+                    Deselect All
+                  </button>
+                </div>
+              )}
+              
+              <div className="admin-secrets-list">
+                {secretsQuery.isLoading ? (
+                  <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)' }}>Loading AWS secrets...</div>
+                ) : secretsQuery.isError ? (
+                  <div style={{ padding: '20px', textAlign: 'center', color: 'var(--status-rejected-text)', fontSize: '13px', lineHeight: 1.4 }}>
+                    <strong>Failed to load secrets:</strong>
+                    <div style={{ marginTop: '4px', fontFamily: 'monospace', fontSize: '12px' }}>
+                      {(secretsQuery.error as any)?.response?.data?.message || (secretsQuery.error as any)?.message || 'Check AWS configuration.'}
+                    </div>
+                  </div>
+                ) : (
+                  (() => {
+                    const filtered = (secretsQuery.data ?? []).filter((name) =>
+                      name.toLowerCase().includes(secretsSearch.trim().toLowerCase())
+                    );
+                    if (filtered.length === 0) {
+                      return <div className="admin-secrets-empty">No secrets matched.</div>;
+                    }
+                    return filtered.map((name) => {
+                      const isChecked = selectedSecrets.includes(name);
+                      return (
+                        <label key={name} className="admin-secrets-item">
+                          <input
+                            type="checkbox"
+                            className="admin-secrets-checkbox"
+                            checked={isChecked}
+                            onChange={() => {
+                              setSelectedSecrets((prev) =>
+                                isChecked ? prev.filter((s) => s !== name) : [...prev, name]
+                              );
+                            }}
+                          />
+                          <span className="admin-secrets-label">{name}</span>
+                        </label>
+                      );
+                    });
+                  })()
+                )}
+              </div>
+            </div>
+            
+            <div style={{ fontSize: '11px', color: 'var(--text-light)', marginTop: '4px', lineHeight: 1.4 }}>
+              Select the secrets you want members of this group to ingest. You can edit this selection later.
             </div>
           </div>
         )}

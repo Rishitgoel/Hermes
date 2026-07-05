@@ -84,6 +84,11 @@ router.get(
   authenticateToken,
   adminMgmt('listManageablePlatforms'),
 );
+router.get(
+  '/aws-secrets',
+  authenticateToken,
+  adminMgmt('listAwsSecrets'),
+);
 router.get('/users', authenticateToken, adminMgmt('searchUsers'));
 router.get('/groups', authenticateToken, adminMgmt('listManageableGroups'));
 
@@ -143,6 +148,14 @@ router.delete(
 router.post('/groups', authenticateToken, adminMgmt('createGroup'));
 router.put('/groups/:groupId', authenticateToken, adminMgmt('updateGroup'));
 router.delete('/groups/:groupId', authenticateToken, adminMgmt('deleteGroup'));
+
+// Maintenance: idempotently create the "All Secrets" group (super-admin only, enforced in
+// controller). The no-terminal path for standing up the wildcard-all secrets group in prod.
+router.post(
+  '/maintenance/ensure-secrets-group',
+  authenticateToken,
+  adminMgmt('ensureAllSecretsGroup'),
+);
 
 // Members
 router.get(

@@ -23,6 +23,7 @@ import {
   removePlatformAdmin,
   updateGroup,
   migrateZookeeperAcls, // ZooKeeper maintenance: ACL migration (collapsed disclosure)
+  ensureAllSecretsGroup, // Secrets maintenance: idempotently create the wildcard-all group
   type ManageableGroup,
   type PlatformAdminRow,
   type ZookeeperMigrationReport,
@@ -103,6 +104,22 @@ export const AdminManagement: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.adminPlatformAdmins(activePlatform ?? '') });
     },
     onError: (e: any) => toast.error(e.message || 'Failed to remove platform admin.'),
+  });
+
+  // Secrets maintenance — one-click, idempotent setup of the "All Secrets" group (the
+  // no-terminal path for prod). Members of it can ingest into every AWS secret, live-resolved.
+  const ensureSecretsGroupMutation = useMutation({
+    mutationFn: () => ensureAllSecretsGroup(),
+    onSuccess: (res) => {
+      toast.success(
+        res.created
+          ? `"${res.group.name}" created — grants access to every AWS secret.`
+          : `"${res.group.name}" already exists — nothing to do.`,
+      );
+      queryClient.invalidateQueries({ queryKey: queryKeys.adminGroups('secrets') });
+      queryClient.invalidateQueries({ queryKey: queryKeys.groups() });
+    },
+    onError: (e: any) => toast.error(e.message || 'Failed to set up the All-Secrets group.'),
   });
 
   // ZooKeeper ACL migration — a rarely-used maintenance tool that updates existing
@@ -256,6 +273,17 @@ export const AdminManagement: React.FC = () => {
               {superAdmin && (activePlatform === 'redash' || activePlatform === 'redash-qa') && (
                 <button type="button" className="btn btn-outline btn-sm" onClick={() => setShowResync(true)}>
                   <Icons.RefreshCw size={15} /> Sync with {activePlatform === 'redash-qa' ? 'Redash QA' : 'Redash'}
+                </button>
+              )}
+              {superAdmin && activePlatform === 'secrets' && (
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  disabled={ensureSecretsGroupMutation.isPending}
+                  onClick={() => ensureSecretsGroupMutation.mutate()}
+                  title="Idempotently create the 'All Secrets' group (grants every AWS secret, resolved live)"
+                >
+                  <Icons.KeyRound size={15} /> Set up All-Secrets group
                 </button>
               )}
               <button

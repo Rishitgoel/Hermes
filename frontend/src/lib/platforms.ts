@@ -96,6 +96,14 @@ export const PLATFORMS: PlatformMetadata[] = [
     iconName: 'Network',
     color: '#326CE5',
   },
+  {
+    id: 'secrets',
+    name: 'Secret Ingestion',
+    fullName: 'AWS Secrets Manager Ingestion',
+    description: 'Ingest secret key-value pairs into AWS Secrets Manager with approval-gated peer review.',
+    iconName: 'KeyRound',
+    color: '#DD344C',
+  },
 ];
 
 /**

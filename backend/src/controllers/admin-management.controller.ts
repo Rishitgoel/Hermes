@@ -35,6 +35,7 @@ import {
   updateGroupSchema,
 } from '../validations/group.validation';
 import logger from '../utils/logger';
+import secretsManagerService from '../services/secrets-manager.service';
 import { RequestStatus, UserCreationStatus } from '../../generated/hermes';
 
 
@@ -145,6 +146,25 @@ export class AdminManagementController extends BaseController {
       );
     } catch (error) {
       this.handleError(error, 'Failed to retrieve manageable platforms');
+    }
+  }
+
+  // GET /api/admin/aws-secrets — list all available AWS secrets (platform/super admin only).
+  async listAwsSecrets(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      if (!this.getUserId()) {return;}
+      if (!(await isPlatformAdminOf(this.user!, 'secrets'))) {
+        throw new AuthorizationError('You do not have permission to view AWS secrets.');
+      }
+
+      const secrets = await secretsManagerService.listAllAwsSecrets();
+      this.sendResponse(secrets, 'AWS secrets retrieved');
+    } catch (error) {
+      this.handleError(error, 'Failed to retrieve AWS secrets');
     }
   }
 
@@ -551,6 +571,139 @@ export class AdminManagementController extends BaseController {
   }
 
   /**
+   * POST /api/admin/maintenance/ensure-secrets-group — super-admin only.
+   *
+   * Idempotently creates the "All Secrets" group: platform `secrets`, externalGroupId `*`
+   * (the wildcard-all scope, resolved live against AWS). Members of this group can stage
+   * ingestion requests for every secret, including ones added to AWS later. This is the
+   * no-terminal maintenance path for prod — safe to click repeatedly; returns the existing
+   * group if one with the wildcard-all scope is already present.
+   */
+  async ensureAllSecretsGroup(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      if (!this.getUserId()) {return;}
+      if (!isSuperAdmin(this.user!)) {
+        throw new AuthorizationError('Only super admins can run this maintenance action.');
+      }
+      const SECRETS_PLATFORM = 'secrets';
+      const ALL_SCOPE = '*';
+      if (!provisioningRegistry.has(SECRETS_PLATFORM)) {
+        throw new ValidationError(
+          'The Secret Ingestion platform is not enabled on this deployment.',
+        );
+      }
+
+      // Idempotent on the SCOPE, not the name — if a wildcard-all secrets group already
+      // exists (whatever it's called), return it instead of creating a duplicate.
+      const existing = await prisma.group.findFirst({
+        where: { platform: SECRETS_PLATFORM, externalGroupId: ALL_SCOPE },
+      });
+      if (existing) {
+        this.sendResponse(
+          { group: existing, created: false },
+          'All-Secrets group already exists',
+        );
+        return;
+      }
+
+      const uniqueSlug = await this.generateUniqueGroupSlug('all-secrets');
+      let group;
+      try {
+        group = await prisma.group.create({
+          data: {
+            name: 'All Secrets',
+            slug: uniqueSlug,
+            description:
+              'Grants access to every AWS secret (resolved live). Members can stage Secret Ingestion requests for any secret, including ones added later.',
+            platform: SECRETS_PLATFORM,
+            icon: 'KeyRound',
+            color: '#DD344C',
+            tables: [],
+            externalGroupId: ALL_SCOPE,
+          },
+        });
+      } catch (err: any) {
+        if (err?.code === 'P2002') {
+          // Concurrent create race → re-fetch the wildcard-all group and return it.
+          const race = await prisma.group.findFirst({
+            where: { platform: SECRETS_PLATFORM, externalGroupId: ALL_SCOPE },
+          });
+          if (race) {
+            this.sendResponse(
+              { group: race, created: false },
+              'All-Secrets group already exists',
+            );
+            return;
+          }
+          // Otherwise a group NAMED "All Secrets" exists but its scope has
+          // drifted away from '*' (e.g. an admin edited it down via the group
+          // settings UI) — restore the wildcard scope instead of failing, so
+          // this stays a reliable no-terminal recovery path rather than a dead
+          // end once the scope has ever drifted.
+          const drifted = await prisma.group.findUnique({
+            where: { platform_name: { platform: SECRETS_PLATFORM, name: 'All Secrets' } },
+          });
+          if (!drifted) {
+            throw new ConflictError(
+              'A group named "All Secrets" already exists on the Secret Ingestion platform, but it could not be found to restore its scope.',
+            );
+          }
+          const restored = await prisma.group.update({
+            where: { id: drifted.id },
+            data: { externalGroupId: ALL_SCOPE, isActive: true },
+          });
+          await prisma.auditEntry.create({
+            data: {
+              action: 'GROUP_UPDATED',
+              performerId: this.user!.id,
+              performerName: this.user!.username,
+              groupId: restored.id,
+              details: {
+                name: restored.name,
+                slug: restored.slug,
+                platform: SECRETS_PLATFORM,
+                previousExternalGroupId: drifted.externalGroupId,
+                externalGroupId: ALL_SCOPE,
+                maintenance: 'ensure-all-secrets-group-restore',
+              },
+            },
+          });
+          this.sendResponse(
+            { group: restored, created: false, restored: true },
+            'All-Secrets group scope was restored to wildcard-all',
+          );
+          return;
+        }
+        throw err;
+      }
+
+      await prisma.auditEntry.create({
+        data: {
+          action: 'GROUP_CREATED',
+          performerId: this.user!.id,
+          performerName: this.user!.username,
+          groupId: group.id,
+          details: {
+            name: group.name,
+            slug: group.slug,
+            platform: SECRETS_PLATFORM,
+            externalGroupId: group.externalGroupId,
+            maintenance: 'ensure-all-secrets-group',
+          },
+        },
+      });
+
+      this.sendResponse({ group, created: true }, 'All-Secrets group created', 201);
+    } catch (error) {
+      this.handleError(error, 'Failed to set up the All-Secrets group');
+    }
+  }
+
+  /**
    * For each of `emails`, collect the external ids of their OTHER active grants on
    * `platform` (any group except `excludeGroupId`). Handed to `reconcileMembers` as
    * each member's `retainExternalGroupIds` so a multi-target adapter (ZooKeeper) never
@@ -731,10 +884,12 @@ export class AdminManagementController extends BaseController {
 
   // DELETE /api/admin/groups/:groupId
   // Hard-deletes a group only when it's pristine — never referenced by any access
-  // request or user access (those FKs are ON DELETE Restrict, so even a historical
-  // row blocks the delete). Levels and group-admins ON DELETE Cascade away. Anything
-  // with history archives instead (isActive:false): it leaves the request flow
-  // (getGroups filters isActive) while existing members keep access until expiry/revoke.
+  // request, user access (those FKs are ON DELETE Restrict, so even a historical
+  // row blocks the delete), or secret ingestion request (ON DELETE SetNull, so it's
+  // checked explicitly below instead). Levels and group-admins ON DELETE Cascade
+  // away. Anything with history archives instead (isActive:false): it leaves the
+  // request flow (getGroups filters isActive) while existing members keep access
+  // until expiry/revoke.
   async deleteGroup(
     req: Request,
     res: Response,
@@ -765,10 +920,22 @@ export class AdminManagementController extends BaseController {
               `Group has ${activeCount} active member(s). Revoke their access (or wait for it to expire) before deleting permanently.`,
             );
           }
+          const inFlightIngestionCount = await tx.secretIngestionRequest.count({
+            where: { groupId, status: { in: ['PENDING', 'APPLYING'] } },
+          });
+          if (inFlightIngestionCount > 0) {
+            throw new ConflictError(
+              `Group has ${inFlightIngestionCount} in-progress secret ingestion request(s). Resolve them (approve/reject) before deleting permanently.`,
+            );
+          }
           // Order matters: clear rows that FK-reference the group/levels (Restrict)
           // before deleting the group, which then cascades its levels and admins.
+          // secretIngestionRequest's FK is SetNull, not Restrict, so it wouldn't
+          // block group.delete on its own — clear it explicitly so a "permanently
+          // remove...historical rows" force-delete doesn't leave orphaned rows.
           await tx.userAccess.deleteMany({ where: { groupId } });
           await tx.accessRequest.deleteMany({ where: { groupId } });
+          await tx.secretIngestionRequest.deleteMany({ where: { groupId } });
           await tx.group.delete({ where: { id: groupId } });
         });
 
@@ -813,33 +980,39 @@ export class AdminManagementController extends BaseController {
         return;
       }
 
-      let [requestCount, accessCount] = await Promise.all([
+      let [requestCount, accessCount, ingestionCount] = await Promise.all([
         prisma.accessRequest.count({ where: { groupId } }),
         prisma.userAccess.count({ where: { groupId } }),
+        prisma.secretIngestionRequest.count({ where: { groupId } }),
       ]);
 
       // The counts can go stale between the check and the delete (a request
       // created in that window hits the FK Restrict as P2003) — treat that the
       // same as "has history" and fall through to the archive path below.
+      // Note: secretIngestionRequest's FK is SetNull rather than Restrict, so a
+      // request created in that exact same race window would NOT raise P2003 —
+      // the ingestionCount check above closes the common case (existing history
+      // blocks the delete) but can't fully close that narrow race.
       let raced = false;
-      if (requestCount === 0 && accessCount === 0) {
+      if (requestCount === 0 && accessCount === 0 && ingestionCount === 0) {
         try {
           await prisma.group.delete({ where: { id: groupId } });
         } catch (err: any) {
           if (err?.code !== 'P2003') {throw err;}
           raced = true;
-          [requestCount, accessCount] = await Promise.all([
+          [requestCount, accessCount, ingestionCount] = await Promise.all([
             prisma.accessRequest.count({ where: { groupId } }),
             prisma.userAccess.count({ where: { groupId } }),
+            prisma.secretIngestionRequest.count({ where: { groupId } }),
           ]);
           logger.info(
-            { groupId, requestCount, accessCount },
+            { groupId, requestCount, accessCount, ingestionCount },
             'Group delete raced with a new reference — archiving instead',
           );
         }
       }
 
-      if (requestCount === 0 && accessCount === 0 && !raced) {
+      if (requestCount === 0 && accessCount === 0 && ingestionCount === 0 && !raced) {
         // Best-effort removal of the backing platform group — no one is affected
         // (the group had no members or requests). Don't fail the delete on cleanup error.
         if (group.externalGroupId) {

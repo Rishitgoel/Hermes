@@ -51,6 +51,9 @@ export interface UserSession {
   /** Whether to show the ZooKeeper Config page — true when the user holds an active
    *  grant on a `platform='zookeeper'` group (computed server-side in /auth/me). */
   hasZookeeperAccess?: boolean;
+  /** Whether to show the Secret Ingestion page — true when the user holds an active
+   *  grant on a `platform='secrets'` group (computed server-side in /auth/me). */
+  hasSecretsAccess?: boolean;
 }
 
 /** Simulation-mode mock identities (maps to the Bearer tokens the backend accepts). */

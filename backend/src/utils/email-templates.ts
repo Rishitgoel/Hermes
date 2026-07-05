@@ -346,3 +346,75 @@ export function userGroupRejected(opts: { groupName: string; reviewerName: strin
     text: `Your access request to ${opts.groupName} was rejected by ${opts.reviewerName}.${opts.note ? ` Reason: ${opts.note}.` : ''} ${href}`,
   };
 }
+
+export function userSecretsAccountReady(opts: Record<string, never>): EmailContent {
+  const href = url('/secrets');
+  return {
+    subject: '[Hermes] Your Secret Ingestion access is ready',
+    html: layout({
+      heading: 'Your Secret Ingestion access is ready 🎉',
+      bodyHtml: `<p style="margin:0;">Your Secret Ingestion access has been set up. Any approved secret access is now available.</p>`,
+      ctaLabel: 'Open Secret Ingestion',
+      ctaHref: href,
+    }),
+    text: `Your Secret Ingestion access is ready. Any approved secret access is now available. ${href}`,
+  };
+}
+
+export function adminSecretIngestionRequest(opts: {
+  requesterName: string;
+  groupName: string;
+  secretName: string;
+  keyCount: number;
+  justification?: string | null;
+}): EmailContent {
+  const href = url('/pending-approvals');
+  const justificationHtml = opts.justification
+    ? `<p style="margin:12px 0 0;color:${MUTED};font-size:13px;border-left:4px solid ${BORDER};padding-left:12px;font-style:italic;">"${esc(opts.justification)}"</p>`
+    : '';
+  return {
+    subject: `[Hermes] Action required: Secret Ingestion request for ${opts.secretName}`,
+    html: layout({
+      heading: 'Secret Ingestion request received 🔑',
+      bodyHtml: `<p style="margin:0;"><strong>${esc(opts.requesterName)}</strong> submitted a request to ingest <strong>${opts.keyCount} key-value pair(s)</strong> into the AWS secret <strong>${esc(opts.secretName)}</strong> (Group: <strong>${esc(opts.groupName)}</strong>).</p>
+        ${justificationHtml}
+        <p style="margin:14px 0 0;color:${TEXT};">Review the proposed keys and justifications in Hermes to approve or reject them.</p>`,
+      ctaLabel: 'Review Request',
+      ctaHref: href,
+    }),
+    text: `${opts.requesterName} requested to ingest ${opts.keyCount} secret key-value pair(s) into AWS secret ${opts.secretName} (Group: ${opts.groupName}).${opts.justification ? ` Reason: ${opts.justification}` : ''} Review at ${href}`,
+  };
+}
+
+export function userSecretIngestionReviewed(opts: {
+  secretName: string;
+  status: 'APPLIED' | 'PARTIALLY_APPLIED' | 'APPLY_FAILED' | 'REJECTED';
+  reviewerName: string;
+  note?: string;
+  approved: number;
+  rejected: number;
+  failed?: number;
+}): EmailContent {
+  const href = url('/secrets');
+  const summary: Record<typeof opts.status, string> = {
+    APPLIED: `all ${opts.approved} secret(s) were approved and ingested`,
+    PARTIALLY_APPLIED: `${opts.approved} secret(s) approved & ingested, ${opts.rejected} rejected`,
+    APPLY_FAILED: `${opts.approved} secret(s) approved but ${opts.failed ?? 'one or more'} failed to ingest — an admin will follow up`,
+    REJECTED: `your secret ingestion request was rejected`,
+  };
+  const actionText = summary[opts.status];
+  const noteHtml = opts.note ? `<p style="margin:12px 0 0;"><strong>Reviewer Note:</strong> ${esc(opts.note)}</p>` : '';
+  return {
+    subject: `[Hermes] Secret Ingestion request reviewed: ${opts.secretName}`,
+    html: layout({
+      heading: 'Request Reviewed 🔑',
+      bodyHtml: `<p style="margin:0;">Your Secret Ingestion request for <strong>${esc(opts.secretName)}</strong> was reviewed by ${esc(opts.reviewerName)}: <strong>${actionText}</strong>.</p>
+        ${noteHtml}`,
+      ctaLabel: 'Open Secret Ingestion',
+      ctaHref: href,
+    }),
+    text: `Your Secret Ingestion request for ${opts.secretName} was reviewed by ${opts.reviewerName}: ${actionText}.${opts.note ? ` Note: ${opts.note}` : ''} ${href}`,
+  };
+}
+
+

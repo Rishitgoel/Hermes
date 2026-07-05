@@ -3,6 +3,7 @@ import { createRedashProvisioner } from './redash.provisioner';
 import { getRedashService } from './redash.service';
 import { awsProvisioner } from './aws.provisioner';
 import { zookeeperProvisioner } from './zookeeper.provisioner';
+import { secretsProvisioner } from './secrets.provisioner';
 import config from '../config/config';
 import logger from '../utils/logger';
 
@@ -34,6 +35,7 @@ export class ProvisioningRegistry {
     }
     this.register('aws', awsProvisioner);
     this.register('zookeeper', zookeeperProvisioner);
+    this.register('secrets', secretsProvisioner);
   }
 
   /** Add (or replace) the adapter for a platform. Key is lower-cased. */

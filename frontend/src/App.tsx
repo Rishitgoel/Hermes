@@ -16,6 +16,7 @@ import PendingApprovals from './pages/PendingApprovals';
 import AuditLog from './pages/AuditLog';
 import AdminManagement from './pages/AdminManagement';
 import ZookeeperConfig from './pages/ZookeeperConfig';
+import { SecretIngestion } from './pages/SecretIngestion';
 
 import './styles/global.css';
 
@@ -69,6 +70,15 @@ export const App: React.FC = () => {
                   element={
                     <ProtectedRoute allowIf={(u) => !!u.hasZookeeperAccess}>
                       <ZookeeperConfig />
+                    </ProtectedRoute>
+                  }
+                />
+
+                <Route
+                  path="secrets"
+                  element={
+                    <ProtectedRoute allowIf={(u) => !!u.hasSecretsAccess}>
+                      <SecretIngestion />
                     </ProtectedRoute>
                   }
                 />

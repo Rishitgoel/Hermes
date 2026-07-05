@@ -278,6 +278,15 @@ export const config = {
     },
   },
 
+  secrets: {
+    get region() {
+      return process.env.SECRETS_INGESTION_REGION || process.env.AWS_REGION;
+    },
+    get isSimulation() {
+      return process.env.SECRETS_INGESTION_SIMULATION === 'true' || !this.region;
+    },
+  },
+
   frontend: {
     url: process.env.FRONTEND_URL || 'http://localhost:5173',
     allowedOrigins: (

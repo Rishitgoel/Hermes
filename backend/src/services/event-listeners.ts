@@ -155,5 +155,25 @@ export function registerEventListeners(): void {
     }
   });
 
+  // Secret Ingestion lifecycle
+  eventBus.on('secret-ingestion.submitted' as any, async (event) => {
+    try {
+      const { requestId, secretName, groupId, groupName, requesterName, justification, keyCount } = event.payload as any;
+      await notificationService.notifySecretIngestionSubmitted(requestId, groupId, groupName, secretName, requesterName, justification, keyCount);
+    } catch (err: any) {
+      logger.error('Failed to notify secret-ingestion.submitted event:', err.message);
+    }
+  });
+
+  eventBus.on('secret-ingestion.reviewed' as any, async (event) => {
+    try {
+      const { requestId, secretName, status, reviewerName, approvedCount, rejectedCount, failedCount } = event.payload as any;
+      await notificationService.notifySecretIngestionReviewed(requestId, secretName, status, reviewerName, approvedCount, rejectedCount, failedCount);
+    } catch (err: any) {
+      logger.error('Failed to notify secret-ingestion.reviewed event:', err.message);
+    }
+  });
+
+
   logger.info('📡 Event listeners registered.');
 }

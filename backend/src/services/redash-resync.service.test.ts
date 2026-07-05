@@ -448,7 +448,9 @@ describe('redash-resync.service', () => {
 
       const blocked = await resyncRedashMemberships({ platform: 'redash', apply: true, ...performer });
       expect(blocked.removePassBlockedBySafetyCap).toBe(true);
-      expect(blocked.grantsDeactivated).toBe(10); // report shows the true count...
+      expect(blocked.removePassOrphansFound).toBe(10); // found count, for messaging...
+      expect(blocked.grantsDeactivated).toBe(0); // ...but grantsDeactivated reflects reality: nothing written
+      expect(blocked.deactivatedGrants.length).toBe(10); // the review list stays populated regardless
       for (const id of accessIds) {
         const row = await prisma.userAccess.findUnique({ where: { id } });
         expect(row?.isActive).toBe(true); // ...but nothing was actually written

@@ -76,8 +76,13 @@ import logger from '../utils/logger';
 export interface RedashResyncReport extends RedashImportReport {
   // Pass B — remove (grants whose Redash group membership is genuinely gone; a
   // merely-disabled-but-still-member account is intentionally left alone).
+  // grantsDeactivated/deactivatedGrants reflect only what was ACTUALLY written —
+  // both stay 0/empty when the safety cap blocks the run. Use
+  // removePassOrphansFound for "how many orphans this run found" regardless of
+  // whether the cap blocked their deactivation (e.g. the cap-blocked warning).
   grantsDeactivated: number;
   deactivatedGrants: string[];
+  removePassOrphansFound: number;
   activeGrantsSkippedUnmapped: string[];
   removePassSkippedEmptyCache: boolean;
   removePassSkippedUnhealthy: boolean;
@@ -118,6 +123,12 @@ const DRIFT_SUSPECT_STATUSES: UserCreationStatus[] = [
 // grants in one Apply — see the "Safety cap" note above.
 const SAFETY_CAP_MIN_ABSOLUTE = 5;
 const SAFETY_CAP_RATIO = 0.2;
+// The absolute floor exists so a trivial number of orphans (e.g. 1-2) never
+// requires --force. But for a SMALL instance, that same floor can exceed the
+// ratio by a wide margin (e.g. 5 orphans out of 8 active grants is 62%, yet
+// 5 <= the floor) — cap the effective threshold at half the active grants so
+// the floor can never wave through a majority of a small instance unchecked.
+const SAFETY_CAP_MAX_SHARE = 0.5;
 
 // One resync per platform at a time — see "Concurrency lock" note above.
 const inFlight = new Set<string>();
@@ -196,6 +207,7 @@ async function runResync(opts: {
     ...importReport,
     grantsDeactivated: 0,
     deactivatedGrants: [],
+    removePassOrphansFound: 0,
     activeGrantsSkippedUnmapped: [],
     removePassSkippedEmptyCache: false,
     removePassSkippedUnhealthy: false,
@@ -389,22 +401,30 @@ async function runResync(opts: {
       // pagination bug, pointing at the wrong instance) looks exactly like
       // "everyone left." Dry run always shows the full picture; only a real
       // Apply is blocked, and only the destructive removal step.
-      const threshold = Math.max(SAFETY_CAP_MIN_ABSOLUTE, Math.ceil(activeGrants.length * SAFETY_CAP_RATIO));
+      const threshold = Math.min(
+        Math.max(SAFETY_CAP_MIN_ABSOLUTE, Math.ceil(activeGrants.length * SAFETY_CAP_RATIO)),
+        Math.ceil(activeGrants.length * SAFETY_CAP_MAX_SHARE),
+      );
       report.removePassSafetyCapThreshold = threshold;
       const overCap = orphans.length > threshold;
-
-      report.grantsDeactivated = orphans.length;
+      // Always populated regardless of blocking — the modal shows this list so an
+      // admin can review exactly who's affected before deciding whether to force.
+      report.removePassOrphansFound = orphans.length;
       report.deactivatedGrants = orphans.map(
         (o) => `${o.grant.userEmail} → ${o.label} (no longer on ${displayName})`,
       );
 
       if (apply && overCap && !force) {
         report.removePassBlockedBySafetyCap = true;
+        // grantsDeactivated (the bare count) stays 0 — nothing is actually written
+        // when blocked, so the report never claims work that didn't happen. The
+        // list above and removePassOrphansFound still carry the found count/detail.
         logger.warn(
           `${displayName} resync: remove pass blocked — ${orphans.length} grant(s) would be deactivated, over the safety cap of ${threshold} ` +
             `(${Math.round(SAFETY_CAP_RATIO * 100)}% of ${activeGrants.length} active grants). Re-run with force to proceed.`,
         );
       } else {
+        report.grantsDeactivated = orphans.length;
         for (const o of orphans) {
           const reasonText = `no longer on ${displayName}`;
           logger.info(`  ${apply ? '－' : 'would deactivate'} grant: ${o.grant.userEmail} → ${o.label} (${reasonText})`);

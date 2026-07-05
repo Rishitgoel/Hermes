@@ -251,6 +251,13 @@ export async function deleteGroup(groupId: string, force = false): Promise<Delet
   return res.data as DeleteGroupResult;
 }
 
+// Maintenance (super-admin): idempotently create the "All Secrets" group (platform=secrets,
+// externalGroupId='*' — the wildcard-all scope resolved live from AWS). Safe to click twice.
+export async function ensureAllSecretsGroup(): Promise<{ group: GroupRecord; created: boolean }> {
+  const res = await apiClient.post('/api/admin/maintenance/ensure-secrets-group');
+  return res.data as { group: GroupRecord; created: boolean };
+}
+
 // ── Platform admins ──────────────────────────────────────────────────────────
 
 export async function listPlatformAdmins(platform?: string): Promise<PlatformAdminRow[]> {
@@ -403,11 +410,14 @@ export async function importRedashMemberships(apply: boolean, platform = 'redash
 // reconciles requests stuck in WAITING_FOR_SETUP/PROVISIONING/PROVISION_FAILED.
 // Manually triggered — not a cron job. Surfaced as a prominent button in the UI.
 export interface RedashResyncReport extends RedashImportReport {
-  // Grants deactivated because their Redash group membership is genuinely gone. A
-  // merely-disabled-but-still-member account is intentionally left alone (its grant
-  // is preserved so re-enabling the account restores access — see offboarding).
+  // Grants ACTUALLY deactivated because their Redash group membership is genuinely
+  // gone (0/empty when the safety cap blocked the run — see removePassOrphansFound
+  // for "how many were found" regardless of blocking). A merely-disabled-but-still-
+  // member account is intentionally left alone (its grant is preserved so
+  // re-enabling the account restores access — see offboarding).
   grantsDeactivated: number;
   deactivatedGrants: string[];
+  removePassOrphansFound: number;
   activeGrantsSkippedUnmapped: string[];
   removePassSkippedEmptyCache: boolean;
   // True when the platform's health check failed (or threw) — the remove pass
@@ -454,5 +464,10 @@ export interface ZookeeperMigrationReport {
 export async function migrateZookeeperAcls(apply: boolean): Promise<ZookeeperMigrationReport> {
   const res = await apiClient.post('/api/admin/migrate-zookeeper-acls', { apply });
   return res.data as ZookeeperMigrationReport;
+}
+
+export async function getAwsSecrets(): Promise<string[]> {
+  const res = await apiClient.get('/api/admin/aws-secrets');
+  return res.data;
 }
 

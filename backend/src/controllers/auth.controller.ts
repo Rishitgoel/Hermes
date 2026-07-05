@@ -74,8 +74,18 @@ export class AuthController extends BaseController {
         logger.error({ err: err.message, userId: this.user.id }, 'hasZookeeperAccess check failed in /auth/me');
       }
 
+      let hasSecretsAccess = false;
+      try {
+        hasSecretsAccess =
+          (await prisma.userAccess.count({
+            where: { userId: this.user.id, isActive: true, group: { platform: 'secrets' } },
+          })) > 0;
+      } catch (err: any) {
+        logger.error({ err: err.message, userId: this.user.id }, 'hasSecretsAccess check failed in /auth/me');
+      }
+
       this.sendResponse(
-        { ...this.user, userCreation, adminScopes, hasZookeeperAccess },
+        { ...this.user, userCreation, adminScopes, hasZookeeperAccess, hasSecretsAccess },
         'Session authenticated successfully',
       );
     } catch (error) {

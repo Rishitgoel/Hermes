@@ -4,6 +4,7 @@ import accessWorkflowService from './access-workflow.service';
 import syncService from './sync.service';
 import adminReconciliationService from './admin-reconciliation.service';
 import zookeeperConfigService from './zookeeper-config.service';
+import secretIngestionService from './secret-ingestion.service';
 import config from '../config/config';
 import logger from '../utils/logger';
 
@@ -25,6 +26,7 @@ export class SchedulerService {
   private platformSyncJob: ScheduledTask | null = null;
   private adminReconcileJob: ScheduledTask | null = null;
   private zkApplyingSweepJob: ScheduledTask | null = null;
+  private secretIngestionSweepJob: ScheduledTask | null = null;
   private notificationPruneJob: ScheduledTask | null = null;
 
   // Starts all cron jobs (auto-revoke + periodic platform sync + admin reconcile + ZK sweep + notification prune)
@@ -33,6 +35,7 @@ export class SchedulerService {
     this.startPlatformSyncJob();
     this.startAdminReconcileJob();
     this.startZkApplyingSweepJob();
+    this.startSecretIngestionSweepJob();
     this.startNotificationPruneJob();
   }
 
@@ -58,6 +61,11 @@ export class SchedulerService {
       void this.zkApplyingSweepJob.stop();
       this.zkApplyingSweepJob = null;
       logger.info('⏰ Scheduler Service: ZooKeeper APPLYING sweep cron job stopped.');
+    }
+    if (this.secretIngestionSweepJob) {
+      void this.secretIngestionSweepJob.stop();
+      this.secretIngestionSweepJob = null;
+      logger.info('⏰ Scheduler Service: Secret Ingestion APPLYING sweep cron job stopped.');
     }
     if (this.notificationPruneJob) {
       void this.notificationPruneJob.stop();
@@ -128,6 +136,26 @@ export class SchedulerService {
       } catch (err: any) {
         // Never throw out of the cron handler.
         logger.warn(`⏰ Scheduler Service: ZooKeeper APPLYING sweep failed: ${err.message}`);
+      }
+    });
+  }
+
+  private startSecretIngestionSweepJob(): void {
+    // Every 10 minutes in prod, every 5 in dev. Recovers Secret Ingestion requests
+    // orphaned in the transient APPLYING state by a process crash/redeploy mid-apply —
+    // flips them to APPLY_FAILED (retryable) so they re-surface for review.
+    const pattern = config.isDev ? '*/5 * * * *' : '*/10 * * * *';
+    logger.info(`⏰ Scheduler Service: Starting Secret Ingestion APPLYING sweep (pattern: ${pattern}).`);
+
+    this.secretIngestionSweepJob = cron.schedule(pattern, async () => {
+      try {
+        const recovered = await secretIngestionService.sweepStuckApplying();
+        if (recovered > 0) {
+          logger.warn(`⏰ Scheduler Service: Recovered ${recovered} stuck Secret Ingestion change request(s).`);
+        }
+      } catch (err: any) {
+        // Never throw out of the cron handler.
+        logger.warn(`⏰ Scheduler Service: Secret Ingestion APPLYING sweep failed: ${err.message}`);
       }
     });
   }

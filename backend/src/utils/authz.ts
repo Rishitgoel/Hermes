@@ -161,6 +161,31 @@ export async function getDirectGroupAdminSlugs(user: AuthenticatedUser): Promise
 }
 
 /**
+ * Group ids the user can manage/review on a given platform: `all: true` (no
+ * need to enumerate) for a super admin or platform admin of that platform,
+ * otherwise just their direct GroupAdmin assignments scoped to that platform.
+ * The single home for "which groups can this user act on for platform X" —
+ * callers with a per-request workflow (e.g. Secret Ingestion review) should use
+ * this instead of re-deriving admin status inline.
+ */
+export async function getManageableGroupIds(
+  user: AuthenticatedUser,
+  platform: string,
+): Promise<{ all: boolean; groupIds: string[] }> {
+  if (isSuperAdmin(user) || (await isPlatformAdminOf(user, platform))) {
+    return { all: true, groupIds: [] };
+  }
+  const rows = await prisma.groupAdmin.findMany({
+    where: { userId: user.id },
+    include: { group: { select: { platform: true } } },
+  });
+  return {
+    all: false,
+    groupIds: rows.filter((r) => r.group.platform === platform).map((r) => r.groupId),
+  };
+}
+
+/**
  * Resolve the user's admin scopes for the frontend (nav gating + UI scoping) and
  * for server-side request scoping (e.g. pending-approvals). Returned on /auth/me.
  * Derived from the DB mirrors (mirror-authoritative model).

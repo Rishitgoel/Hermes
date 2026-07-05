@@ -397,6 +397,119 @@ export class NotificationService {
     await this.emailAndDm(requesterEmail, email, dm);
   }
 
+  /**
+   * A user proposed a Secret Ingestion request → notify group admins and platform 'secrets' admins.
+   */
+  async notifySecretIngestionSubmitted(
+    requestId: string,
+    groupId: string | null,
+    groupName: string,
+    secretName: string,
+    requesterName: string,
+    justification: string | null,
+    keyCount: number = 0,
+  ): Promise<void> {
+    const slackMsg = `🔑 *Hermes — Secret Ingestion Request*\n--------------------------\n*${escapeSlackText(requesterName)}* proposed ${keyCount} secret key(s) ingestion for *${escapeSlackText(secretName)}* (Group: *${escapeSlackText(groupName)}*).${justification ? `\nReason: "${escapeSlackText(justification)}"` : ''}\n\n👉 Review in Hermes: ${config.frontend.url}/pending-approvals`;
+    await slackService.sendPing(slackMsg);
+
+    // Resolve recipients (group/platform admins) and the super-admin fallback as
+    // two INDEPENDENT steps: a failure resolving group/platform admins must not
+    // skip the fallback, or a transient query error would notify no one at all.
+    let recipients: AdminRecipient[] = [];
+    try {
+      const [groupAdmins, platformAdmins] = await Promise.all([
+        groupId
+          ? prisma.groupAdmin.findMany({ where: { groupId } })
+          : Promise.resolve([] as { userId: string; userEmail: string }[]),
+        prisma.platformAdmin.findMany({ where: { platform: 'secrets' } }),
+      ]);
+      recipients = [
+        ...groupAdmins.map((a) => ({ userId: a.userId, email: a.userEmail })),
+        ...platformAdmins.map((a) => ({ userId: a.userId, email: a.userEmail })),
+      ];
+    } catch (error: any) {
+      logger.error(
+        { requestId, error: error.message },
+        'Failed to resolve group/platform admins for Secret Ingestion notification — falling back to super admins',
+      );
+    }
+
+    if (recipients.length === 0) {
+      try {
+        const supers = await keycloakSetupService.getSuperAdmins();
+        recipients = supers.map((s) => ({ userId: s.id, email: s.email }));
+      } catch (error: any) {
+        logger.error(
+          { requestId, error: error.message },
+          'Failed to resolve super admins for Secret Ingestion notification fallback',
+        );
+      }
+    }
+
+    try {
+      const email = templates.adminSecretIngestionRequest({ requesterName, groupName, secretName, keyCount, justification });
+      const dm = `🔑 *${escapeSlackText(requesterName)}* proposed ${keyCount} secret key(s) ingestion for *${escapeSlackText(secretName)}* (Group: *${escapeSlackText(groupName)}*).${justification ? `\nReason: "${escapeSlackText(justification)}"` : ''}\n👉 ${config.frontend.url}/pending-approvals`;
+
+      const notified = await this.fanOutToAdmins(
+        recipients,
+        {
+          title: 'Secret Ingestion request',
+          message: `${requesterName} proposed ${keyCount} key(s) for ${secretName}.`,
+          link: '/pending-approvals',
+        },
+        email,
+        dm,
+      );
+      if (notified === 0) {
+        logger.warn({ requestId }, 'notifySecretIngestionSubmitted: no admins resolved to notify');
+      }
+    } catch (error: any) {
+      logger.error('Failed to notify Secret Ingestion admins:', error.message);
+    }
+  }
+
+  /**
+   * A Secret Ingestion request was reviewed → notify the requester.
+   */
+  async notifySecretIngestionReviewed(
+    requestId: string,
+    secretName: string,
+    status: 'APPLIED' | 'PARTIALLY_APPLIED' | 'APPLY_FAILED' | 'REJECTED',
+    reviewerName: string,
+    approvedCount: number = 0,
+    rejectedCount: number = 0,
+    failedCount: number = 0,
+  ): Promise<void> {
+    const row = await prisma.secretIngestionRequest.findUnique({
+      where: { id: requestId },
+      select: { requesterId: true, requesterEmail: true, reviewNote: true }
+    });
+    if (!row) {
+      logger.warn({ requestId }, 'notifySecretIngestionReviewed: request not found');
+      return;
+    }
+
+    const summary: Record<typeof status, string> = {
+      APPLIED: `all ${approvedCount} secret(s) were approved and ingested`,
+      PARTIALLY_APPLIED: `${approvedCount} secret(s) approved & ingested, ${rejectedCount} rejected`,
+      APPLY_FAILED: `${approvedCount} secret(s) approved but ${failedCount} failed to ingest — an admin will follow up`,
+      REJECTED: `your secret ingestion request was rejected`,
+    };
+    const line = summary[status];
+    const title = status === 'REJECTED' ? 'Secret Ingestion request rejected' : 'Secret Ingestion request reviewed';
+
+    await this.createNotification(
+      row.requesterId,
+      title,
+      `Your Secret Ingestion request for ${secretName} was reviewed by ${reviewerName}: ${line}.${row.reviewNote ? ` Note: "${row.reviewNote}"` : ''}`,
+      '/secrets',
+    );
+
+    const email = templates.userSecretIngestionReviewed({ secretName, status, reviewerName, note: row.reviewNote || undefined, approved: approvedCount, rejected: rejectedCount, failed: failedCount });
+    const dm = `🔑 Your Secret Ingestion request for *${escapeSlackText(secretName)}* was reviewed by ${escapeSlackText(reviewerName)}: ${escapeSlackText(line)}.${row.reviewNote ? `\nNote: "${escapeSlackText(row.reviewNote)}"` : ''}`;
+    await this.emailAndDm(row.requesterEmail, email, dm);
+  }
+
   // Access is auto-expired
   async notifyAccessExpired(
     userId: string,

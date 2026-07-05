@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../../lib/queryKeys';
 import { useToast } from '../../contexts/ToastContext';
 import { prettyPlatform, reconcileToast } from './adminUtils';
 import ConfirmModal from './ConfirmModal';
 import GroupFormModal from './GroupFormModal';
-import { updateGroup, deleteGroup, type ManageableGroup } from '../../services/api/admin';
+import { updateGroup, deleteGroup, getAwsSecrets, type ManageableGroup } from '../../services/api/admin';
 
 interface GroupSettingsTabProps {
   group: ManageableGroup;
@@ -52,17 +52,72 @@ export const GroupSettingsTab: React.FC<GroupSettingsTabProps> = ({ group, onDel
   // ZooKeeper groups map to a newline-separated list of znode paths, editable here.
   // Saving reconciles existing members onto the new mapping (server-side).
   const isZk = group.platform === 'zookeeper';
-  const [pathsDraft, setPathsDraft] = useState(group.externalGroupId ?? '');
-  // Resync the draft when the canonical value changes — after a save refetch or a
-  // concurrent admin's edit — so the textarea never shows a stale value or a spurious
-  // dirty state. Edits made before any refetch are preserved (the prop is unchanged then).
-  useEffect(() => {
-    setPathsDraft(group.externalGroupId ?? '');
-  }, [group.externalGroupId]);
-  const pathsDirty = pathsDraft.trim() !== (group.externalGroupId ?? '').trim();
+  const isSecrets = group.platform === 'secrets';
 
-  const pathsMutation = useMutation({
-    mutationFn: () => updateGroup(group.id, { externalGroupId: pathsDraft.trim() }),
+  const [pathsDraft, setPathsDraft] = useState(group.externalGroupId ?? '');
+  // Selected secrets checklist state
+  const [selectedSecrets, setSelectedSecrets] = useState<string[]>([]);
+  const [secretsSearch, setSecretsSearch] = useState('');
+  const [newPattern, setNewPattern] = useState('');
+
+  // A wildcard/prefix scope ('*' or 'foo*') is not a real AWS secret name — it's
+  // kept in its own list, editable only via explicit add/remove, so it can never
+  // be mistaken for stale "Not in AWS" data or swept up by Select All/Deselect All.
+  const isPatternScope = (s: string) => s === '*' || s.endsWith('*');
+
+  const secretsQuery = useQuery({
+    queryKey: ['admin', 'awsSecrets'],
+    queryFn: getAwsSecrets,
+    enabled: isSecrets,
+  });
+
+  // Resync the drafts when the canonical value changes — after a save refetch or a
+  // concurrent admin's edit — so the textarea/checklist never shows a stale value.
+  useEffect(() => {
+    if (isZk) {
+      setPathsDraft(group.externalGroupId ?? '');
+    } else if (isSecrets) {
+      const initial = (group.externalGroupId ?? '')
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      setSelectedSecrets(initial);
+    }
+  }, [group.externalGroupId, isZk, isSecrets]);
+
+  const awsSecretsList = secretsQuery.data ?? [];
+  const patternSecrets = React.useMemo(() => selectedSecrets.filter(isPatternScope), [selectedSecrets]);
+  const literalSelectedSecrets = React.useMemo(
+    () => selectedSecrets.filter((s) => !isPatternScope(s)),
+    [selectedSecrets],
+  );
+  // The "Assigned Secrets" summary row reads straight from the saved group (not the
+  // in-progress draft below), so it always reflects what's actually in effect.
+  const assignedScopes = React.useMemo(
+    () => (group.externalGroupId ?? '').split('\n').map((s) => s.trim()).filter(Boolean),
+    [group.externalGroupId],
+  );
+  // Pattern scopes are deliberately excluded here — they're not AWS secret names,
+  // so they never enter the checklist (and can't be badged "Not in AWS" or swept
+  // up by Select All/Deselect All).
+  const allSecretsOptions = React.useMemo(() => {
+    if (!isSecrets) return [];
+    const set = new Set([...awsSecretsList, ...literalSelectedSecrets]);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [awsSecretsList, literalSelectedSecrets, isSecrets]);
+
+  const getCleanedSecretsString = (secArray: string[]) => {
+    return secArray.map((s) => s.trim()).filter(Boolean).sort().join('\n');
+  };
+
+  const pathsDirty = isZk
+    ? pathsDraft.trim() !== (group.externalGroupId ?? '').trim()
+    : isSecrets
+      ? getCleanedSecretsString(selectedSecrets) !== getCleanedSecretsString((group.externalGroupId ?? '').split('\n'))
+      : false;
+
+  const reconcileMutation = useMutation({
+    mutationFn: (externalGroupIdValue: string) => updateGroup(group.id, { externalGroupId: externalGroupIdValue }),
     onSuccess: (res) => {
       const { ok, message } = reconcileToast(res.reconciliation);
       if (ok) {
@@ -72,7 +127,7 @@ export const GroupSettingsTab: React.FC<GroupSettingsTabProps> = ({ group, onDel
       }
       refresh();
     },
-    onError: (e: any) => toast.error(e.message || 'Failed to save paths.'),
+    onError: (e: any) => toast.error(e.message || 'Failed to save changes.'),
   });
 
   const deleteMutation = useMutation({
@@ -120,7 +175,23 @@ export const GroupSettingsTab: React.FC<GroupSettingsTabProps> = ({ group, onDel
         <Row label="Description">{group.description || '—'}</Row>
         <Row label="Platform">{prettyPlatform(group.platform)}</Row>
         <Row label="Slug">{group.slug}</Row>
-        {!isZk && <Row label="External Group ID">{group.externalGroupId || '—'}</Row>}
+        {!isZk && !isSecrets && <Row label="External Group ID">{group.externalGroupId || '—'}</Row>}
+        {isSecrets && (
+          <Row label="Assigned Secrets">
+            {assignedScopes.length === 0 ? (
+              '—'
+            ) : (
+              assignedScopes.map((scope) => (
+                <span
+                  key={scope}
+                  className={`admin-secrets-assigned-chip ${isPatternScope(scope) ? 'is-pattern' : 'is-literal'}`}
+                >
+                  {scope === '*' ? 'Every secret (*)' : scope}
+                </span>
+              ))
+            )}
+          </Row>
+        )}
         <Row label="Tables">{group.tables.length ? group.tables.join(', ') : '—'}</Row>
         <Row label="Status">
           {group.isActive ? (
@@ -162,10 +233,199 @@ export const GroupSettingsTab: React.FC<GroupSettingsTabProps> = ({ group, onDel
             <button
               type="button"
               className="btn btn-primary btn-sm"
-              disabled={!pathsDirty || pathsMutation.isPending || pathsDraft.trim().length === 0}
-              onClick={() => pathsMutation.mutate()}
+              disabled={!pathsDirty || reconcileMutation.isPending || pathsDraft.trim().length === 0}
+              onClick={() => reconcileMutation.mutate(pathsDraft.trim())}
             >
-              {pathsMutation.isPending ? 'Saving…' : 'Save paths'}
+              {reconcileMutation.isPending ? 'Saving…' : 'Save paths'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Secrets: editable checklist of AWS secrets manager secret names */}
+      {isSecrets && (
+        <div style={{ marginBottom: '20px' }}>
+          <div className="admin-section-label" style={{ marginBottom: '6px' }}>Target AWS Secrets</div>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.4, marginBottom: '8px' }}>
+            A member of this group gets access to every secret matched below — the wildcard/prefix
+            scopes <strong>and</strong> the individually checked secrets are combined. Saving reconciles
+            access for all current members immediately.
+          </div>
+
+          <div style={{ marginBottom: '12px', padding: '10px 12px', border: '1px dashed var(--border)', borderRadius: 'var(--radius-md)' }}>
+            <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px' }}>
+              Wildcard / prefix scopes
+            </div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.4, marginBottom: '8px' }}>
+              Matches secret names live — e.g. <code>investments*</code> grants every secret whose name
+              starts with "investments", including ones created later. <code>*</code> grants every secret
+              in the account.
+            </div>
+            {patternSecrets.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '8px' }}>
+                {patternSecrets.map((pattern) => (
+                  <span
+                    key={pattern}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '3px 8px', borderRadius: '999px', border: '1px solid var(--primary)', fontSize: '11.5px', fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" }}
+                  >
+                    {pattern === '*' ? 'Every secret (*)' : pattern}
+                    <button
+                      type="button"
+                      title="Remove this scope"
+                      onClick={() => {
+                        const label = pattern === '*' ? 'every AWS secret' : `every secret matching "${pattern}"`;
+                        if (window.confirm(`Remove this scope? It currently grants access to ${label}. This cannot be undone from here — you'd need to re-add it.`)) {
+                          setSelectedSecrets((prev) => prev.filter((s) => s !== pattern));
+                        }
+                      }}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 0, display: 'flex' }}
+                    >
+                      <Icons.X size={12} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <input
+                type="text"
+                value={newPattern}
+                onChange={(e) => setNewPattern(e.target.value)}
+                placeholder="e.g. * or investments*"
+                style={{ flex: 1, maxWidth: 220, fontSize: '11.5px', fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace", padding: '4px 8px', border: '1px solid var(--border)', borderRadius: '4px' }}
+              />
+              <button
+                type="button"
+                className="btn btn-outline btn-sm"
+                style={{ fontSize: '11px', padding: '2px 8px', minHeight: 'auto' }}
+                onClick={() => {
+                  const p = newPattern.trim();
+                  if (!p) return;
+                  if (p !== '*' && !p.endsWith('*')) {
+                    toast.error('A pattern must be "*" or end with "*" (e.g. investments*).');
+                    return;
+                  }
+                  setSelectedSecrets((prev) => (prev.includes(p) ? prev : [...prev, p]));
+                  setNewPattern('');
+                }}
+              >
+                Add
+              </button>
+            </div>
+          </div>
+
+          <div className="admin-secrets-section-heading">Individual secrets</div>
+          <div className="admin-secrets-selector">
+              <div className="admin-secrets-search-row">
+                <Icons.Search size={14} className="search-icon" />
+                <input
+                  type="text"
+                  className="admin-secrets-search-input"
+                  placeholder="Filter secrets by name..."
+                  value={secretsSearch}
+                  onChange={(e) => setSecretsSearch(e.target.value)}
+                />
+              </div>
+              
+              {!secretsQuery.isLoading && allSecretsOptions.length > 0 && (
+                <div style={{ display: 'flex', gap: '8px', padding: '6px 14px', borderBottom: '1px solid var(--border)', backgroundColor: 'var(--bg-inset)', justifyContent: 'flex-end' }}>
+                  <button
+                    type="button"
+                    className="btn btn-outline"
+                    style={{ fontSize: '11px', padding: '2px 8px', minHeight: 'auto', borderRadius: '4px' }}
+                    onClick={() => {
+                      const filtered = allSecretsOptions.filter((name) =>
+                        name.toLowerCase().includes(secretsSearch.trim().toLowerCase())
+                      );
+                      setSelectedSecrets((prev) => [...new Set([...prev, ...filtered])]);
+                    }}
+                  >
+                    Select All
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-outline"
+                    style={{ fontSize: '11px', padding: '2px 8px', minHeight: 'auto', borderRadius: '4px' }}
+                    onClick={() => {
+                      const filtered = allSecretsOptions.filter((name) =>
+                        name.toLowerCase().includes(secretsSearch.trim().toLowerCase())
+                      );
+                      setSelectedSecrets((prev) => prev.filter((s) => !filtered.includes(s)));
+                    }}
+                  >
+                    Deselect All
+                  </button>
+                </div>
+              )}
+            
+            <div className="admin-secrets-list">
+              {secretsQuery.isError && (
+                <div style={{ margin: '6px', padding: '10px 12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--status-rejected-text)', backgroundColor: 'var(--status-rejected-bg)', color: 'var(--status-rejected-text)', fontSize: '12px', lineHeight: 1.4 }}>
+                  <div style={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' }}>
+                    <Icons.ShieldAlert size={14} />
+                    Failed to query AWS Secrets Manager:
+                  </div>
+                  <div style={{ fontFamily: 'monospace', fontSize: '11px', wordBreak: 'break-all' }}>
+                    {(secretsQuery.error as any)?.response?.data?.message || (secretsQuery.error as any)?.message || 'Check AWS configuration.'}
+                  </div>
+                </div>
+              )}
+
+              {secretsQuery.isLoading ? (
+                <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)' }}>Loading AWS secrets...</div>
+              ) : (
+                (() => {
+                  const filtered = allSecretsOptions.filter((name) =>
+                    name.toLowerCase().includes(secretsSearch.trim().toLowerCase())
+                  );
+                  if (filtered.length === 0) {
+                    return <div className="admin-secrets-empty">No secrets matched.</div>;
+                  }
+                  return filtered.map((name) => {
+                    const isChecked = selectedSecrets.includes(name);
+                    const isPresentInAws = awsSecretsList.includes(name);
+                    return (
+                      <label key={name} className="admin-secrets-item">
+                        <input
+                          type="checkbox"
+                          className="admin-secrets-checkbox"
+                          checked={isChecked}
+                          onChange={() => {
+                            setSelectedSecrets((prev) =>
+                              isChecked ? prev.filter((s) => s !== name) : [...prev, name]
+                            );
+                          }}
+                        />
+                        <span className="admin-secrets-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', width: '100%' }}>
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{name}</span>
+                          {!isPresentInAws && (
+                            <span className="admin-secrets-not-in-aws-badge" title="Selected here but no longer found in AWS Secrets Manager">
+                              Not in AWS
+                            </span>
+                          )}
+                        </span>
+                      </label>
+                    );
+                  });
+                })()
+              )}
+            </div>
+          </div>
+          
+          {selectedSecrets.length === 0 && (
+            <div style={{ fontSize: '12px', color: 'var(--status-rejected-text)', marginTop: '8px', lineHeight: 1.4 }}>
+              Select at least one secret or wildcard scope before saving — a group can't be left with no
+              access target. To remove this group's access entirely, archive or delete the group instead.
+            </div>
+          )}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '8px' }}>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              disabled={!pathsDirty || reconcileMutation.isPending || selectedSecrets.length === 0}
+              onClick={() => reconcileMutation.mutate(selectedSecrets.join('\n'))}
+            >
+              {reconcileMutation.isPending ? 'Saving…' : 'Save secrets'}
             </button>
           </div>
         </div>

@@ -13,6 +13,7 @@ import {
   History,
   ShieldCheck,
   Network,
+  KeyRound,
   LogOut,
   Sparkles
 } from 'lucide-react';
@@ -130,6 +131,16 @@ export const Sidebar: React.FC = () => {
           >
             <Network size={20} />
             <span>ZooKeeper Config</span>
+          </NavLink>
+        )}
+
+        {user?.hasSecretsAccess && (
+          <NavLink
+            to="/secrets"
+            className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+          >
+            <KeyRound size={20} />
+            <span>Secret Ingestion</span>
           </NavLink>
         )}
 

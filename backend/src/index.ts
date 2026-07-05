@@ -14,6 +14,7 @@ import adminRouter from './routes/admin.route';
 import userCreationRouter from './routes/user-creation.route';
 import platformRouter from './routes/platform.route';
 import zookeeperRouter from './routes/zookeeper.route';
+import secretIngestionRouter from './routes/secret-ingestion.route';
 
 import config from './config/config';
 import prisma from './config/prisma';
@@ -110,6 +111,7 @@ app.use('/api/admin', adminRouter);
 app.use('/api/user-creation-requests', userCreationRouter);
 app.use('/api/platforms', platformRouter);
 app.use('/api/zookeeper', zookeeperRouter);
+app.use('/api/secrets', secretIngestionRouter);
 
 // Fallbacks
 app.use(notFoundHandler);
