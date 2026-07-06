@@ -575,9 +575,6 @@ export class AccessWorkflowService {
   ): Promise<{ kind: 'provisioned' | 'queued'; request: AccessRequest }> {
     const group = await prisma.group.findUnique({ where: { id: groupId } });
     if (!group) throw new NotFoundError('Group not found');
-    if (!group.isActive) {
-      throw new ValidationError('This group is archived — restore it before adding members.');
-    }
 
     // Level requiredness — mirrors createRequest exactly.
     const activeLevels = await prisma.groupLevel.findMany({ where: { groupId, isActive: true } });
