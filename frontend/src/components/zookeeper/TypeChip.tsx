@@ -3,7 +3,7 @@ import { TYPE_META, type ValueType } from './zkFormat';
 
 /** Small colored chip labelling a value's inferred type (json/array/num/bool). */
 export const TypeChip: React.FC<{ type: ValueType }> = ({ type }) => {
-  if (type === 'empty' || type === 'string') return null;
+  if (type === 'empty') return null;
   const m = TYPE_META[type];
   return (
     <span
