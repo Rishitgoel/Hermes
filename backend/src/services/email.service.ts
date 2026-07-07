@@ -43,7 +43,11 @@ export class EmailService {
     return this.client;
   }
 
-  async sendEmail({ to, subject, html, text }: SendEmailInput): Promise<void> {
+  async sendEmail({ to, subject: rawSubject, html, text }: SendEmailInput): Promise<void> {
+    // Subjects interpolate user-controlled values (display names, group names).
+    // Strip CR/LF so a crafted name can never smuggle extra headers into the
+    // message — defense-in-depth on top of whatever SES itself rejects.
+    const subject = rawSubject.replace(/[\r\n]+/g, ' ').trim();
     if (!to) {
       logger.warn({ subject }, 'EMAIL: skipped — no recipient address');
       return;
