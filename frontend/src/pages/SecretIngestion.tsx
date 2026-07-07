@@ -18,7 +18,8 @@ const STATUS_BADGE: Record<SecretIngestionRequest['status'], string> = {
   PENDING: 'badge-pending',
   APPLYING: 'badge-pending',
   APPLIED: 'badge-active',
-  PARTIALLY_APPLIED: 'badge-pending',
+  // Terminal-but-mixed — amber with a border, distinct from in-flight PENDING.
+  PARTIALLY_APPLIED: 'badge-warning',
   APPLY_FAILED: 'badge-danger',
   REJECTED: 'badge-danger',
 };
@@ -27,6 +28,27 @@ interface DraftEntry {
   key: string;
   value: string;
 }
+
+/** A secret value shown masked by default, with an eye toggle to reveal (truncated). */
+const MaskedValue: React.FC<{ value: string; maxLen?: number }> = ({ value, maxLen = 40 }) => {
+  const [show, setShow] = useState(false);
+  const display = value.length > maxLen ? `${value.slice(0, maxLen)}...` : value;
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {show ? display : '••••••••'}
+      </span>
+      <button
+        type="button"
+        onClick={() => setShow((s) => !s)}
+        title={show ? 'Hide value' : 'Reveal value'}
+        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 0, lineHeight: 1, display: 'flex', flexShrink: 0 }}
+      >
+        {show ? <Icons.EyeOff size={13} /> : <Icons.Eye size={13} />}
+      </button>
+    </span>
+  );
+};
 
 export const SecretIngestion: React.FC = () => {
   const queryClient = useQueryClient();
@@ -102,12 +124,14 @@ export const SecretIngestion: React.FC = () => {
     return secretOptions.filter((o) => o.secretName.toLowerCase().startsWith(p));
   }, [secretOptions, secretPrefix]);
 
-  // Set default selection if empty
+  // Keep the selection inside the (possibly prefix-filtered) option set: default to the
+  // first option, and reselect when the prefix filter excludes the current selection —
+  // otherwise the form below keeps silently operating on a secret the selector no longer
+  // shows. Clears when the filter matches nothing.
   React.useEffect(() => {
-    if (!selectedSecret && secretOptions.length > 0) {
-      setSelectedSecret(secretOptions[0].secretName);
-    }
-  }, [secretOptions, selectedSecret]);
+    if (prefixFilteredOptions.some((o) => o.secretName === selectedSecret)) return;
+    setSelectedSecret(prefixFilteredOptions[0]?.secretName ?? '');
+  }, [prefixFilteredOptions, selectedSecret]);
 
   // Reset key search when user switches secrets
   React.useEffect(() => {
@@ -224,6 +248,11 @@ export const SecretIngestion: React.FC = () => {
                   ) : !existingKeysData?.exists ? (
                     <div style={{ padding: 12, borderRadius: 6, border: '1px dashed var(--border)', color: 'var(--text-muted)', fontSize: 13 }}>
                       Secret does not exist in AWS yet. Ingestion will create it.
+                    </div>
+                  ) : existingKeysData.keyValueFormat === false ? (
+                    <div style={{ padding: 12, borderRadius: 6, border: '1px dashed #dc2626', color: '#dc2626', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <Icons.AlertTriangle size={15} style={{ flexShrink: 0 }} />
+                      This secret exists but its payload is not key-value JSON — Hermes cannot list or merge keys into it.
                     </div>
                   ) : existingKeysData.keys.length === 0 ? (
                     <div style={{ padding: 12, borderRadius: 6, border: '1px dashed var(--border)', color: 'var(--text-muted)', fontSize: 13 }}>
@@ -356,8 +385,13 @@ export const SecretIngestion: React.FC = () => {
                       Overwrites existing key
                     </span>
                   )}
-                  <span style={{ color: 'var(--text-muted)', fontSize: 12, marginLeft: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 300 }}>
-                    = {d.value.length > 40 ? `${d.value.slice(0, 40)}...` : d.value}
+                  {d.value === '' && (
+                    <span className="badge badge-warning badge-sm" style={{ fontSize: 9, textTransform: 'uppercase' }} title="This entry will set the key to an empty string">
+                      Empty value
+                    </span>
+                  )}
+                  <span style={{ color: 'var(--text-muted)', fontSize: 12, marginLeft: 12, overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: 300, display: 'inline-flex' }}>
+                    =&nbsp;<MaskedValue value={d.value} maxLen={40} />
                   </span>
                   <div style={{ flex: 1 }} />
                   <button type="button" className="btn btn-outline btn-sm" onClick={() => handleRemoveDraft(d.key)} title="Remove" style={{ flexShrink: 0 }}>
@@ -439,11 +473,11 @@ export const SecretIngestion: React.FC = () => {
                                 <Icons.X size={12} style={{ color: '#dc2626' }} />
                               )}
                               <code style={{ fontWeight: 600 }}>{entry.key}</code>
-                              <span style={{ color: 'var(--text-light)' }}>
+                              <span style={{ color: 'var(--text-light)', display: 'inline-flex' }}>
                                 {entry.value === null || entry.value === undefined ? (
                                   <span style={{ fontStyle: 'italic', color: 'var(--text-muted)' }}>(Redacted value)</span>
                                 ) : (
-                                  `= ${entry.value.length > 20 ? `${entry.value.slice(0, 20)}...` : entry.value}`
+                                  <>=&nbsp;<MaskedValue value={entry.value} maxLen={20} /></>
                                 )}
                               </span>
                               {entry.error && <span style={{ color: '#dc2626' }}>· Error: {entry.error}</span>}
