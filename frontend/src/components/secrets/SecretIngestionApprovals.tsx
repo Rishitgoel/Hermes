@@ -10,6 +10,18 @@ import {
   type SecretIngestionEntry,
 } from '../../services/api/secretsApi';
 
+/** ADD = key doesn't exist yet. UPDATE = key exists with a different value. UNCHANGED = key exists with the same value already. */
+const entryKind = (entry: SecretIngestionEntry): 'ADD' | 'UPDATE' | 'UNCHANGED' => {
+  if (entry.previousValue === null || entry.previousValue === undefined) return 'ADD';
+  return entry.previousValue === entry.value ? 'UNCHANGED' : 'UPDATE';
+};
+
+const KIND_STYLES: Record<'ADD' | 'UPDATE' | 'UNCHANGED', { bg: string; color: string }> = {
+  ADD: { bg: '#16a34a', color: '#fff' },
+  UPDATE: { bg: '#d97706', color: '#fff' },
+  UNCHANGED: { bg: 'var(--border)', color: 'var(--text-muted)' },
+};
+
 const AcceptReject: React.FC<{
   decision: 'APPROVED' | 'REJECTED' | undefined;
   onChange: (d: 'APPROVED' | 'REJECTED') => void;
@@ -144,6 +156,12 @@ export const SecretIngestionApprovals: React.FC = () => {
                     Requested ingestion for AWS Secret: <code style={{ fontWeight: 600 }}>{r.secretName}</code>
                     {r.justification ? ` · "${r.justification}"` : ''}
                   </div>
+                  {r.status === 'APPLY_FAILED' && (
+                    <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#dc2626' }}>
+                      <Icons.AlertTriangle size={13} style={{ flexShrink: 0 }} />
+                      Previous apply failed{r.applyError ? ` — ${r.applyError}` : ''}. Re-review to retry.
+                    </div>
+                  )}
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button type="button" className="btn btn-outline btn-sm" onClick={() => setAll(r.id, entryKeys, 'APPROVED')}>
@@ -170,6 +188,8 @@ export const SecretIngestionApprovals: React.FC = () => {
                     {r.entries.map((entry) => {
                       const dec = decisionFor(r.id, entry.key);
                       const rejected = dec === 'REJECTED';
+                      const kind = entryKind(entry);
+                      const kindStyle = KIND_STYLES[kind];
                       return (
                         <tr
                           key={entry.key}
@@ -180,10 +200,23 @@ export const SecretIngestionApprovals: React.FC = () => {
                         >
                           <td>
                             <span
-                              className="badge badge-pending badge-sm"
-                              style={{ textTransform: 'uppercase', fontSize: 10, fontWeight: 700 }}
+                              className="badge badge-sm"
+                              title={
+                                kind === 'UPDATE'
+                                  ? 'This key already exists — its value will be overwritten'
+                                  : kind === 'UNCHANGED'
+                                  ? 'This key already has this exact value'
+                                  : 'This key does not exist yet'
+                              }
+                              style={{
+                                textTransform: 'uppercase',
+                                fontSize: 10,
+                                fontWeight: 700,
+                                background: kindStyle.bg,
+                                color: kindStyle.color,
+                              }}
                             >
-                              ADD
+                              {kind}
                             </span>
                           </td>
                           <td>
@@ -192,6 +225,14 @@ export const SecretIngestionApprovals: React.FC = () => {
                           <td style={{ fontFamily: 'monospace', fontSize: 12 }}>
                             {entry.value === null || entry.value === undefined ? (
                               <span style={{ fontStyle: 'italic', color: 'var(--text-muted)' }}>(Redacted)</span>
+                            ) : kind === 'UPDATE' ? (
+                              <>
+                                <span style={{ textDecoration: 'line-through', color: 'var(--text-muted)' }}>
+                                  {entry.previousValue}
+                                </span>
+                                <span style={{ margin: '0 6px', color: 'var(--text-muted)' }}>→</span>
+                                <span>{entry.value}</span>
+                              </>
                             ) : (
                               entry.value
                             )}

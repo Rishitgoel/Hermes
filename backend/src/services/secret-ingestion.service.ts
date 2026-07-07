@@ -21,6 +21,13 @@ export interface IngestionEntry {
   decision?: IngestionDecision | null;
   applied?: boolean;
   error?: string | null;
+  /**
+   * Live AWS value for this key at read time — attached only for the review-queue
+   * listing (see listIngestionRequests), never persisted. null means the key doesn't
+   * exist yet (this entry is an ADD, not an UPDATE); undefined means it couldn't be
+   * determined (e.g. the secret's current payload isn't key-value JSON).
+   */
+  previousValue?: string | null;
 }
 
 export interface SecretTarget {
@@ -254,25 +261,67 @@ export class SecretIngestionService {
   }
 
   /**
-   * Lists personal requests or pending review requests.
+   * Lists personal requests, or requests awaiting review — PENDING plus retryable
+   * APPLY_FAILED (a failed apply must re-surface in the review queue or it would be
+   * stranded, reachable only from the requester's read-only "mine" list).
    */
   async listIngestionRequests(user: AuthenticatedUser, scope: 'mine' | 'review') {
     if (scope === 'mine') {
       return prisma.secretIngestionRequest.findMany({
         where: { requesterId: user.id },
         orderBy: { createdAt: 'desc' },
+        // Cap the personal history — long-lived users accumulate rows forever.
+        take: 200,
       });
     }
     const { all, groupIds } = await this.reviewableGroupIds(user);
     if (!all && groupIds.length === 0) {
       return [];
     }
-    return prisma.secretIngestionRequest.findMany({
+    const rows = await prisma.secretIngestionRequest.findMany({
       where: {
-        status: 'PENDING',
+        status: { in: ['PENDING', 'APPLY_FAILED'] },
         ...(all ? {} : { groupId: { in: groupIds } }),
       },
       orderBy: { createdAt: 'asc' },
+    });
+    return this.attachPreviousValues(rows);
+  }
+
+  /**
+   * Annotates each entry with the key's CURRENT AWS value, so the approver sees a real
+   * before/after diff instead of just the proposed value. Computed live (not persisted)
+   * since the request may sit pending for a while — by the time it's reviewed, AWS may
+   * have moved on. One getSecretMap call per distinct secret name in the queue.
+   */
+  private async attachPreviousValues<
+    T extends { secretName: string; entries: unknown },
+  >(rows: T[]): Promise<T[]> {
+    const secretNames = [...new Set(rows.map(r => r.secretName))];
+    const mapByName = new Map<string, Record<string, string> | null>();
+    await Promise.all(
+      secretNames.map(async name => {
+        try {
+          mapByName.set(name, await secretsManagerService.getSecretMap(name));
+        } catch (err: any) {
+          logger.warn(
+            { secretName: name, error: err.message },
+            'Could not resolve current value for secret ingestion diff',
+          );
+          mapByName.set(name, null);
+        }
+      }),
+    );
+
+    return rows.map(row => {
+      const currentMap = mapByName.get(row.secretName);
+      const entries = ((row.entries as unknown as IngestionEntry[]) ?? []).map(
+        e => ({
+          ...e,
+          previousValue: currentMap ? currentMap[e.key] ?? null : undefined,
+        }),
+      );
+      return { ...row, entries } as T;
     });
   }
 
@@ -402,7 +451,8 @@ export class SecretIngestionService {
       data: {
         status,
         entries: finalEntries as any,
-        appliedAt: new Date(),
+        // A fully-rejected request never touched AWS — don't stamp an apply time.
+        appliedAt: status === 'REJECTED' ? null : new Date(),
         applyError,
       },
     });

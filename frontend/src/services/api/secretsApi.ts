@@ -9,14 +9,23 @@ export interface SecretScopeEntry {
 export interface SecretKeysResult {
   exists: boolean;
   keys: string[];
+  /** false ⇒ the secret exists but its payload is not key-value JSON (not mergeable). */
+  keyValueFormat?: boolean;
 }
 
 export interface SecretIngestionEntry {
   key: string;
-  value: string;
+  /** null once the request is terminal — values are redacted server-side. */
+  value: string | null;
   decision?: 'APPROVED' | 'REJECTED' | null;
   applied?: boolean;
   error?: string | null;
+  /**
+   * Live AWS value at the time the review queue was loaded (review scope only).
+   * null = key doesn't exist yet (this entry is an ADD). undefined = unknown
+   * (e.g. the secret isn't key-value JSON, or this isn't the review scope).
+   */
+  previousValue?: string | null;
 }
 
 export type SecretIngestionStatus = 'PENDING' | 'APPLYING' | 'APPLIED' | 'PARTIALLY_APPLIED' | 'APPLY_FAILED' | 'REJECTED';
