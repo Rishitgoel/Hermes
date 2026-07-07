@@ -347,6 +347,50 @@ export function userGroupRejected(opts: { groupName: string; reviewerName: strin
   };
 }
 
+export function userAccessRevoked(opts: { groupName: string; revokerName: string; reason?: string }): EmailContent {
+  const href = url('/groups');
+  const reasonHtml = opts.reason ? `<p style="margin:12px 0 0;"><strong>Reason:</strong> ${esc(opts.reason)}</p>` : '';
+  return {
+    subject: `[Hermes] Access revoked: ${opts.groupName}`,
+    html: layout({
+      heading: 'Access revoked',
+      bodyHtml: `<p style="margin:0;">Your access to the <strong>${esc(opts.groupName)}</strong> group was revoked by ${esc(opts.revokerName)}.</p>${reasonHtml}`,
+      ctaLabel: 'View my groups',
+      ctaHref: href,
+    }),
+    text: `Your access to ${opts.groupName} was revoked by ${opts.revokerName}.${opts.reason ? ` Reason: ${opts.reason}.` : ''} ${href}`,
+  };
+}
+
+export function userAccessExpired(opts: { groupName: string }): EmailContent {
+  const href = url('/groups');
+  return {
+    subject: `[Hermes] Access expired: ${opts.groupName}`,
+    html: layout({
+      heading: 'Access expired',
+      bodyHtml: `<p style="margin:0;">Your temporary access to the <strong>${esc(opts.groupName)}</strong> group has expired.</p>`,
+      ctaLabel: 'View my groups',
+      ctaHref: href,
+    }),
+    text: `Your temporary access to ${opts.groupName} has expired. ${href}`,
+  };
+}
+
+export function userAccessExpiringSoon(opts: { groupName: string; expiresAt: Date }): EmailContent {
+  const href = url('/groups');
+  const dateStr = opts.expiresAt.toLocaleDateString();
+  return {
+    subject: `[Hermes] Access expiring soon: ${opts.groupName}`,
+    html: layout({
+      heading: 'Access expiring soon',
+      bodyHtml: `<p style="margin:0;">Your access to the <strong>${esc(opts.groupName)}</strong> group expires on <strong>${esc(dateStr)}</strong>.</p><p style="margin:12px 0 0;">Request a renewal from Hermes if you still need it.</p>`,
+      ctaLabel: 'Request renewal',
+      ctaHref: href,
+    }),
+    text: `Your access to ${opts.groupName} expires on ${dateStr}. Request a renewal in Hermes if you still need it. ${href}`,
+  };
+}
+
 export function userSecretsAccountReady(_opts: Record<string, never>): EmailContent {
   const href = url('/secrets');
   return {

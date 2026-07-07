@@ -49,8 +49,8 @@ export function registerEventListeners(): void {
 
   eventBus.on('access.revoked', async (event) => {
     try {
-      const { userId, groupName, revokerName, reason } = event.payload as any;
-      await notificationService.notifyAccessRevoked(userId, groupName, revokerName, reason);
+      const { userId, userEmail, groupName, revokerName, reason } = event.payload as any;
+      await notificationService.notifyAccessRevoked(userId, groupName, revokerName, reason, userEmail);
     } catch (err: any) {
       logger.error('Failed to notify access.revoked event:', err.message);
     }
@@ -58,10 +58,20 @@ export function registerEventListeners(): void {
 
   eventBus.on('access.expired', async (event) => {
     try {
-      const { userId, groupName } = event.payload as any;
-      await notificationService.notifyAccessExpired(userId, groupName);
+      const { userId, userEmail, groupName } = event.payload as any;
+      await notificationService.notifyAccessExpired(userId, groupName, userEmail);
     } catch (err: any) {
       logger.error('Failed to notify access.expired event:', err.message);
+    }
+  });
+
+  // Pre-expiry heads-up — fired once per grant by the scheduler's warning sweep.
+  eventBus.on('access.expiring', async (event) => {
+    try {
+      const { userId, userEmail, groupName, expiresAt } = event.payload as any;
+      await notificationService.notifyAccessExpiringSoon(userId, groupName, userEmail, expiresAt);
+    } catch (err: any) {
+      logger.error('Failed to notify access.expiring event:', err.message);
     }
   });
 

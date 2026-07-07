@@ -10,6 +10,7 @@ export interface AccessEvent {
     | 'access.granted'
     | 'access.revoked'
     | 'access.expired'
+    | 'access.expiring'
     | 'access.expiry-failed'
     | 'access.queued-for-setup'
     | 'provision.failed'

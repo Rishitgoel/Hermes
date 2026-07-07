@@ -211,6 +211,53 @@ describe('AccessWorkflowService Integration Tests', () => {
       });
       expect(auditExpired).not.toBeNull();
     });
+
+    it('warnExpiringAccess marks the grant warned once and is a no-op on a second call', async () => {
+      const req = await accessWorkflowService.createRequest(
+        testUser,
+        group.id,
+        null,
+        'Need it for query logs',
+        AccessDuration.ONE_DAY,
+      );
+      await accessWorkflowService.reviewRequest(req.id, adminUser, 'APPROVED', 'Looks good to me');
+
+      const userAccess = await prisma.userAccess.findFirst({
+        where: { userId: testUser.id, groupId: group.id, isActive: true },
+      });
+      expect(userAccess?.expiryWarnedAt).toBeNull();
+
+      await accessWorkflowService.warnExpiringAccess(userAccess!.id);
+      const warned = await prisma.userAccess.findUnique({ where: { id: userAccess!.id } });
+      expect(warned?.expiryWarnedAt).not.toBeNull();
+      expect(warned?.isActive).toBe(true); // warning never touches the grant's active state
+
+      // Second call is a no-op: the timestamp does not move.
+      const firstWarnedAt = warned!.expiryWarnedAt;
+      await accessWorkflowService.warnExpiringAccess(userAccess!.id);
+      const warnedAgain = await prisma.userAccess.findUnique({ where: { id: userAccess!.id } });
+      expect(warnedAgain?.expiryWarnedAt?.getTime()).toBe(firstWarnedAt!.getTime());
+    });
+
+    it('warnExpiringAccess is a no-op for a grant that is already inactive', async () => {
+      const req = await accessWorkflowService.createRequest(
+        testUser,
+        group.id,
+        null,
+        'Need it for query logs',
+        AccessDuration.ONE_DAY,
+      );
+      await accessWorkflowService.reviewRequest(req.id, adminUser, 'APPROVED', 'Looks good to me');
+
+      const userAccess = await prisma.userAccess.findFirst({
+        where: { userId: testUser.id, groupId: group.id, isActive: true },
+      });
+      await accessWorkflowService.expireAccess(userAccess!.id);
+
+      await accessWorkflowService.warnExpiringAccess(userAccess!.id);
+      const afterWarn = await prisma.userAccess.findUnique({ where: { id: userAccess!.id } });
+      expect(afterWarn?.expiryWarnedAt).toBeNull();
+    });
   });
 
   describe('Failure Paths & Invariant Protections', () => {

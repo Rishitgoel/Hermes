@@ -192,6 +192,10 @@ model UserAccess {
   expiryAttempts   Int              @default(0) @map("expiry_attempts")
   lastExpiryError  String?          @map("last_expiry_error")
 
+  // Set once the pre-expiry warning notification has been sent, so the scheduler's
+  // daily sweep doesn't re-notify the same grant every run until it actually expires.
+  expiryWarnedAt   DateTime?        @map("expiry_warned_at")
+
   grantedBy        String           @map("granted_by")
   accessRequestId  String?          @map("access_request_id")
 

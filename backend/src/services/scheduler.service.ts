@@ -13,6 +13,13 @@ import logger from '../utils/logger';
 // over a large backlog would hammer the platform and trip its rate limits.
 const EXPIRY_CONCURRENCY = 5;
 
+// How many days ahead of expiry to send the one-time "expiring soon" heads-up.
+const EXPIRY_WARNING_DAYS = 3;
+
+// How many expiry-warning notifications to send concurrently per batch — same
+// rationale as EXPIRY_CONCURRENCY, though this path makes no platform calls.
+const EXPIRY_WARNING_CONCURRENCY = 10;
+
 // Notification retention. Read notifications older than this are pruned (the user
 // has seen them); ANY notification older than the hard cap is pruned regardless of
 // read state, so the table can't grow without bound for a user who never opens the
@@ -23,15 +30,17 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 export class SchedulerService {
   private expiryJob: ScheduledTask | null = null;
+  private expiryWarningJob: ScheduledTask | null = null;
   private platformSyncJob: ScheduledTask | null = null;
   private adminReconcileJob: ScheduledTask | null = null;
   private zkApplyingSweepJob: ScheduledTask | null = null;
   private secretIngestionSweepJob: ScheduledTask | null = null;
   private notificationPruneJob: ScheduledTask | null = null;
 
-  // Starts all cron jobs (auto-revoke + periodic platform sync + admin reconcile + ZK sweep + notification prune)
+  // Starts all cron jobs (auto-revoke + expiry warnings + periodic platform sync + admin reconcile + ZK sweep + notification prune)
   start(): void {
     this.startExpiryJob();
+    this.startExpiryWarningJob();
     this.startPlatformSyncJob();
     this.startAdminReconcileJob();
     this.startZkApplyingSweepJob();
@@ -46,6 +55,11 @@ export class SchedulerService {
       void this.expiryJob.stop();
       this.expiryJob = null;
       logger.info('⏰ Scheduler Service: Expiry cron job stopped.');
+    }
+    if (this.expiryWarningJob) {
+      void this.expiryWarningJob.stop();
+      this.expiryWarningJob = null;
+      logger.info('⏰ Scheduler Service: Expiry warning cron job stopped.');
     }
     if (this.platformSyncJob) {
       void this.platformSyncJob.stop();
@@ -82,6 +96,19 @@ export class SchedulerService {
     this.expiryJob = cron.schedule(pattern, async () => {
       logger.info('⏰ Scheduler Service: Checking for expired access grants...');
       await this.checkAndRevokeExpiredAccess();
+    });
+  }
+
+  private startExpiryWarningJob(): void {
+    // Once daily in prod (09:00); hourly in dev so the behaviour is observable
+    // without waiting a day. This is a heads-up, not a time-critical action, so
+    // unlike the expiry job itself it doesn't need a tight cadence.
+    const pattern = config.isDev ? '0 * * * *' : '0 9 * * *';
+    logger.info(`⏰ Scheduler Service: Starting expiry-warning cron job (pattern: ${pattern}).`);
+
+    this.expiryWarningJob = cron.schedule(pattern, async () => {
+      logger.info('⏰ Scheduler Service: Checking for soon-to-expire access grants...');
+      await this.checkAndWarnExpiringAccess();
     });
   }
 
@@ -240,6 +267,50 @@ export class SchedulerService {
       logger.info('⏰ Scheduler Service: Completed processing expired access grants.');
     } catch (error: any) {
       logger.error('⏰ Scheduler Service: Fatal error during expiry scan:', error.message);
+    }
+  }
+
+  // Scan DB for grants expiring within EXPIRY_WARNING_DAYS that haven't been warned yet
+  async checkAndWarnExpiringAccess(): Promise<void> {
+    try {
+      const now = new Date();
+      const warningWindowEnd = new Date(now.getTime() + EXPIRY_WARNING_DAYS * DAY_MS);
+      const soonToExpire = await prisma.userAccess.findMany({
+        where: {
+          isActive: true,
+          expiryWarnedAt: null,
+          expiresAt: {
+            gt: now,
+            lte: warningWindowEnd,
+          },
+        },
+      });
+
+      if (soonToExpire.length === 0) {
+        logger.info('⏰ Scheduler Service: No soon-to-expire access grants found.');
+        return;
+      }
+
+      logger.info(`⏰ Scheduler Service: Found ${soonToExpire.length} soon-to-expire access grant(s). Sending warnings...`);
+
+      for (let i = 0; i < soonToExpire.length; i += EXPIRY_WARNING_CONCURRENCY) {
+        const batch = soonToExpire.slice(i, i + EXPIRY_WARNING_CONCURRENCY);
+        const results = await Promise.allSettled(
+          batch.map(grant => accessWorkflowService.warnExpiringAccess(grant.id)),
+        );
+        results.forEach((result, j) => {
+          if (result.status === 'rejected') {
+            logger.error(
+              `⏰ Scheduler Service: Error warning grant ${batch[j].id}:`,
+              result.reason?.message ?? result.reason,
+            );
+          }
+        });
+      }
+
+      logger.info('⏰ Scheduler Service: Completed processing expiry warnings.');
+    } catch (error: any) {
+      logger.error('⏰ Scheduler Service: Fatal error during expiry-warning scan:', error.message);
     }
   }
 }

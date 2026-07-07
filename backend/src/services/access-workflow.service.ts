@@ -1607,6 +1607,7 @@ export class AccessWorkflowService {
       type: 'access.revoked',
       payload: {
         userId: access.userId,
+        userEmail: access.userEmail,
         groupName: access.group.name,
         revokerName: revoker.username,
         reason,
@@ -1705,7 +1706,36 @@ export class AccessWorkflowService {
       type: 'access.expired',
       payload: {
         userId: access.userId,
+        userEmail: access.userEmail,
         groupName: access.group.name,
+      },
+      timestamp: new Date(),
+    });
+  }
+
+  // Pre-expiry heads-up (Scheduler Job). Marks the grant warned so the daily sweep
+  // never re-notifies it, then fires the notification. No-op if the grant already
+  // expired/was revoked, or was warned, since the last sweep.
+  async warnExpiringAccess(userAccessId: string) {
+    const access = await prisma.userAccess.findUnique({
+      where: { id: userAccessId },
+      include: { group: true },
+    });
+
+    if (!access || !access.isActive || access.expiryWarnedAt) return;
+
+    await prisma.userAccess.update({
+      where: { id: userAccessId },
+      data: { expiryWarnedAt: new Date() },
+    });
+
+    eventBus.emitAccessEvent({
+      type: 'access.expiring',
+      payload: {
+        userId: access.userId,
+        userEmail: access.userEmail,
+        groupName: access.group.name,
+        expiresAt: access.expiresAt,
       },
       timestamp: new Date(),
     });

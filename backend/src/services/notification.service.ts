@@ -513,7 +513,8 @@ export class NotificationService {
   // Access is auto-expired
   async notifyAccessExpired(
     userId: string,
-    groupName: string
+    groupName: string,
+    userEmail?: string,
   ): Promise<void> {
     const title = 'Access Expired';
     const message = `Your temporary access to ${groupName} group has expired.`;
@@ -522,6 +523,27 @@ export class NotificationService {
 
     const slackMsg = `⏳ *Hermes Access Expired*\n--------------------------\nAccess to *${escapeSlackText(groupName)}* group has expired for User ID: ${escapeSlackText(userId)}`;
     await slackService.sendPing(slackMsg);
+
+    const dm = `⏳ Your access to *${escapeSlackText(groupName)}* has expired.\n👉 ${config.frontend.url}/groups`;
+    await this.emailAndDm(userEmail, templates.userAccessExpired({ groupName }), dm);
+  }
+
+  // Pre-expiry heads-up — sent once per grant by the scheduler's warning sweep,
+  // ahead of the actual auto-revoke in notifyAccessExpired.
+  async notifyAccessExpiringSoon(
+    userId: string,
+    groupName: string,
+    userEmail: string | undefined,
+    expiresAt: Date | string,
+  ): Promise<void> {
+    const expiresAtDate = new Date(expiresAt);
+    const title = 'Access Expiring Soon';
+    const message = `Your access to ${groupName} group expires on ${expiresAtDate.toLocaleDateString()}.`;
+
+    await this.createNotification(userId, title, message, '/groups');
+
+    const dm = `⏳ Your access to *${escapeSlackText(groupName)}* expires on ${expiresAtDate.toLocaleDateString()}. Request a renewal if you still need it.\n👉 ${config.frontend.url}/groups`;
+    await this.emailAndDm(userEmail, templates.userAccessExpiringSoon({ groupName, expiresAt: expiresAtDate }), dm);
   }
 
   // Auto-expiry permanently failed after retries — alert super admins + the platform
@@ -573,7 +595,8 @@ export class NotificationService {
     userId: string,
     groupName: string,
     revokerName: string,
-    reason?: string
+    reason?: string,
+    userEmail?: string,
   ): Promise<void> {
     const title = 'Access Revoked';
     const message = `Your access to ${groupName} group was revoked by ${revokerName}.${reason ? ` Reason: "${reason}"` : ''}`;
@@ -582,6 +605,9 @@ export class NotificationService {
 
     const slackMsg = `🚫 *Hermes Access Revoked*\n--------------------------\nAccess to *${escapeSlackText(groupName)}* group was revoked by ${escapeSlackText(revokerName)} for User ID: ${escapeSlackText(userId)}.${reason ? `\nReason: "${escapeSlackText(reason)}"` : ''}`;
     await slackService.sendPing(slackMsg);
+
+    const dm = `🚫 Your access to *${escapeSlackText(groupName)}* was revoked by ${escapeSlackText(revokerName)}.${reason ? `\nReason: "${escapeSlackText(reason)}"` : ''}\n👉 ${config.frontend.url}/groups`;
+    await this.emailAndDm(userEmail, templates.userAccessRevoked({ groupName, revokerName, reason }), dm);
   }
 
   /** Human-friendly platform name for user-facing copy. */
