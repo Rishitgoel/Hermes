@@ -70,18 +70,43 @@ export const detectType = (raw: string | null): ValueType => {
   return 'string';
 };
 
-/** Compact single-line preview (JSON minified) for the read view. */
+// Hard cap for single-line previews. A large minified JSON is one unbreakable token —
+// without a cap it blows out the row layout, and CSS ellipsis alone still leaves a huge
+// string in the DOM. The full value is surfaced via tooltipValue() on hover instead.
+const PREVIEW_MAX_CHARS = 160;
+
+/** Compact single-line preview (JSON minified, length-capped) for the read view. */
 export const previewValue = (raw: string | null): string => {
   if (raw == null) return '';
   const ty = detectType(raw);
+  let out = raw;
   if (ty === 'json' || ty === 'array') {
     try {
-      return JSON.stringify(JSON.parse(raw));
+      out = JSON.stringify(JSON.parse(raw));
     } catch {
-      return raw;
+      /* not valid JSON after all — preview verbatim */
     }
   }
-  return raw;
+  return out.length > PREVIEW_MAX_CHARS ? `${out.slice(0, PREVIEW_MAX_CHARS)}…` : out;
+};
+
+/**
+ * Hover tooltip for a value preview: pretty-printed JSON (readable, unlike the minified
+ * preview), capped so a megabyte value can't produce an absurd tooltip. undefined for
+ * empty values so no empty tooltip flashes.
+ */
+export const tooltipValue = (raw: string | null): string | undefined => {
+  if (raw == null || raw === '') return undefined;
+  const ty = detectType(raw);
+  let out = raw;
+  if (ty === 'json' || ty === 'array') {
+    try {
+      out = JSON.stringify(JSON.parse(raw), null, 2);
+    } catch {
+      /* not valid JSON after all — show verbatim */
+    }
+  }
+  return out.length > 2000 ? `${out.slice(0, 2000)}…` : out;
 };
 
 export const parsesAsJson = (s: string): boolean => {

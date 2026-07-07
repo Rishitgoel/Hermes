@@ -9,6 +9,7 @@ import {
   reviewZkChangeRequest,
   type ZkChange,
   type ZkChangeDecision,
+  type ZkChangeRequest,
 } from '../../services/api/zookeeperApi';
 import { ACTION_COLOR, INDENT, ROW_TINT } from './zkFormat';
 import { ActionBadge, ZkDiff, ZkRow } from './ZkRow';
@@ -90,7 +91,20 @@ const ChangeNode: React.FC<{
           </>
         }
         body={change && <ZkDiff change={change} />}
-        actions={change && <AcceptReject decision={decision as ZkChangeDecision} onChange={(d) => setDecision(change.path, d)} />}
+        actions={
+          change &&
+          (change.applied ? (
+            <span
+              className="badge badge-active badge-sm"
+              style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 4 }}
+              title="Applied in a previous attempt — cannot be changed"
+            >
+              <Icons.Check size={11} /> Applied
+            </span>
+          ) : (
+            <AcceptReject decision={decision as ZkChangeDecision} onChange={(d) => setDecision(change.path, d)} />
+          ))
+        }
         tint={change ? ROW_TINT[change.action] : undefined}
         dim={rejected}
       />
@@ -127,7 +141,14 @@ const ZkChangeApprovals: React.FC = () => {
     refetchOnMount: 'always',
   });
 
-  const decisionFor = (reqId: string, path: string): ZkChangeDecision => decisions[reqId]?.[path] ?? 'APPROVED';
+  // Defaults: a change already applied by a previous attempt (APPLY_FAILED retry) is
+  // locked APPROVED (the backend enforces this too); a change the previous review
+  // rejected defaults to REJECTED again; everything else defaults to APPROVED.
+  const decisionFor = (r: ZkChangeRequest, path: string): ZkChangeDecision => {
+    const change = r.changes.find((c) => c.path === path);
+    if (change?.applied) return 'APPROVED';
+    return decisions[r.id]?.[path] ?? (change?.decision === 'REJECTED' ? 'REJECTED' : 'APPROVED');
+  };
   const setDecision = (reqId: string, path: string, value: ZkChangeDecision) =>
     setDecisions((prev) => ({ ...prev, [reqId]: { ...prev[reqId], [path]: value } }));
   const setAll = (reqId: string, paths: string[], value: ZkChangeDecision) =>
@@ -143,12 +164,12 @@ const ZkChangeApprovals: React.FC = () => {
     onError: (err: any) => toast.error(err?.message || 'Failed to review change request.'),
   });
 
-  const submit = (reqId: string, changes: ZkChange[]) => {
+  const submit = (r: ZkChangeRequest) => {
     reviewMutation.mutate({
-      id: reqId,
+      id: r.id,
       payload: {
-        decisions: changes.map((c) => ({ path: c.path, decision: decisionFor(reqId, c.path) })),
-        note: notes[reqId]?.trim() || undefined,
+        decisions: r.changes.map((c) => ({ path: c.path, decision: decisionFor(r, c.path) })),
+        note: notes[r.id]?.trim() || undefined,
       },
     });
   };
@@ -162,7 +183,7 @@ const ZkChangeApprovals: React.FC = () => {
         {requests.map((r) => {
           const busy = reviewMutation.isPending && reviewMutation.variables?.id === r.id;
           const paths = r.changes.map((c) => c.path);
-          const approvedCount = r.changes.filter((c) => decisionFor(r.id, c.path) === 'APPROVED').length;
+          const approvedCount = r.changes.filter((c) => decisionFor(r, c.path) === 'APPROVED').length;
           const tree = buildChangeTree(r.changes);
           return (
             <div key={r.id} className="table-container" style={{ padding: 16 }}>
@@ -175,6 +196,12 @@ const ZkChangeApprovals: React.FC = () => {
                   <div style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 2 }}>
                     {r.changes.length} change(s){r.justification ? ` · "${r.justification}"` : ''}
                   </div>
+                  {r.status === 'APPLY_FAILED' && (
+                    <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#dc2626' }}>
+                      <Icons.AlertTriangle size={13} style={{ flexShrink: 0 }} />
+                      Previous apply failed{r.applyError ? ` — ${r.applyError}` : ''}. Re-review to retry; already-applied changes are locked.
+                    </div>
+                  )}
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button type="button" className="btn btn-outline btn-sm" onClick={() => setAll(r.id, paths, 'APPROVED')}>
@@ -189,7 +216,7 @@ const ZkChangeApprovals: React.FC = () => {
               {/* Requested changes as a directory tree with per-change accept/reject */}
               <div style={{ marginTop: 12, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
                 {[...tree.children.values()].map((n) => (
-                  <ChangeNode key={n.path} node={n} decisionFor={(p) => decisionFor(r.id, p)} setDecision={(p, d) => setDecision(r.id, p, d)} />
+                  <ChangeNode key={n.path} node={n} decisionFor={(p) => decisionFor(r, p)} setDecision={(p, d) => setDecision(r.id, p, d)} />
                 ))}
               </div>
 
@@ -201,7 +228,7 @@ const ZkChangeApprovals: React.FC = () => {
                   onChange={(e) => setNotes((prev) => ({ ...prev, [r.id]: e.target.value }))}
                   style={{ flex: 1, height: 34 }}
                 />
-                <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => submit(r.id, r.changes)}>
+                <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => submit(r)}>
                   {busy ? <Icons.Loader size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Icons.Send size={14} />}
                   Apply review ({approvedCount}✓ / {r.changes.length - approvedCount}✗)
                 </button>

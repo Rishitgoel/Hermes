@@ -23,7 +23,14 @@ export const submitZkChangeSchema = z.object({
   changes: z
     .array(zkChangeSchema)
     .min(1, 'At least one change is required')
-    .max(200, 'Cannot submit more than 200 changes at once'),
+    .max(200, 'Cannot submit more than 200 changes at once')
+    // Review decisions are keyed by path — the same (path, action) twice would share
+    // one decision and apply twice, so reject it. Different actions on one path stay
+    // allowed (e.g. CREATE followed by SET is a legitimate staged sequence).
+    .refine(
+      changes => new Set(changes.map(c => `${c.action} ${c.path}`)).size === changes.length,
+      'Duplicate changes (same path and action) are not allowed in a single request'
+    ),
 });
 
 // Per-change decisions (git-style): each change is approved or rejected independently.

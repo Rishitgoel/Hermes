@@ -13,7 +13,7 @@ import {
   type ZkChange,
   type ZkChangeRequest,
 } from '../services/api/zookeeperApi';
-import { ACTION_COLOR, INDENT, ROW_TINT, ZK_ROW_FONT, detectType, parsesAsJson, previewValue } from '../components/zookeeper/zkFormat';
+import { ACTION_COLOR, INDENT, ROW_TINT, ZK_ROW_FONT, detectType, parsesAsJson, previewValue, tooltipValue } from '../components/zookeeper/zkFormat';
 import { TypeChip } from '../components/zookeeper/TypeChip';
 import { ActionBadge, ZkDiff, ZkRow } from '../components/zookeeper/ZkRow';
 
@@ -39,7 +39,8 @@ const STATUS_BADGE: Record<ZkChangeRequest['status'], string> = {
   PENDING: 'badge-pending',
   APPLYING: 'badge-pending',
   APPLIED: 'badge-active',
-  PARTIALLY_APPLIED: 'badge-pending',
+  // Terminal-but-mixed — amber with a border, distinct from in-flight PENDING.
+  PARTIALLY_APPLIED: 'badge-warning',
   APPLY_FAILED: 'badge-danger',
   REJECTED: 'badge-danger',
 };
@@ -219,7 +220,9 @@ export const ZookeeperConfig: React.FC = () => {
                 <code style={{ fontSize: ZK_ROW_FONT, color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0, flexShrink: 1 }}>
                   {d.path}
                 </code>
-                <div style={{ flexShrink: 0 }}>
+                {/* Must be allowed to shrink — a large JSON value ellipsizes inside ZkDiff's
+                    chips instead of pushing the row wider than the panel. */}
+                <div style={{ flexShrink: 1, minWidth: 0 }}>
                   <ZkDiff change={d} />
                 </div>
                 <div style={{ flex: 1 }} />
@@ -290,14 +293,23 @@ export const ZookeeperConfig: React.FC = () => {
                         <summary style={{ cursor: 'pointer', color: 'var(--text-muted)' }}>{r.changes.length} change(s)</summary>
                         <div style={{ marginTop: 8 }}>
                           {r.changes.map((c, i) => (
-                            <div key={i} style={{ fontSize: 12, padding: '2px 0', fontFamily: 'monospace', display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                              {c.decision === 'APPROVED' && c.applied && <Icons.Check size={12} style={{ color: '#16a34a' }} />}
-                              {c.decision === 'APPROVED' && c.applied === false && <Icons.AlertTriangle size={12} style={{ color: '#dc2626' }} />}
-                              {c.decision === 'REJECTED' && <Icons.X size={12} style={{ color: '#dc2626' }} />}
-                              <span style={{ color: ACTION_COLOR[c.action], fontWeight: 700 }}>{c.action}</span>
-                              <span>{c.path}</span>
-                              {c.action !== 'DELETE' && c.action !== 'CLEAR' && <span style={{ color: 'var(--text-muted)' }}>→ {previewValue(c.newValue ?? '')}</span>}
-                              {c.groupName && <span style={{ color: 'var(--text-light)' }}>({c.groupName})</span>}
+                            <div key={i} style={{ fontSize: 12, padding: '2px 0', fontFamily: 'monospace', display: 'flex', alignItems: 'baseline', gap: 6, minWidth: 0 }}>
+                              {c.decision === 'APPROVED' && c.applied && <Icons.Check size={12} style={{ color: '#16a34a', flexShrink: 0 }} />}
+                              {c.decision === 'APPROVED' && c.applied === false && <Icons.AlertTriangle size={12} style={{ color: '#dc2626', flexShrink: 0 }} />}
+                              {c.decision === 'REJECTED' && <Icons.X size={12} style={{ color: '#dc2626', flexShrink: 0 }} />}
+                              <span style={{ color: ACTION_COLOR[c.action], fontWeight: 700, flexShrink: 0 }}>{c.action}</span>
+                              <span style={{ flexShrink: 0 }}>{c.path}</span>
+                              {c.action !== 'DELETE' && c.action !== 'CLEAR' && (
+                                // Large JSON values are one unbreakable token — shrink + ellipsize,
+                                // full pretty-printed value on hover.
+                                <span
+                                  title={tooltipValue(c.newValue ?? null)}
+                                  style={{ color: 'var(--text-muted)', minWidth: 0, flexShrink: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                                >
+                                  → {previewValue(c.newValue ?? '')}
+                                </span>
+                              )}
+                              {c.groupName && <span style={{ color: 'var(--text-light)', flexShrink: 0 }}>({c.groupName})</span>}
                               {c.error && <span style={{ color: '#dc2626' }}>· {c.error}</span>}
                             </div>
                           ))}
@@ -527,6 +539,7 @@ const ZkTreeNode: React.FC<ZkTreeNodeProps> = ({ node, drafts, stageDraft, remov
   // No type chip on the read view; the inferred type is only surfaced while editing (below).
   const leafValue = (
     <span
+      title={ownValue ? tooltipValue(ownValue) : undefined}
       style={{
         fontFamily: 'monospace',
         fontSize: ZK_ROW_FONT,

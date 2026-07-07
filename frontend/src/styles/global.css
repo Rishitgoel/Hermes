@@ -879,14 +879,22 @@ a:focus-visible {
   color: var(--status-pending-text);
 }
 
-.badge-approved, .badge-provisioned {
+.badge-approved, .badge-provisioned, .badge-active {
   background-color: var(--status-approved-bg);
   color: var(--status-approved-text);
 }
 
-.badge-rejected, .badge-provision-failed {
+.badge-rejected, .badge-provision-failed, .badge-danger {
   background-color: var(--status-rejected-bg);
   color: var(--status-rejected-text);
+}
+
+/* Terminal-but-mixed outcomes (e.g. PARTIALLY_APPLIED) — amber like pending, but
+   bordered so it reads as a final state, not an in-flight one. */
+.badge-warning {
+  background-color: var(--status-pending-bg);
+  color: var(--status-pending-text);
+  border: 1px solid var(--status-pending-text);
 }
 
 .badge-revoked, .badge-expired {

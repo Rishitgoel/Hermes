@@ -439,20 +439,23 @@ export class ZookeeperConfigService {
     };
   }
 
-  /** `scope='mine'` → the caller's own; `scope='review'` → PENDING requests touching any
-   *  group the caller can review. */
+  /** `scope='mine'` → the caller's own; `scope='review'` → requests awaiting review
+   *  (PENDING, plus retryable APPLY_FAILED — recovered/failed applies must re-surface in
+   *  the review queue or they'd be stranded) touching any group the caller can review. */
   async listChangeRequests(user: AuthenticatedUser, scope: 'mine' | 'review') {
     if (scope === 'mine') {
       return prisma.zookeeperChangeRequest.findMany({
         where: { requesterId: user.id },
         orderBy: { createdAt: 'desc' },
+        // Cap the personal history — long-lived users accumulate rows forever.
+        take: 200,
       });
     }
     const { all, groupIds } = await this.reviewableGroupIds(user);
     if (!all && groupIds.length === 0) {return [];}
     return prisma.zookeeperChangeRequest.findMany({
       where: {
-        status: 'PENDING',
+        status: { in: ['PENDING', 'APPLY_FAILED'] },
         ...(all ? {} : { groupIds: { hasSome: groupIds } }),
       },
       orderBy: { createdAt: 'asc' },
@@ -505,8 +508,11 @@ export class ZookeeperConfigService {
 
   /**
    * Review a request with PER-CHANGE decisions (git-style). Approved changes are applied;
-   * everything else (explicitly rejected, or not listed) is rejected. The request is then
-   * terminal — a rejected change is re-staged in a new request if still needed.
+   * everything else (explicitly rejected, or not listed) is rejected. APPLY_FAILED is
+   * retryable — re-review is allowed from that status too (the sweep recovers crashed
+   * applies into it), so a failed apply can't strand the request. On retry, changes that
+   * already applied on a previous attempt are locked APPROVED and not re-applied (they
+   * cannot be un-applied; re-running a SET would also trip its lost-update guard).
    */
   async reviewChangeRequest(
     requestId: string,
@@ -518,13 +524,13 @@ export class ZookeeperConfigService {
       where: { id: requestId },
     });
     if (!row) {throw new NotFoundError('Change request not found');}
-    if (row.status !== 'PENDING')
+    if (row.status !== 'PENDING' && row.status !== 'APPLY_FAILED')
       {throw new ValidationError(
-        `Request is not pending (status: ${row.status}).`,
+        `Request is not pending or retryable (status: ${row.status}).`,
       );}
 
     const result = await prisma.zookeeperChangeRequest.updateMany({
-      where: { id: requestId, status: 'PENDING' },
+      where: { id: requestId, status: { in: ['PENDING', 'APPLY_FAILED'] } },
       data: {
         status: 'APPLYING',
         reviewerId: reviewer.id,
@@ -543,10 +549,14 @@ export class ZookeeperConfigService {
     const changes = ((row.changes as unknown as ZkChange[]) ?? []).map(c => ({
       ...c,
     }));
-    // Unlisted ⇒ rejected, so nothing is silently applied.
+    // Unlisted ⇒ rejected, so nothing is silently applied. Changes that already applied
+    // on a previous attempt (APPLY_FAILED retry) are locked APPROVED — see doc above.
     for (const c of changes)
-      {c.decision =
-        decisionByPath.get(c.path) === 'APPROVED' ? 'APPROVED' : 'REJECTED';}
+      {c.decision = c.applied
+        ? 'APPROVED'
+        : decisionByPath.get(c.path) === 'APPROVED'
+          ? 'APPROVED'
+          : 'REJECTED';}
 
     const backing = await this.backingPaths();
     let approved = 0;
@@ -560,6 +570,11 @@ export class ZookeeperConfigService {
         continue;
       }
       approved++;
+      if (c.applied) {
+        // Applied on a previous attempt — count it, don't re-apply.
+        applied++;
+        continue;
+      }
       try {
         await this.applyOne(c, backing);
         c.applied = true;
@@ -587,7 +602,8 @@ export class ZookeeperConfigService {
       data: {
         status,
         changes: changes as any,
-        appliedAt: new Date(),
+        // A fully-rejected request never touched ZooKeeper — don't stamp an apply time.
+        appliedAt: status === 'REJECTED' ? null : new Date(),
         applyError: failed
           ? `${failed} approved change(s) failed to apply`
           : null,

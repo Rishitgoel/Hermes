@@ -1,6 +1,6 @@
 import React from 'react';
 import * as Icons from 'lucide-react';
-import { ACTION_COLOR, ZK_ROW_FONT, previewValue } from './zkFormat';
+import { ACTION_COLOR, ZK_ROW_FONT, previewValue, tooltipValue } from './zkFormat';
 import type { ZkChange, ZkChangeAction } from '../../services/api/zookeeperApi';
 
 /**
@@ -105,17 +105,35 @@ export const ActionBadge: React.FC<{ action: ZkChangeAction }> = ({ action }) =>
 export const ZkDiff: React.FC<{ change: ZkChange }> = ({ change }) => {
   const oldP = change.oldValue != null && change.oldValue !== '' ? previewValue(change.oldValue) : null;
   const newP = change.newValue != null && change.newValue !== '' ? previewValue(change.newValue) : null;
+  // Large (JSON) values are one unbreakable monospace token — each chip must be allowed
+  // to shrink and ellipsize inside the row, with the pretty-printed value on hover.
+  const chipStyle: React.CSSProperties = {
+    padding: '0 4px',
+    borderRadius: 3,
+    minWidth: 0,
+    maxWidth: '100%',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  };
   const Old = (
-    <span style={{ background: '#fee2e2', color: '#991b1b', textDecoration: 'line-through', padding: '0 4px', borderRadius: 3 }}>
+    <span
+      title={tooltipValue(change.oldValue ?? null)}
+      style={{ ...chipStyle, background: '#fee2e2', color: '#991b1b', textDecoration: 'line-through' }}
+    >
       {oldP}
     </span>
   );
-  const New = <span style={{ background: '#dcfce7', color: '#166534', padding: '0 4px', borderRadius: 3 }}>{newP ?? '(empty)'}</span>;
+  const New = (
+    <span title={tooltipValue(change.newValue ?? null)} style={{ ...chipStyle, background: '#dcfce7', color: '#166534' }}>
+      {newP ?? '(empty)'}
+    </span>
+  );
   const arrow = <Icons.ArrowRight size={12} style={{ color: 'var(--text-light)', flexShrink: 0 }} />;
   const empty = <em style={{ color: 'var(--text-light)' }}>(empty)</em>;
 
   const wrap = (inner: React.ReactNode) => (
-    <span style={{ fontFamily: 'monospace', fontSize: ZK_ROW_FONT, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6, minWidth: 0 }}>
+    <span style={{ fontFamily: 'monospace', fontSize: ZK_ROW_FONT, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6, minWidth: 0, maxWidth: '100%' }}>
       {inner}
     </span>
   );
