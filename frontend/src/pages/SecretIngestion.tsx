@@ -374,9 +374,22 @@ export const SecretIngestion: React.FC = () => {
           <div style={{ padding: '0 4px' }}>
             {currentDrafts.map((d) => {
               const overwrites = existingKeysData?.keys.includes(d.key) || false;
+              const kind = overwrites ? 'UPDATE' : 'ADD';
+              const kindBg = overwrites ? '#d97706' : '#16a34a';
               return (
                 <div key={d.key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
-                  <span className="badge badge-pending badge-sm" style={{ textTransform: 'uppercase', fontSize: 10, fontWeight: 700 }}>ADD</span>
+                  <span
+                    className="badge badge-sm"
+                    style={{
+                      textTransform: 'uppercase',
+                      fontSize: 10,
+                      fontWeight: 700,
+                      background: kindBg,
+                      color: '#fff',
+                    }}
+                  >
+                    {kind}
+                  </span>
                   <code style={{ fontSize: 12, color: 'var(--text-main)', fontWeight: 600 }}>
                     {d.key}
                   </code>
