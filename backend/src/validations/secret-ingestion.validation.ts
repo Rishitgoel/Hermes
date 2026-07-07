@@ -23,7 +23,13 @@ export const submitIngestionSchema = z.object({
   entries: z
     .array(entrySchema)
     .min(1, 'At least one entry is required')
-    .max(200, 'Cannot submit more than 200 entries at once'),
+    .max(200, 'Cannot submit more than 200 entries at once')
+    // Review decisions are keyed by key name — duplicates would share one decision
+    // and silently last-write-win on apply, so reject them up front.
+    .refine(
+      entries => new Set(entries.map(e => e.key)).size === entries.length,
+      'Duplicate keys are not allowed in a single request'
+    ),
 });
 
 export const reviewIngestionSchema = z.object({
