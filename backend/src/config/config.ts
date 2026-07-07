@@ -282,6 +282,13 @@ export const config = {
     get region() {
       return process.env.SECRETS_INGESTION_REGION || process.env.AWS_REGION;
     },
+    // Optional Secrets Manager endpoint override (e.g. a VPC interface endpoint /
+    // PrivateLink DNS name, or a FIPS endpoint). Unset ⇒ the SDK's default
+    // regional HTTPS endpoint. Must be https:// — the client rejects any plaintext
+    // override so ingested secrets are always encrypted in transit.
+    get endpoint() {
+      return process.env.SECRETS_INGESTION_ENDPOINT;
+    },
     get isSimulation() {
       return process.env.SECRETS_INGESTION_SIMULATION === 'true' || !this.region;
     },

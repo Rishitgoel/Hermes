@@ -5,6 +5,8 @@ import {
   CreateSecretCommand,
   ListSecretsCommand,
 } from '@aws-sdk/client-secrets-manager';
+import { NodeHttpHandler } from '@smithy/node-http-handler';
+import { Agent as HttpsAgent } from 'https';
 import config from '../config/config';
 import logger from '../utils/logger';
 import {
@@ -81,10 +83,30 @@ export class SecretsManagerService {
     const accessKeyId = config.aws.accessKeyId;
     const secretAccessKey = config.aws.secretAccessKey;
 
+    // Encryption in transit: the secret key/value pairs travel to AWS on the
+    // GetSecretValue read path and the Put/CreateSecret write path. The SDK's
+    // default endpoint is already HTTPS, but we harden it so the guarantee is
+    // explicit and cannot be silently downgraded:
+    //  1. Pin the request handler to an https.Agent with a TLS 1.2 floor, so a
+    //     change to Node's global TLS defaults can never let a call negotiate a
+    //     weaker/plaintext protocol.
+    //  2. If an endpoint override is ever configured, reject anything that is
+    //     not https:// — a plaintext endpoint would leak secrets on the wire.
+    const endpoint = config.secrets.endpoint;
+    if (endpoint && !/^https:\/\//i.test(endpoint)) {
+      throw new ExternalServiceError(
+        `Refusing to use a non-HTTPS Secrets Manager endpoint (${endpoint}) — secrets must be encrypted in transit.`,
+      );
+    }
+
     this.client = new SecretsManagerClient({
       region,
+      ...(endpoint ? { endpoint } : {}),
       maxAttempts: 6,
       retryMode: 'adaptive',
+      requestHandler: new NodeHttpHandler({
+        httpsAgent: new HttpsAgent({ minVersion: 'TLSv1.2' }),
+      }),
       ...(accessKeyId && secretAccessKey
         ? { credentials: { accessKeyId, secretAccessKey } }
         : {}),
@@ -167,9 +189,33 @@ export class SecretsManagerService {
   }
 
   /**
-   * List the existing key names for a secret (masking/omitting values).
+   * Parse a secret's SecretString as a key-value JSON object. Returns null when the
+   * payload is not key-value shaped (a plaintext blob, or JSON string/number/array —
+   * all legitimate in AWS but not key-mergeable by Hermes). Without this guard,
+   * JSON.parse threw a 500 on read, and a merge would have spread array indices /
+   * string chars into the map, silently destroying the secret's format.
    */
-  async listSecretKeys(name: string): Promise<{ exists: boolean; keys: string[] }> {
+  private parseKeyValueSecret(secretString: string): Record<string, string> | null {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(secretString);
+    } catch {
+      return null;
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null;
+    }
+    return parsed as Record<string, string>;
+  }
+
+  /**
+   * List the existing key names for a secret (masking/omitting values).
+   * `keyValueFormat: false` flags an existing secret whose payload is not key-value
+   * JSON — it has no listable keys and cannot be merged into.
+   */
+  async listSecretKeys(
+    name: string
+  ): Promise<{ exists: boolean; keys: string[]; keyValueFormat?: boolean }> {
     if (this.isSimulation) {
       ensureSimSeeded();
       const secret = sim.secrets.get(name);
@@ -179,15 +225,12 @@ export class SecretsManagerService {
       return { exists: true, keys: secret.keys };
     }
 
+    let secretString: string | undefined;
     try {
       const client = this.getClient();
       const command = new GetSecretValueCommand({ SecretId: name });
       const res = await client.send(command);
-      if (!res.SecretString) {
-        return { exists: true, keys: [] };
-      }
-      const data = JSON.parse(res.SecretString);
-      return { exists: true, keys: Object.keys(data) };
+      secretString = res.SecretString;
     } catch (err: any) {
       if (err.name === 'ResourceNotFoundException') {
         return { exists: false, keys: [] };
@@ -195,6 +238,14 @@ export class SecretsManagerService {
       logger.error({ err, secretName: name }, `Failed to list secret keys for ${name}`);
       throw this.mapAwsError(err, `Failed to list secret keys for ${name}`);
     }
+    if (!secretString) {
+      return { exists: true, keys: [] };
+    }
+    const data = this.parseKeyValueSecret(secretString);
+    if (data === null) {
+      return { exists: true, keys: [], keyValueFormat: false };
+    }
+    return { exists: true, keys: Object.keys(data) };
   }
 
   /**
@@ -211,14 +262,12 @@ export class SecretsManagerService {
       return { ...secret.values };
     }
 
+    let secretString: string | undefined;
     try {
       const client = this.getClient();
       const command = new GetSecretValueCommand({ SecretId: name });
       const res = await client.send(command);
-      if (!res.SecretString) {
-        return {};
-      }
-      return JSON.parse(res.SecretString);
+      secretString = res.SecretString;
     } catch (err: any) {
       if (err.name === 'ResourceNotFoundException') {
         return null;
@@ -226,6 +275,16 @@ export class SecretsManagerService {
       logger.error({ err, secretName: name }, `Failed to fetch secret map for ${name}`);
       throw this.mapAwsError(err, `Failed to fetch secret map for ${name}`);
     }
+    if (!secretString) {
+      return {};
+    }
+    const data = this.parseKeyValueSecret(secretString);
+    if (data === null) {
+      throw new ValidationError(
+        `Secret ${name} does not contain key-value JSON — cannot read it as a map.`
+      );
+    }
+    return data;
   }
 
   /**
@@ -262,12 +321,11 @@ export class SecretsManagerService {
     const client = this.getClient();
     let currentMap: Record<string, string> = {};
     let exists = true;
+    let currentRaw: string | undefined;
     try {
       const getCommand = new GetSecretValueCommand({ SecretId: name });
       const getRes = await client.send(getCommand);
-      if (getRes.SecretString) {
-        currentMap = JSON.parse(getRes.SecretString);
-      }
+      currentRaw = getRes.SecretString;
     } catch (err: any) {
       if (err.name === 'ResourceNotFoundException') {
         exists = false;
@@ -277,6 +335,15 @@ export class SecretsManagerService {
       } else {
         throw this.mapAwsError(err, `Failed to retrieve secret ${name} before merge`);
       }
+    }
+    if (exists && currentRaw) {
+      const parsed = this.parseKeyValueSecret(currentRaw);
+      if (parsed === null) {
+        throw new ValidationError(
+          `Secret ${name} does not contain key-value JSON — refusing to merge keys into it (that would destroy its current format).`
+        );
+      }
+      currentMap = parsed;
     }
 
     const mergedMap = { ...currentMap, ...kv };
