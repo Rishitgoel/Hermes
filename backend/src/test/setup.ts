@@ -13,6 +13,8 @@ process.env.AWS_SIMULATION = 'true';
 process.env.ZOOKEEPER_SIMULATION = 'true';
 process.env.EMAIL_SIMULATION = 'true';
 process.env.SLACK_SIMULATION = 'true';
+process.env.SECRETS_INGESTION_SIMULATION = 'true';
+process.env.INFRA_REPO_SIMULATION = 'true';
 process.env.NODE_ENV = 'test';
 
 // 2. Provision the schema on the EPHEMERAL test database only.
@@ -80,6 +82,7 @@ beforeEach(async () => {
       "user_creation_requests", 
       "platform_external_users", 
       "platform_external_groups", 
+      "secret_ingestion_requests", 
       "group_levels", 
       "groups" 
     CASCADE;

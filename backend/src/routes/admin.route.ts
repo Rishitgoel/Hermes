@@ -168,6 +168,14 @@ router.post(
   authenticateToken,
   adminMgmt('addGroupMember'),
 );
+// Recovery path for addGroupMember's USER_NOT_APPROVED error — creates the
+// platform account on the user's behalf, then adds them to the group. Not a
+// standalone entry point; the frontend only calls this after addGroupMember fails.
+router.post(
+  '/groups/:groupId/onboard',
+  authenticateToken,
+  adminMgmt('onboardUserToGroup'),
+);
 router.put(
   '/groups/:groupId/members/:userAccessId/level',
   authenticateToken,

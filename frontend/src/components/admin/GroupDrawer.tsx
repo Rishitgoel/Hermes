@@ -18,6 +18,10 @@ const TABS: { key: Tab; label: string; icon: string }[] = [
 
 interface GroupDrawerProps {
   group: ManageableGroup;
+  /** Platform keys the caller administers — passed through to the Members tab so
+   *  it knows whether the caller may create a platform account for a user (see
+   *  AddMemberModal's account-gate recovery UI). */
+  manageablePlatforms: string[];
   onClose: () => void;
 }
 
@@ -26,7 +30,7 @@ interface GroupDrawerProps {
  * Settings). Replaces the old inline expand-card so the group list stays a clean
  * list and one group's internals are worked on at a time.
  */
-export const GroupDrawer: React.FC<GroupDrawerProps> = ({ group, onClose }) => {
+export const GroupDrawer: React.FC<GroupDrawerProps> = ({ group, manageablePlatforms, onClose }) => {
   const [tab, setTab] = useState<Tab>('admins');
   const LucideIcon = (Icons as any)[group.icon || 'Layers'] || Icons.Layers;
 
@@ -80,7 +84,7 @@ export const GroupDrawer: React.FC<GroupDrawerProps> = ({ group, onClose }) => {
         {/* Body */}
         <div className="admin-drawer-body">
           {tab === 'admins' && <GroupAdminsTab group={group} />}
-          {tab === 'members' && <GroupMembersTab group={group} />}
+          {tab === 'members' && <GroupMembersTab group={group} canCreateAccount={manageablePlatforms.includes(group.platform)} />}
           {tab === 'levels' && <GroupLevelsTab group={group} />}
           {tab === 'settings' && <GroupSettingsTab group={group} onDeleted={onClose} />}
         </div>

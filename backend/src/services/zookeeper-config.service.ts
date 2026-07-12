@@ -618,6 +618,8 @@ export class ZookeeperConfigService {
         groupId: row.groupId,
         details: {
           requestId: row.id,
+          requesterName: row.requesterName,
+          reviewerName: reviewer.username,
           approved,
           applied,
           rejected,

@@ -3,9 +3,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Icons from 'lucide-react';
 import SectionHeader from '../common/SectionHeader';
 import { queryKeys } from '../../lib/queryKeys';
+import { envBg, envOf, formatTargetPath, INFRA_STATE_META } from '../../lib/infraTargetFormat';
 import { useToast } from '../../contexts/ToastContext';
 import {
   listIngestionRequests,
+  listSecretsInstances,
   reviewIngestionRequest,
   type SecretIngestionEntry,
 } from '../../services/api/secretsApi';
@@ -67,6 +69,16 @@ export const SecretIngestionApprovals: React.FC = () => {
   const toast = useToast();
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [decisions, setDecisions] = useState<Record<string, Record<string, 'APPROVED' | 'REJECTED'>>>({});
+
+  // The review queue merges every configured instance (prod + sandbox), so each row carries its
+  // own `platform`; look up the instances to badge which AWS account a request targets.
+  const { data: instances = [] } = useQuery({
+    queryKey: queryKeys.secretsInstances(),
+    queryFn: listSecretsInstances,
+  });
+  const instanceLabel = (platform: string): string =>
+    instances.find((i) => i.key === platform)?.label ?? platform;
+  const multiInstance = instances.length > 1;
 
   const { data: requests = [], isLoading } = useQuery({
     queryKey: queryKeys.secretIngestionRequests('review'),
@@ -136,6 +148,9 @@ export const SecretIngestionApprovals: React.FC = () => {
         {requests.map((r) => {
           const busy = reviewMutation.isPending && reviewMutation.variables?.id === r.id;
           const entryKeys = r.entries.map((e) => e.key);
+          // The keys a manifest PR is actually for — UPDATE-kind entries change a value in
+          // AWS only and need no manifest edit, so they're excluded here on purpose.
+          const newKeys = r.entries.filter((e) => entryKind(e) === 'ADD').map((e) => e.key);
           const decidedCount = r.entries.filter((e) => decisionFor(r.id, e.key) !== undefined).length;
           const approvedCount = r.entries.filter(
             (e) => decisionFor(r.id, e.key) === 'APPROVED'
@@ -146,20 +161,101 @@ export const SecretIngestionApprovals: React.FC = () => {
             <div key={r.id} className="table-container" style={{ padding: 16 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
                 <div>
-                  <div style={{ fontWeight: 700 }}>
-                    {r.requesterName.replace(/_/g, ' ')}{' '}
-                    <span style={{ fontWeight: 400, color: 'var(--text-muted)', fontSize: 13 }}>
-                      ({r.requesterEmail})
-                    </span>
+                  <div style={{ fontSize: 10.5, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '.05em', fontWeight: 600 }}>
+                    AWS Secret
                   </div>
-                  <div style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 2 }}>
-                    Requested ingestion for AWS Secret: <code style={{ fontWeight: 600 }}>{r.secretName}</code>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '3px 0 7px', flexWrap: 'wrap' }}>
+                    <Icons.KeyRound size={17} style={{ color: 'var(--primary)', flexShrink: 0 }} />
+                    <code style={{ fontSize: 17, fontWeight: 700, color: 'var(--text-main)', wordBreak: 'break-all' }}>{r.secretName}</code>
+                    {multiInstance && (
+                      <span className="badge badge-sm" title="Which Secret Ingestion instance (AWS account) this request targets" style={{ fontSize: 10, fontWeight: 700, background: 'var(--bg-inset)', color: 'var(--text-muted)', border: '1px solid var(--border)' }}>
+                        {instanceLabel(r.platform)}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+                    Requested by <strong style={{ color: 'var(--text-main)', fontWeight: 600 }}>{r.requesterName.replace(/_/g, ' ')}</strong> ({r.requesterEmail})
                     {r.justification ? ` · "${r.justification}"` : ''}
                   </div>
                   {r.status === 'APPLY_FAILED' && (
                     <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#dc2626' }}>
                       <Icons.AlertTriangle size={13} style={{ flexShrink: 0 }} />
                       Previous apply failed{r.applyError ? ` — ${r.applyError}` : ''}. Re-review to retry.
+                    </div>
+                  )}
+
+                  {/* Deployment PR — the manifests this ingestion will change, and a link to verify the diff */}
+                  {(r.infraPrUrl || (r.infraTargets && r.infraTargets.length > 0) || r.infraSyncState) && (
+                    <div style={{ marginTop: 8, border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden', maxWidth: 560 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12, padding: '7px 10px', background: 'var(--bg-card)', borderBottom: (r.infraTargets && r.infraTargets.length > 0) ? '1px solid var(--border)' : 'none' }}>
+                        <Icons.GitPullRequestArrow size={14} style={{ color: 'var(--primary)', flexShrink: 0 }} />
+                        <span style={{ fontWeight: 600 }}>Deployment PR</span>
+                        {r.infraSyncState && (() => {
+                          const meta = INFRA_STATE_META[r.infraSyncState] ?? { label: r.infraSyncState, cls: 'badge-pending' };
+                          return <span className={`badge ${meta.cls} badge-sm`} title={r.infraSyncNote ?? undefined}>{meta.label}</span>;
+                        })()}
+                        {r.infraTargets && r.infraTargets.some((t) => formatTargetPath(t.path).simulated) && (
+                          <span className="badge badge-sm" style={{ fontSize: 9, fontWeight: 700, background: '#6b7280', color: '#fff' }}>SIMULATED</span>
+                        )}
+                        {r.infraPrUrl && (
+                          <a href={r.infraPrUrl} target="_blank" rel="noopener noreferrer" className="btn btn-outline btn-sm" style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 5, textDecoration: 'none' }}>
+                            <Icons.ExternalLink size={12} />
+                            Verify diff{r.infraPrNumber ? ` #${r.infraPrNumber}` : ''}
+                          </a>
+                        )}
+                      </div>
+                      {r.infraTargets && r.infraTargets.length > 0 && newKeys.length > 0 && (
+                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 11, padding: '7px 10px', borderBottom: '1px solid var(--border)', background: 'rgba(22, 163, 74, 0.04)' }}>
+                          <span style={{ color: 'var(--text-muted)', flexShrink: 0, fontWeight: 600 }} title="Only new keys need a manifest change — an approved UPDATE just changes a value in AWS.">
+                            Keys added:
+                          </span>
+                          <span style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                            {newKeys.map((k) => {
+                              const rejected = decisionFor(r.id, k) === 'REJECTED';
+                              return (
+                                <code
+                                  key={k}
+                                  title={rejected ? 'Rejected — will be dropped from the PR' : undefined}
+                                  style={{
+                                    background: 'var(--bg-card)',
+                                    border: '1px solid var(--border)',
+                                    borderRadius: 4,
+                                    padding: '1px 6px',
+                                    fontWeight: 600,
+                                    opacity: rejected ? 0.5 : 1,
+                                    textDecoration: rejected ? 'line-through' : 'none',
+                                  }}
+                                >
+                                  {k}
+                                </code>
+                              );
+                            })}
+                          </span>
+                        </div>
+                      )}
+                      {r.infraTargets && r.infraTargets.length > 0 && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '8px 10px' }}>
+                          {r.infraTargets.map((t) => {
+                            // Prefer the backend-resolved env the requester actually saw
+                            // (stored on the target); fall back to deriving it from the path
+                            // for rows persisted before this field existed.
+                            const env = t.env ?? envOf(t.path);
+                            const { display } = formatTargetPath(t.path);
+                            return (
+                              <div key={t.path} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, flexWrap: 'wrap' }}>
+                                <span className="badge badge-sm" style={{ textTransform: 'uppercase', fontSize: 9, fontWeight: 700, background: envBg(env), color: '#fff' }}>{env}</span>
+                                <span className="badge badge-sm" style={{ fontSize: 9 }}>{t.format === 'spc' ? 'SPC' : 'values'}</span>
+                                <code style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{display}</code>
+                                {t.keys && t.keys.length > 0 && (
+                                  <span style={{ fontSize: 9.5, color: 'var(--text-muted)', fontStyle: 'italic' }} title="The requester narrowed this file to only these keys">
+                                    only: {t.keys.join(', ')}
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

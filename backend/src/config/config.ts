@@ -6,6 +6,32 @@ if (process.env.NODE_ENV) {
   process.env.NODE_ENV = process.env.NODE_ENV.replace(/['"]/g, '').trim();
 }
 
+/**
+ * SSRF guard for a GitHub API base URL: only allow api.github.com or a GitHub Enterprise host,
+ * https only — so a misconfigured env can't redirect authenticated requests to an internal
+ * service (e.g. the AWS metadata endpoint). Shared by every infra-repo instance (prod + sandbox).
+ * `envName` names the offending variable in the thrown error.
+ */
+function validateGithubApiUrl(raw: string, envName: string): string {
+  try {
+    const url = new URL(raw);
+    const host = url.hostname.toLowerCase();
+    const allowed =
+      host === 'api.github.com' ||
+      host.endsWith('.ghe.com') ||
+      host.endsWith('.github.com');
+    if (!allowed || url.protocol !== 'https:') {
+      throw new Error(
+        `${envName} must be https:// and point to api.github.com or a GitHub Enterprise host, got: ${raw}`,
+      );
+    }
+  } catch (err: any) {
+    if (err.message.startsWith(envName)) throw err;
+    throw new Error(`${envName} is not a valid URL: ${raw}`);
+  }
+  return raw;
+}
+
 export const config = {
   nodeEnv: process.env.NODE_ENV || 'development',
   port: parseInt(process.env.PORT || '8001', 10),
@@ -291,6 +317,162 @@ export const config = {
     },
     get isSimulation() {
       return process.env.SECRETS_INGESTION_SIMULATION === 'true' || !this.region;
+    },
+  },
+
+  // Every registered Secret Ingestion instance, keyed by its provisioning-registry platform
+  // key. `secrets` (prod + QA — one AWS account, secrets namespaced by env prefix) is sourced
+  // from config.secrets above so existing installs need no env changes. `secrets-sandbox` is a
+  // SECOND AWS account (opt-in): enabled once SECRETS_SANDBOX_REGION is set (go-live),
+  // SECRETS_SANDBOX_SIMULATION=true (local two-instance testing), or SECRETS_SANDBOX_PROFILE is
+  // named — otherwise it's skipped at registration (provisioning.registry.ts) so an
+  // unconfigured entry never registers a dead adapter. Both share `family: 'secrets'` so the UI
+  // collapses them into one Secret Ingestion surface with a prod/sandbox chooser (same pattern
+  // as redashInstances). The sandbox authenticates via the SDK default credential chain only
+  // (no dedicated key env vars); SECRETS_SANDBOX_PROFILE selects a named AWS profile so it can
+  // resolve a different account than prod.
+  get secretsInstances() {
+    const sandboxRegion = process.env.SECRETS_SANDBOX_REGION || '';
+    const sandboxProfile = process.env.SECRETS_SANDBOX_PROFILE || '';
+    const sandboxSimExplicit = process.env.SECRETS_SANDBOX_SIMULATION === 'true';
+    const sandboxEnabled = !!sandboxRegion || sandboxSimExplicit || !!sandboxProfile;
+    const sandboxIsSimulation = sandboxSimExplicit || !sandboxRegion;
+    // Guard against the sandbox silently sharing prod's AWS credentials: with no
+    // SECRETS_SANDBOX_PROFILE, the sandbox's credential chain resolves identically to prod's
+    // (same ECS task role / IMDS, no dedicated keys) — so a live (non-simulated) sandbox with no
+    // profile would write "sandbox" secrets straight into the prod AWS account. Fail fast at
+    // config load rather than silently cross-writing accounts.
+    if (sandboxEnabled && !sandboxIsSimulation && !sandboxProfile) {
+      throw new Error(
+        'SECRETS_SANDBOX_REGION is set (sandbox enabled, live mode) but SECRETS_SANDBOX_PROFILE is not. ' +
+          'Without a distinct profile the sandbox resolves the same AWS credentials as prod (ECS task role / IMDS), ' +
+          'so sandbox writes would silently land in the prod AWS account. Set SECRETS_SANDBOX_PROFILE to a named ' +
+          'AWS profile for a separate account, or set SECRETS_SANDBOX_SIMULATION=true for local testing.',
+      );
+    }
+    return [
+      {
+        key: 'secrets',
+        family: 'secrets',
+        label: 'Prod + QA',
+        displayName: 'Secret Ingestion',
+        enabled: true,
+        get region() {
+          return config.secrets.region;
+        },
+        get endpoint() {
+          return config.secrets.endpoint;
+        },
+        get isSimulation() {
+          return config.secrets.isSimulation;
+        },
+        // Prod: dedicated Hermes AWS keys if present, else the SDK default chain (unchanged
+        // from how the single-instance `secrets` adapter has always resolved credentials).
+        get accessKeyId(): string | undefined {
+          return config.aws.accessKeyId;
+        },
+        get secretAccessKey(): string | undefined {
+          return config.aws.secretAccessKey;
+        },
+        profile: undefined as string | undefined,
+        // infra-deployment PR mirror for this instance. Prod uses the existing INFRA_REPO_*
+        // config and is always on (simulated in dev, live in prod) — unchanged behavior.
+        get infraRepo() {
+          return config.infraRepo;
+        },
+        infraEnabled: true,
+      },
+      {
+        key: 'secrets-sandbox',
+        family: 'secrets',
+        label: 'Sandbox',
+        displayName: 'Secret Ingestion (Sandbox)',
+        enabled: !!sandboxRegion || sandboxSimExplicit || !!sandboxProfile,
+        get region() {
+          return process.env.SECRETS_SANDBOX_REGION || '';
+        },
+        get endpoint() {
+          return process.env.SECRETS_SANDBOX_ENDPOINT;
+        },
+        get isSimulation() {
+          return process.env.SECRETS_SANDBOX_SIMULATION === 'true' || !this.region;
+        },
+        // Sandbox: SDK default credential chain only (no dedicated keys). SECRETS_SANDBOX_PROFILE
+        // optionally selects a named AWS profile so a different account is reachable.
+        accessKeyId: undefined as string | undefined,
+        secretAccessKey: undefined as string | undefined,
+        get profile(): string | undefined {
+          return process.env.SECRETS_SANDBOX_PROFILE || undefined;
+        },
+        // infra-deployment PR mirror for the sandbox — its OWN GitHub repo (SECRETS_SANDBOX_INFRA_REPO_*).
+        // Wired but OFF until the sandbox repo is added: infraEnabled is false unless a repo name is
+        // set (go-live) or SECRETS_SANDBOX_INFRA_REPO_ENABLED=true (local simulation testing). While
+        // off, sandbox requests write to AWS only and open no PR.
+        get infraRepo() {
+          return {
+            get token(): string | undefined {
+              return process.env.SECRETS_SANDBOX_INFRA_REPO_TOKEN;
+            },
+            get owner(): string {
+              return process.env.SECRETS_SANDBOX_INFRA_REPO_OWNER || 'bachatt-app';
+            },
+            get repo(): string {
+              // No default repo — the sandbox repo doesn't exist yet.
+              return process.env.SECRETS_SANDBOX_INFRA_REPO_NAME || '';
+            },
+            get baseBranch(): string {
+              return process.env.SECRETS_SANDBOX_INFRA_REPO_BASE_BRANCH || 'main';
+            },
+            get apiBaseUrl(): string {
+              return validateGithubApiUrl(
+                process.env.SECRETS_SANDBOX_INFRA_REPO_API_URL || 'https://api.github.com',
+                'SECRETS_SANDBOX_INFRA_REPO_API_URL',
+              );
+            },
+            get isSimulation(): boolean {
+              return process.env.SECRETS_SANDBOX_INFRA_REPO_SIMULATION === 'true' || !this.token;
+            },
+          };
+        },
+        get infraEnabled(): boolean {
+          return (
+            !!process.env.SECRETS_SANDBOX_INFRA_REPO_NAME ||
+            process.env.SECRETS_SANDBOX_INFRA_REPO_ENABLED === 'true'
+          );
+        },
+      },
+    ];
+  },
+
+  // Mirrors approved Secret Ingestion keys into the infra-deployment repo as a GitHub PR
+  // (see infra-repo-sync.service.ts). Adding a key to an AWS secret is invisible to the
+  // pods until its NAME is registered in that repo's manifests, so Hermes opens a PR whose
+  // lifecycle tracks the ingestion request.
+  infraRepo: {
+    get token() {
+      return process.env.INFRA_REPO_TOKEN;
+    },
+    get owner() {
+      return process.env.INFRA_REPO_OWNER || 'bachatt-app';
+    },
+    get repo() {
+      return process.env.INFRA_REPO_NAME || 'infra-deployment';
+    },
+    get baseBranch() {
+      return process.env.INFRA_REPO_BASE_BRANCH || 'main';
+    },
+    get apiBaseUrl() {
+      return validateGithubApiUrl(
+        process.env.INFRA_REPO_API_URL || 'https://api.github.com',
+        'INFRA_REPO_API_URL',
+      );
+    },
+    // Simulate (no GitHub calls, deterministic fake PR) when explicitly requested, or
+    // whenever no token is configured — so a half-configured env can never accidentally
+    // push to the real repo. Going live needs INFRA_REPO_SIMULATION=false + a PAT with
+    // contents + pull-request write on the repo.
+    get isSimulation() {
+      return process.env.INFRA_REPO_SIMULATION === 'true' || !this.token;
     },
   },
 

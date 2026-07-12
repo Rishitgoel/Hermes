@@ -18,9 +18,13 @@ import {
 
 interface GroupMembersTabProps {
   group: ManageableGroup;
+  /** True when the caller is a platform admin of this group's platform (not just a
+   *  group admin) — gates whether AddMemberModal may offer to create a platform
+   *  account for a user who doesn't have one yet. */
+  canCreateAccount: boolean;
 }
 
-export const GroupMembersTab: React.FC<GroupMembersTabProps> = ({ group }) => {
+export const GroupMembersTab: React.FC<GroupMembersTabProps> = ({ group, canCreateAccount }) => {
   const queryClient = useQueryClient();
   const toast = useToast();
   const [confirmRemove, setConfirmRemove] = useState<GroupMember | null>(null);
@@ -76,6 +80,30 @@ export const GroupMembersTab: React.FC<GroupMembersTabProps> = ({ group }) => {
           <Icons.UserPlus size={14} /> Add member
         </button>
       </div>
+
+      {group.openEnrollment && (
+        <div
+          style={{
+            marginBottom: '12px',
+            padding: '10px 12px',
+            borderRadius: 'var(--radius-md)',
+            background: 'var(--bg-inset)',
+            border: '1px solid var(--border)',
+            fontSize: '12px',
+            lineHeight: 1.5,
+            display: 'flex',
+            gap: '8px',
+            alignItems: 'flex-start',
+          }}
+        >
+          <Icons.Users size={15} style={{ color: 'var(--primary)', flexShrink: 0, marginTop: '1px' }} />
+          <div>
+            <strong style={{ fontWeight: 600 }}>Open enrollment is on</strong> — every Hermes user is
+            automatically a member and can request Secret Ingestion here, so there's no roster to manage.
+            Any rows below are extra explicit grants (rare); they aren't required for access.
+          </div>
+        </div>
+      )}
 
       {membersQuery.isLoading ? (
         <SkeletonRows count={3} />
@@ -152,6 +180,7 @@ export const GroupMembersTab: React.FC<GroupMembersTabProps> = ({ group }) => {
         <AddMemberModal
           group={group}
           existingMemberIds={memberUserIds}
+          canCreateAccount={canCreateAccount}
           onClose={() => setShowAdd(false)}
           onAdded={(msg) => {
             toast.success(msg);

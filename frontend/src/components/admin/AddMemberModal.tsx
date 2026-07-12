@@ -2,11 +2,12 @@ import React, { useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../../lib/queryKeys';
-import { cleanName } from './adminUtils';
+import { cleanName, prettyPlatform } from './adminUtils';
 import UserPicker from './UserPicker';
 import { SkeletonText } from '../common/Skeleton';
 import {
   addGroupMember,
+  onboardUserToGroup,
   listGroupLevels,
   type AdminUser,
   type ManageableGroup,
@@ -17,6 +18,9 @@ interface AddMemberModalProps {
   group: ManageableGroup;
   /** userIds already holding an active grant — shown as un-selectable. */
   existingMemberIds: Set<string>;
+  /** True when the caller is a platform admin of this group's platform — only
+   *  they may create a platform account for a user via the recovery UI below. */
+  canCreateAccount: boolean;
   onClose: () => void;
   onAdded: (message: string) => void;
   onError: (message: string) => void;
@@ -27,11 +31,23 @@ interface AddMemberModalProps {
  * admin-side equivalent of an already-approved access request. Same user search
  * as AssignAdminModal (shared UserPicker), plus a level picker (required when the
  * group has active levels) and a duration picker.
+ *
+ * If the selected user has no account yet on this group's platform, the plain add
+ * fails with USER_NOT_APPROVED. Rather than a dead-end error toast, that specific
+ * failure switches the modal into a recovery state offering to create the account
+ * and add the user in one step — but only for platform admins (canCreateAccount);
+ * a plain group admin sees the same "ask a platform admin" guidance as before.
+ * This is deliberately not a standalone/always-visible action — it only appears
+ * once a plain add has actually hit the gate.
  */
-export const AddMemberModal: React.FC<AddMemberModalProps> = ({ group, existingMemberIds, onClose, onAdded, onError }) => {
+export const AddMemberModal: React.FC<AddMemberModalProps> = ({ group, existingMemberIds, canCreateAccount, onClose, onAdded, onError }) => {
   const [selected, setSelected] = useState<AdminUser | null>(null);
   const [levelId, setLevelId] = useState('');
   const [duration, setDuration] = useState<AccessDurationValue>('PERMANENT');
+  // Set only after a plain add-member attempt fails with USER_NOT_APPROVED — this
+  // is what makes the "create account" recovery UI appear on demand instead of
+  // always being visible.
+  const [needsAccount, setNeedsAccount] = useState(false);
 
   // Shares the query key with the Levels/Members tabs so the data is fetched once.
   const levelsQuery = useQuery({
@@ -40,6 +56,11 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({ group, existingM
   });
   const activeLevels = (levelsQuery.data ?? []).filter((l) => l.isActive);
   const needsLevel = activeLevels.length > 0;
+
+  const resetForNewSelection = (user: AdminUser | null) => {
+    setSelected(user);
+    setNeedsAccount(false);
+  };
 
   const addMutation = useMutation({
     mutationFn: () => {
@@ -57,10 +78,36 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({ group, existingM
           : `${cleanName(selected!.userName)} will be added to ${group.name} automatically once their platform account setup completes.`,
       );
     },
-    onError: (e: any) => onError(e.message || 'Failed to add member.'),
+    onError: (e: any) => {
+      if (e?.errorCode === 'USER_NOT_APPROVED') {
+        setNeedsAccount(true);
+        return;
+      }
+      onError(e.message || 'Failed to add member.');
+    },
   });
 
-  const canSubmit = !!selected && (!needsLevel || !!levelId) && !addMutation.isPending && !levelsQuery.isLoading;
+  const onboardMutation = useMutation({
+    mutationFn: () => {
+      if (!selected) throw new Error('Select a user first');
+      return onboardUserToGroup(group.id, {
+        userId: selected.userId,
+        ...(needsLevel ? { levelId } : {}),
+        duration,
+      });
+    },
+    onSuccess: (result) => {
+      onAdded(
+        result.membership.kind === 'provisioned'
+          ? `${cleanName(selected!.userName)}'s ${prettyPlatform(group.platform)} account was created and they were added to ${group.name}.`
+          : `${cleanName(selected!.userName)}'s ${prettyPlatform(group.platform)} account was created — they'll be added to ${group.name} automatically once their setup completes.`,
+      );
+    },
+    onError: (e: any) => onError(e.message || 'Failed to create account.'),
+  });
+
+  const isPending = addMutation.isPending || onboardMutation.isPending;
+  const canSubmit = !!selected && (!needsLevel || !!levelId) && !isPending && !levelsQuery.isLoading && !needsAccount;
 
   const submit = () => {
     if (canSubmit) addMutation.mutate();
@@ -70,9 +117,13 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({ group, existingM
     ? 'Loading levels…'
     : !selected
       ? 'Select a user to add.'
-      : needsLevel && !levelId
-        ? 'Pick a level below.'
-        : null;
+      : needsAccount
+        ? canCreateAccount
+          ? null
+          : `A platform admin must create their ${prettyPlatform(group.platform)} account first.`
+        : needsLevel && !levelId
+          ? 'Pick a level below.'
+          : null;
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -92,7 +143,7 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({ group, existingM
         <div className="modal-body">
           <UserPicker
             selected={selected}
-            onSelect={setSelected}
+            onSelect={resetForNewSelection}
             disabledIds={existingMemberIds}
             disabledLabel="Already a member"
             emptyVerb="added"
@@ -100,6 +151,31 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({ group, existingM
             onCancel={onClose}
             listMaxHeight={220}
           />
+
+          {needsAccount && (
+            <div
+              style={{
+                marginTop: '14px',
+                padding: '10px 12px',
+                borderRadius: '8px',
+                background: 'var(--bg-inset)',
+                border: '1px solid var(--border-color)',
+                fontSize: '12px',
+                lineHeight: 1.5,
+                display: 'flex',
+                gap: '8px',
+                alignItems: 'flex-start',
+              }}
+            >
+              <Icons.AlertTriangle size={15} style={{ color: 'var(--warning, #d97706)', flexShrink: 0, marginTop: '1px' }} />
+              <div>
+                <strong style={{ fontWeight: 600 }}>{cleanName(selected!.userName)}</strong> has no {prettyPlatform(group.platform)} account yet.{' '}
+                {canCreateAccount
+                  ? 'Create one and add them to this group in one step, or cancel.'
+                  : `A platform admin must create their ${prettyPlatform(group.platform)} account before they can be added.`}
+              </div>
+            </div>
+          )}
 
           <div style={{ marginTop: '14px' }}>
             {levelsQuery.isLoading ? (
@@ -110,7 +186,7 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({ group, existingM
             ) : needsLevel && (
               <div className="form-group" style={{ marginBottom: '14px' }}>
                 <label className="form-label">Level</label>
-                <select className="form-select" value={levelId} onChange={(e) => setLevelId(e.target.value)} disabled={addMutation.isPending}>
+                <select className="form-select" value={levelId} onChange={(e) => setLevelId(e.target.value)} disabled={isPending}>
                   <option value="" disabled>
                     Select a level…
                   </option>
@@ -130,7 +206,7 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({ group, existingM
                 className="form-select"
                 value={duration}
                 onChange={(e) => setDuration(e.target.value as AccessDurationValue)}
-                disabled={addMutation.isPending}
+                disabled={isPending}
               >
                 <option value="PERMANENT">Permanent Access</option>
                 <option value="ONE_DAY">1 Day (Temp Access)</option>
@@ -156,18 +232,30 @@ export const AddMemberModal: React.FC<AddMemberModalProps> = ({ group, existingM
             )}
           </div>
           <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
-            <button type="button" className="btn btn-outline" onClick={onClose} disabled={addMutation.isPending}>
+            <button type="button" className="btn btn-outline" onClick={onClose} disabled={isPending}>
               Cancel
             </button>
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={!canSubmit}
-              style={!canSubmit ? { background: 'var(--bg-inset)', color: 'var(--text-light)', boxShadow: 'none' } : undefined}
-              onClick={submit}
-            >
-              {addMutation.isPending ? 'Adding…' : 'Add member'}
-            </button>
+            {needsAccount ? (
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={!canCreateAccount || isPending || (needsLevel && !levelId)}
+                style={!canCreateAccount ? { background: 'var(--bg-inset)', color: 'var(--text-light)', boxShadow: 'none' } : undefined}
+                onClick={() => onboardMutation.mutate()}
+              >
+                {onboardMutation.isPending ? 'Creating…' : 'Create account & add'}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={!canSubmit}
+                style={!canSubmit ? { background: 'var(--bg-inset)', color: 'var(--text-light)', boxShadow: 'none' } : undefined}
+                onClick={submit}
+              >
+                {addMutation.isPending ? 'Adding…' : 'Add member'}
+              </button>
+            )}
           </div>
         </div>
       </div>

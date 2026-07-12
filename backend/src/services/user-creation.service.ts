@@ -349,6 +349,89 @@ export class UserCreationService {
   }
 
   /**
+   * Admin-initiated account creation — triggered from the Add-Member flow when
+   * `adminAddMember`'s account gate rejects a target with no account yet on this
+   * platform (see access-workflow.service.ts). Creates (or reuses) the
+   * UserCreationRequest for (target, platform), drives it straight to APPROVED —
+   * skipping the self-service submit entirely — and runs the same platform invite
+   * `reviewRequest` would. Idempotent: a row already at APPROVED, AWAITING_SETUP, or
+   * COMPLETED is returned untouched, so a caller that races with the user's own
+   * submit (or retries after the group-add) never double-invites.
+   */
+  async adminCreateForPlatform(
+    performer: ReviewerIdentity,
+    target: RequesterIdentity,
+    platform: string,
+  ) {
+    if (!provisioningRegistry.has(platform)) {
+      throw new ValidationError(`Unknown platform "${platform}".`);
+    }
+
+    const lowerEmail = target.email.toLowerCase();
+    const existing = await prisma.userCreationRequest.findUnique({
+      where: { userId_platform: { userId: target.id, platform } },
+    });
+
+    const ALREADY_LIVE: UserCreationStatus[] = [
+      UserCreationStatus.APPROVED,
+      UserCreationStatus.AWAITING_SETUP,
+      UserCreationStatus.COMPLETED,
+    ];
+    if (existing && ALREADY_LIVE.includes(existing.status)) {
+      return normalizeInviteLink(existing);
+    }
+
+    const reviewNote = 'Account created directly by admin';
+    const row = existing
+      ? await prisma.userCreationRequest.update({
+          where: { id: existing.id },
+          data: {
+            status: UserCreationStatus.APPROVED,
+            userName: target.username,
+            userEmail: lowerEmail,
+            justification:
+              existing.justification ??
+              `Account created by ${performer.username} via Admin Management`,
+            reviewerId: performer.id,
+            reviewerName: performer.username,
+            reviewNote,
+            reviewedAt: new Date(),
+            approvedAt: new Date(),
+            inviteError: null,
+          },
+        })
+      : await prisma.userCreationRequest.create({
+          data: {
+            userId: target.id,
+            userName: target.username,
+            userEmail: lowerEmail,
+            platform,
+            justification: `Account created by ${performer.username} via Admin Management`,
+            status: UserCreationStatus.APPROVED,
+            submittedAt: new Date(),
+            reviewerId: performer.id,
+            reviewerName: performer.username,
+            reviewNote,
+            reviewedAt: new Date(),
+            approvedAt: new Date(),
+          },
+        });
+
+    await prisma.auditEntry.create({
+      data: {
+        action: 'USER_CREATION_ADMIN_CREATED',
+        performerId: performer.id,
+        performerName: performer.username,
+        targetUserId: target.id,
+        targetUserName: target.username,
+        details: { platform, wasResubmitted: !!existing },
+      },
+    });
+
+    return this._executeInvite(row, performer, reviewNote);
+  }
+
+  /**
    * Run the platform invite for an already-APPROVED row and finalize it: COMPLETED
    * when the account is ready immediately (an existing Redash user, or a freshly
    * created AWS Identity Center user), or AWAITING_SETUP when the adapter returns a

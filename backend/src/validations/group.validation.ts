@@ -32,6 +32,10 @@ export const createGroupSchema = z.object({
   // A single backing-group id, OR (ZooKeeper) a newline-separated list of znode paths,
   // hence the generous cap. The controller validates the value against the adapter.
   externalGroupId: z.string().trim().min(1).max(4000).optional(),
+  // When true, every authenticated user is an implicit member — no request/grant.
+  // Used for shared self-serve capabilities (e.g. all users can request Secret
+  // Ingestion while admins approve). Defaults off.
+  openEnrollment: z.boolean().optional(),
 });
 
 // Edit only the safe fields. slug / platform stay immutable: changing slug or platform
@@ -50,5 +54,7 @@ export const updateGroupSchema = z
     tables: z.array(z.string().trim().min(1)).max(200).optional(),
     externalGroupId: z.string().trim().min(1).max(4000).optional(),
     isActive: z.boolean().optional(),
+    // Toggle implicit "everyone is a member" enrollment (see createGroupSchema).
+    openEnrollment: z.boolean().optional(),
   })
   .refine((data) => Object.keys(data).length > 0, { message: 'No fields to update' });

@@ -5,7 +5,14 @@ import { ActionBadge, ZkDiff } from '../zookeeper/ZkRow';
 import { detectType, previewValue } from '../zookeeper/zkFormat';
 import { TypeChip } from '../zookeeper/TypeChip';
 import type { ZkChange } from '../../services/api/zookeeperApi';
-import { AuditLogEntry, actionBadgeStyle } from '../../lib/auditFormat';
+import {
+  AuditLogEntry,
+  actionBadgeStyle,
+  auditLabel,
+  describeAuditEntry,
+  REQUEST_FLOW_ACTIONS,
+  requestParticipants,
+} from '../../lib/auditFormat';
 
 interface AuditDetailModalProps {
   entry: AuditLogEntry | null;
@@ -289,7 +296,9 @@ const AccessBody: React.FC<{ details: any }> = ({ details: d }) => {
   if (d.newExpiresAt) rows.push({ label: 'New expiry', value: formatFullDate(d.newExpiresAt) });
   if (d.renewal) rows.push({ label: 'Renewal', value: 'Yes' });
   if (d.reason) rows.push({ label: 'Reason', value: d.reason });
+  if (d.justification) rows.push({ label: 'Justification', value: d.justification });
   if (d.note) rows.push({ label: 'Note', value: d.note });
+  if (d.reviewNote) rows.push({ label: 'Review note', value: d.reviewNote });
   if (d.groupName) rows.push({ label: 'Group', value: d.groupName });
   if (d.externalUserId) rows.push({ label: 'External user ID', value: d.externalUserId });
   if (d.externalGroupId) rows.push({ label: 'External group ID', value: d.externalGroupId });
@@ -418,16 +427,19 @@ const RawJsonAccordion: React.FC<{ details: any }> = ({ details }) => {
 };
 
 const ModalTitleBadge: React.FC<{ action: string }> = ({ action }) => (
-  <span
-    style={{
-      fontSize: 14,
-      fontWeight: 800,
-      padding: '4px 10px',
-      borderRadius: 'var(--radius-sm)',
-      ...actionBadgeStyle(action),
-    }}
-  >
-    {action}
+  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+    <span
+      style={{
+        fontSize: 14,
+        fontWeight: 800,
+        padding: '4px 10px',
+        borderRadius: 'var(--radius-sm)',
+        ...actionBadgeStyle(action),
+      }}
+    >
+      {auditLabel(action)}
+    </span>
+    <code style={{ fontSize: 11, color: 'var(--text-light)', fontWeight: 600 }}>{action}</code>
   </span>
 );
 
@@ -442,29 +454,74 @@ const formatPerformer = (name: string): React.ReactNode => {
   return name.replace(/_/g, ' ');
 };
 
+// Actions that are part of the request → review → provision lifecycle. For these the
+// generic "Performer / Target user" labels are ambiguous, so the header instead names the
+// two roles explicitly: who requested the access (maker) and who reviewed it (checker).
+const cleanName = (n?: string | null): string | null => (n ? n.replace(/_/g, ' ') : null);
+
+// Prefer the explicit names now stamped into details; fall back to the audit row's
+// performer/target for historic entries that predate them (the checker performs a
+// grant/reject, while on REQUEST_CREATED the performer IS the maker and there's no
+// checker yet).
+const deriveParticipants = (entry: AuditLogEntry): { maker: string | null; checker: React.ReactNode } => {
+  const participants = requestParticipants(entry);
+  const maker = cleanName(participants?.maker);
+  const checkerName = cleanName(participants?.checker);
+  return { maker, checker: checkerName ?? <Empty>Pending review</Empty> };
+};
+
+const HeaderCard: React.FC<{ entry: AuditLogEntry; groupName?: string | null }> = ({ entry, groupName }) => {
+  const groupNode =
+    entry.groupId || groupName ? groupName ?? entry.details?.groupName ?? entry.groupId : null;
+  const requestIdItem = entry.accessRequestId ? (
+    <DetailItem label="Access request ID">
+      <code style={{ fontSize: 12 }}>{entry.accessRequestId}</code>
+    </DetailItem>
+  ) : null;
+
+  if (REQUEST_FLOW_ACTIONS.has(entry.action)) {
+    const { maker, checker } = deriveParticipants(entry);
+    return (
+      <div className="detail-card" style={{ padding: 20 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+          <DetailItem label="Request maker">{maker ?? <Empty />}</DetailItem>
+          <DetailItem label="Request checker">{checker}</DetailItem>
+          <DetailItem label="Timestamp">{formatFullDate(entry.createdAt)}</DetailItem>
+          {groupNode && <DetailItem label="Group">{groupNode}</DetailItem>}
+          {requestIdItem}
+          <DetailItem label="IP address">{entry.ipAddress ?? <Empty />}</DetailItem>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="detail-card" style={{ padding: 20 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+        <DetailItem label="Performer">{formatPerformer(entry.performerName)}</DetailItem>
+        <DetailItem label="Timestamp">{formatFullDate(entry.createdAt)}</DetailItem>
+        <DetailItem label="Target user">
+          {entry.targetUserName ? entry.targetUserName.replace(/_/g, ' ') : <Empty>System</Empty>}
+        </DetailItem>
+        <DetailItem label="IP address">{entry.ipAddress ?? <Empty />}</DetailItem>
+        {groupNode && <DetailItem label="Group">{groupNode}</DetailItem>}
+        {requestIdItem}
+      </div>
+    </div>
+  );
+};
+
 export const AuditDetailModal: React.FC<AuditDetailModalProps> = ({ entry, groupName, onClose }) => {
   return (
     <Modal isOpen={!!entry} onClose={onClose} size="lg" title={entry ? <ModalTitleBadge action={entry.action} /> : ''}>
       {entry && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-          <div className="detail-card" style={{ padding: 20 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-              <DetailItem label="Performer">{formatPerformer(entry.performerName)}</DetailItem>
-              <DetailItem label="Timestamp">{formatFullDate(entry.createdAt)}</DetailItem>
-              <DetailItem label="Target user">
-                {entry.targetUserName ? entry.targetUserName.replace(/_/g, ' ') : <Empty>System</Empty>}
-              </DetailItem>
-              <DetailItem label="IP address">{entry.ipAddress ?? <Empty />}</DetailItem>
-              {(entry.groupId || groupName) && (
-                <DetailItem label="Group">{groupName ?? entry.details?.groupName ?? entry.groupId}</DetailItem>
-              )}
-              {entry.accessRequestId && (
-                <DetailItem label="Access request ID">
-                  <code style={{ fontSize: 12 }}>{entry.accessRequestId}</code>
-                </DetailItem>
-              )}
-            </div>
-          </div>
+          {/* Plain-English one-liner first — the fastest read of what this event was. */}
+          <p style={{ fontSize: 14, fontWeight: 600, margin: 0, lineHeight: 1.5 }}>
+            {describeAuditEntry(entry, groupName)}
+          </p>
+
+          <HeaderCard entry={entry} groupName={groupName} />
 
           {renderBody(entry)}
 

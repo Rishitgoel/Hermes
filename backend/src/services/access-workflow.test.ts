@@ -216,7 +216,6 @@ describe('AccessWorkflowService Integration Tests', () => {
       const req = await accessWorkflowService.createRequest(
         testUser,
         group.id,
-        null,
         'Need it for query logs',
         AccessDuration.ONE_DAY,
       );
@@ -243,7 +242,6 @@ describe('AccessWorkflowService Integration Tests', () => {
       const req = await accessWorkflowService.createRequest(
         testUser,
         group.id,
-        null,
         'Need it for query logs',
         AccessDuration.ONE_DAY,
       );

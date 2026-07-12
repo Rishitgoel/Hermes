@@ -5,6 +5,7 @@ import provisioningRegistry from '../services/provisioning.registry';
 import type { ReconcileMembersResult } from '../services/provisioner.interface';
 import keycloakAdminService from '../services/keycloak-admin.service';
 import accessWorkflowService from '../services/access-workflow.service';
+import userCreationService from '../services/user-creation.service';
 import {
   isSuperAdmin,
   isPlatformAdminOf,
@@ -35,7 +36,8 @@ import {
   updateGroupSchema,
 } from '../validations/group.validation';
 import logger from '../utils/logger';
-import secretsManagerService from '../services/secrets-manager.service';
+import { getSecretsManagerService } from '../services/secrets-manager.service';
+import { assertSecretsPlatform, isSecretsFamilyPlatform } from '../services/secret-ingestion.service';
 import { RequestStatus, UserCreationStatus } from '../../generated/hermes';
 
 
@@ -149,7 +151,9 @@ export class AdminManagementController extends BaseController {
     }
   }
 
-  // GET /api/admin/aws-secrets — list all available AWS secrets (platform/super admin only).
+  // GET /api/admin/aws-secrets[?platform=secrets-sandbox] — list all AWS secrets in the given
+  // Secret Ingestion account (platform/super admin only). Used by group config to build an
+  // externalGroupId. Defaults to prod ("secrets"); sandbox lists its own account's secrets.
   async listAwsSecrets(
     req: Request,
     res: Response,
@@ -157,11 +161,14 @@ export class AdminManagementController extends BaseController {
   ): Promise<void> {
     try {
       if (!this.getUserId()) {return;}
-      if (!(await isPlatformAdminOf(this.user!, 'secrets'))) {
+      const platform = this.req.query.platform
+        ? assertSecretsPlatform(String(this.req.query.platform))
+        : 'secrets';
+      if (!(await isPlatformAdminOf(this.user!, platform))) {
         throw new AuthorizationError('You do not have permission to view AWS secrets.');
       }
 
-      const secrets = await secretsManagerService.listAllAwsSecrets();
+      const secrets = await getSecretsManagerService(platform).listAllAwsSecrets();
       this.sendResponse(secrets, 'AWS secrets retrieved');
     } catch (error) {
       this.handleError(error, 'Failed to retrieve AWS secrets');
@@ -418,6 +425,7 @@ export class AdminManagementController extends BaseController {
             tables: g.tables,
             externalGroupId: g.externalGroupId,
             isActive: g.isActive,
+            openEnrollment: g.openEnrollment,
             memberCount,
             adminCount: g.admins.length,
           };
@@ -477,6 +485,15 @@ export class AdminManagementController extends BaseController {
           'You cannot create groups for this platform',
         );
       }
+      // openEnrollment only makes sense for secrets-family groups — it's what lets every user
+      // implicitly stage ingestion requests with no join step. On any other platform it would
+      // show the group as ACTIVE for every user with no real grant or provisioning behind it,
+      // and createRequest refuses requests for it, leaving a dead end.
+      if (data.openEnrollment && !isSecretsFamilyPlatform(platform)) {
+        throw new ValidationError(
+          'Open enrollment is only supported for Secret Ingestion groups.',
+        );
+      }
 
       // Resolve the backing platform group, same as createGroupLevel:
       //  - if the admin pasted an externalGroupId, link it as-is;
@@ -514,6 +531,7 @@ export class AdminManagementController extends BaseController {
             color: data.color ?? null,
             tables: data.tables ?? [],
             externalGroupId,
+            openEnrollment: data.openEnrollment ?? false,
           },
         });
       } catch (err: any) {
@@ -560,6 +578,7 @@ export class AdminManagementController extends BaseController {
             platform,
             externalGroupId: group.externalGroupId,
             autoCreated: !!autoCreatedExternalGroupId,
+            openEnrollment: group.openEnrollment,
           },
         },
       });
@@ -589,7 +608,11 @@ export class AdminManagementController extends BaseController {
       if (!isSuperAdmin(this.user!)) {
         throw new AuthorizationError('Only super admins can run this maintenance action.');
       }
-      const SECRETS_PLATFORM = 'secrets';
+      // Which Secret Ingestion instance to stand the all-secrets group up on (prod vs sandbox),
+      // from the request body; defaults to prod. Validated against the configured secrets family.
+      const SECRETS_PLATFORM = this.req.body?.platform
+        ? assertSecretsPlatform(this.req.body.platform)
+        : 'secrets';
       const ALL_SCOPE = '*';
       if (!provisioningRegistry.has(SECRETS_PLATFORM)) {
         throw new ValidationError(
@@ -603,9 +626,17 @@ export class AdminManagementController extends BaseController {
         where: { platform: SECRETS_PLATFORM, externalGroupId: ALL_SCOPE },
       });
       if (existing) {
+        // Idempotent on SCOPE only (externalGroupId === '*', already matched above) — never
+        // silently flip openEnrollment back on here. An admin may have deliberately turned it
+        // off via the group settings toggle to lock down account-wide secret visibility;
+        // re-running this maintenance action must not undo that choice with no confirmation.
+        // If open enrollment is currently off, surface that in the response so the caller
+        // knows to re-enable it explicitly (via the group settings toggle) if that's wanted.
         this.sendResponse(
-          { group: existing, created: false },
-          'All-Secrets group already exists',
+          { group: existing, created: false, openEnrollment: existing.openEnrollment },
+          existing.openEnrollment
+            ? 'All-Secrets group already exists'
+            : 'All-Secrets group already exists (open enrollment is currently off — enable it from the group settings if that was unintentional)',
         );
         return;
       }
@@ -624,6 +655,9 @@ export class AdminManagementController extends BaseController {
             color: '#DD344C',
             tables: [],
             externalGroupId: ALL_SCOPE,
+            // Open to everyone — the whole point of the all-secrets group is that
+            // any user can stage a Secret Ingestion request while admins approve.
+            openEnrollment: true,
           },
         });
       } catch (err: any) {
@@ -652,6 +686,9 @@ export class AdminManagementController extends BaseController {
               'A group named "All Secrets" already exists on the Secret Ingestion platform, but it could not be found to restore its scope.',
             );
           }
+          // Restore the SCOPE only — leave openEnrollment as the admin last set it. This
+          // branch fixes a drifted externalGroupId, it must not also silently re-enable open
+          // enrollment if an admin deliberately turned it off.
           const restored = await prisma.group.update({
             where: { id: drifted.id },
             data: { externalGroupId: ALL_SCOPE, isActive: true },
@@ -819,6 +856,13 @@ export class AdminManagementController extends BaseController {
       if (externalGroupIdChanged && data.externalGroupId) {
         adapter?.validateExternalGroupId?.(data.externalGroupId);
       }
+      // openEnrollment only makes sense for secrets-family groups (see createGroup for why) —
+      // reject turning it on for any other platform's group.
+      if (data.openEnrollment && !isSecretsFamilyPlatform(existing.platform)) {
+        throw new ValidationError(
+          'Open enrollment is only supported for Secret Ingestion groups.',
+        );
+      }
 
       let group;
       try {
@@ -833,6 +877,9 @@ export class AdminManagementController extends BaseController {
             ...(data.color !== undefined ? { color: data.color } : {}),
             ...(data.tables !== undefined ? { tables: data.tables } : {}),
             ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
+            ...(data.openEnrollment !== undefined
+              ? { openEnrollment: data.openEnrollment }
+              : {}),
             ...(externalGroupIdChanged
               ? { externalGroupId: data.externalGroupId }
               : {}),
@@ -1411,6 +1458,83 @@ export class AdminManagementController extends BaseController {
       );
     } catch (error) {
       this.handleError(error, 'Failed to add group member');
+    }
+  }
+
+  // POST /api/admin/groups/:groupId/onboard  { userId, levelId?, duration }
+  // Recovery path for addGroupMember's account gate: when a group admin tries to
+  // add a user who has no account yet on the group's platform, adminAddMember
+  // throws USER_NOT_APPROVED. This endpoint is what the frontend calls next, after
+  // showing that error inline — it is NOT a separate always-visible entry point.
+  // Creates the platform account on the user's behalf (skipping the self-service
+  // submit/approve cycle) and then runs the exact same adminAddMember the plain
+  // add-member action uses. Gated at platform-admin tier (stricter than
+  // addGroupMember's group-admin tier) since it mints a platform account, not just
+  // a group grant.
+  async onboardUserToGroup(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      const userId = this.getUserId();
+      if (!userId) {return;}
+
+      // Coarse precheck before the group lookup (avoids a 404-vs-403 existence
+      // oracle); same message as the fine-grained check so they're indistinguishable.
+      if (!(await isAnyAdmin(this.user!))) {
+        throw new AuthorizationError('You do not have permission to create accounts for this platform');
+      }
+
+      const groupId = String(req.params.groupId);
+      const group = await prisma.group.findUnique({ where: { id: groupId } });
+      if (!group) {throw new NotFoundError('Group not found');}
+
+      // Platform-admin tier, not group-admin — a group admin can add members but
+      // cannot mint a new platform account on someone's behalf.
+      if (!(await isPlatformAdminOf(this.user!, group.platform))) {
+        throw new AuthorizationError(
+          'Only a platform admin can create accounts for this platform',
+        );
+      }
+
+      const validated = this.validateWithZod(
+        addGroupMemberSchema,
+        this.req.body,
+      );
+      if (!validated.success) {return;}
+
+      const profile = await this.resolveUserProfile(validated.data.userId);
+      const performer = { id: userId, username: this.user!.username };
+      const target = {
+        id: validated.data.userId,
+        username: profile.userName,
+        email: profile.userEmail,
+      };
+
+      const account = await userCreationService.adminCreateForPlatform(
+        performer,
+        target,
+        group.platform,
+      );
+
+      const membership = await accessWorkflowService.adminAddMember(
+        performer,
+        { id: target.id, name: target.username, email: target.email },
+        groupId,
+        validated.data.levelId ?? null,
+        validated.data.duration,
+      );
+
+      this.sendResponse(
+        { account, membership },
+        membership.kind === 'provisioned'
+          ? `Account created and ${profile.userName} was added to the group`
+          : `Account created — ${profile.userName} will be added to the group automatically once their platform setup completes`,
+        201,
+      );
+    } catch (error) {
+      this.handleError(error, 'Failed to create account and add member');
     }
   }
 

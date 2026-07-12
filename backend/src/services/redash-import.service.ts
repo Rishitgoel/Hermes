@@ -157,22 +157,62 @@ export async function importRedashMemberships(opts: {
       where: { userId_platform: { userId: sub, platform: lowerPlatform } },
     });
     if (!existingReq) {
-      report.accountRequestsCreated++;
-      if (apply) {
-        await prisma.userCreationRequest.create({
-          data: {
-            userId: sub,
-            userName,
-            userEmail: u.email,
+      // userEmail is unique on this table. If a row already exists for this email under
+      // a different Keycloak userId, adopt it instead of crashing on the unique constraint.
+      const existingReqByEmail = await prisma.userCreationRequest.findUnique({
+        where: {
+          userEmail_platform: {
+            userEmail: u.email.toLowerCase(),
             platform: lowerPlatform,
-            justification: `Imported: pre-existing ${displayName} account`,
+          },
+        },
+      });
+
+      if (existingReqByEmail) {
+        if (apply) {
+          await prisma.userCreationRequest.update({
+            where: { id: existingReqByEmail.id },
+            data: {
+              userId: sub,
+              userName,
+              status: 'COMPLETED',
+              externalUserId: u.externalId,
+              reviewerId: 'system_import',
+              reviewerName: `${displayName} Import`,
+              approvedAt: existingReqByEmail.approvedAt || now,
+              completedAt: existingReqByEmail.completedAt || now,
+            },
+          });
+        }
+      } else {
+        report.accountRequestsCreated++;
+        if (apply) {
+          await prisma.userCreationRequest.create({
+            data: {
+              userId: sub,
+              userName,
+              userEmail: u.email.toLowerCase(),
+              platform: lowerPlatform,
+              justification: `Imported: pre-existing ${displayName} account`,
+              status: 'COMPLETED',
+              externalUserId: u.externalId,
+              reviewerId: 'system_import',
+              reviewerName: `${displayName} Import`,
+              submittedAt: now,
+              approvedAt: now,
+              completedAt: now,
+            },
+          });
+        }
+      }
+    } else {
+      if (apply && existingReq.status !== 'COMPLETED') {
+        await prisma.userCreationRequest.update({
+          where: { id: existingReq.id },
+          data: {
             status: 'COMPLETED',
-            externalUserId: u.externalId,
-            reviewerId: 'system_import',
-            reviewerName: `${displayName} Import`,
-            submittedAt: now,
-            approvedAt: now,
-            completedAt: now,
+            externalUserId: u.externalId || existingReq.externalUserId,
+            completedAt: existingReq.completedAt || now,
           },
         });
       }

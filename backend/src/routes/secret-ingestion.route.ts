@@ -14,6 +14,10 @@ router.get('/keys', authenticateToken, (req: Request, res: Response, next: NextF
   new SecretIngestionController(req, res, next).listKeys(req, res, next).catch(next);
 });
 
+router.post('/requests/infra-preview', authenticateToken, (req: Request, res: Response, next: NextFunction) => {
+  new SecretIngestionController(req, res, next).previewInfra(req, res, next).catch(next);
+});
+
 router.post('/requests', authenticateToken, (req: Request, res: Response, next: NextFunction) => {
   new SecretIngestionController(req, res, next).submitRequest(req, res, next).catch(next);
 });

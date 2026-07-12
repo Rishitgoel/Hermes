@@ -9,7 +9,26 @@ const entrySchema = z.object({
   value: z.string().max(50000, 'Value is too large'),
 });
 
+// A manifest file the requester chose to include in the infra-deployment PR.
+const selectedTargetSchema = z.object({
+  path: z.string().trim().min(1, 'File path cannot be empty').max(400, 'File path is too long'),
+  manifestRef: z.string().trim().max(512).optional(),
+  format: z.enum(['helm-values', 'spc']).optional(),
+  // Exact keys the requester wants applied to THIS file — a subset of what the scan found
+  // missing there. Omitted/empty = apply every key (today's default).
+  keys: z.array(z.string().trim().min(1).max(512)).max(200).optional(),
+  // The env this path resolved to at compose time — carried through so the reviewer sees the
+  // same env label the requester did, not a re-derived guess. Purely informational.
+  env: z.string().trim().max(64).optional(),
+});
+
+// Which Secret Ingestion instance (AWS account) the request targets, e.g. "secrets" or
+// "secrets-sandbox". Optional (defaults to prod); validated against the configured secrets
+// family in the controller/service, not here.
+const platformSchema = z.string().trim().min(1).max(64).optional();
+
 export const submitIngestionSchema = z.object({
+  platform: platformSchema,
   secretName: z
     .string()
     .trim()
@@ -30,6 +49,23 @@ export const submitIngestionSchema = z.object({
       entries => new Set(entries.map(e => e.key)).size === entries.length,
       'Duplicate keys are not allowed in a single request'
     ),
+  // The requester's chosen infra-deployment manifest files (from the compose preview).
+  // Omitted ⇒ the PR falls back to the live auto-resolved consumer set.
+  infraTargets: z.array(selectedTargetSchema).max(50, 'Too many target files').optional(),
+});
+
+// Compose-screen preview: which manifests would change for a secret + a set of keys.
+export const infraPreviewSchema = z.object({
+  platform: platformSchema,
+  secretName: z
+    .string()
+    .trim()
+    .min(1, 'Secret name cannot be empty')
+    .max(512, 'Secret name is too long'),
+  keys: z
+    .array(z.string().trim().min(1, 'Key name cannot be empty').max(512))
+    .min(1, 'At least one key is required')
+    .max(200, 'Too many keys'),
 });
 
 export const reviewIngestionSchema = z.object({

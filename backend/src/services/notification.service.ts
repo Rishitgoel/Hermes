@@ -408,6 +408,7 @@ export class NotificationService {
     requesterName: string,
     justification: string | null,
     keyCount: number = 0,
+    platform: string = 'secrets',
   ): Promise<void> {
     const slackMsg = `🔑 *Hermes — Secret Ingestion Request*\n--------------------------\n*${escapeSlackText(requesterName)}* proposed ${keyCount} secret key(s) ingestion for *${escapeSlackText(secretName)}* (Group: *${escapeSlackText(groupName)}*).${justification ? `\nReason: "${escapeSlackText(justification)}"` : ''}\n\n👉 Review in Hermes: ${config.frontend.url}/pending-approvals`;
     await slackService.sendPing(slackMsg);
@@ -421,7 +422,7 @@ export class NotificationService {
         groupId
           ? prisma.groupAdmin.findMany({ where: { groupId } })
           : Promise.resolve([] as { userId: string; userEmail: string }[]),
-        prisma.platformAdmin.findMany({ where: { platform: 'secrets' } }),
+        prisma.platformAdmin.findMany({ where: { platform } }),
       ]);
       recipients = [
         ...groupAdmins.map((a) => ({ userId: a.userId, email: a.userEmail })),

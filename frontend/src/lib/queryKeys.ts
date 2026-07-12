@@ -32,10 +32,15 @@ export const queryKeys = {
   zkNodes: (path: string) => ['zk', 'nodes', path] as const,
   zkChangeRequests: (scope: 'mine' | 'review') => ['zk', 'change-requests', scope] as const,
 
-  // Secret Ingestion config management
-  secretsScope: () => ['secrets', 'scope'] as const,
-  secretKeys: (name: string) => ['secrets', 'keys', name] as const,
-  secretIngestionRequests: (scope: 'mine' | 'review') => ['secrets', 'ingestion-requests', scope] as const,
+  // Secret Ingestion config management. Keyed by the instance (AWS account) so switching
+  // the prod/sandbox chooser refetches that instance's groups/secrets/requests independently.
+  secretsInstances: () => ['secrets', 'instances'] as const,
+  secretsScope: (platform: string) => ['secrets', 'scope', platform] as const,
+  secretKeys: (platform: string, name: string) => ['secrets', 'keys', platform, name] as const,
+  secretIngestionRequests: (scope: 'mine' | 'review', platform?: string) =>
+    ['secrets', 'ingestion-requests', scope, platform ?? 'all'] as const,
+  secretInfraPreview: (platform: string, name: string, keys: string[]) =>
+    ['secrets', 'infra-preview', platform, name, [...keys].sort().join(',')] as const,
 
   // Admin Management
   adminPlatforms: () => ['admin', 'platforms'] as const,

@@ -4,6 +4,8 @@ import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../../contexts/AuthContext';
 import apiClient from '../../services/apiClient';
 import { listPendingUserCreations } from '../../services/api/userCreation';
+import { listZkChangeRequests } from '../../services/api/zookeeperApi';
+import { listIngestionRequests } from '../../services/api/secretsApi';
 import { queryKeys } from '../../lib/queryKeys';
 import {
   LayoutDashboard,
@@ -36,6 +38,10 @@ export const Sidebar: React.FC = () => {
     (scopes?.platforms?.length ?? 0) > 0 ||
     (scopes?.groups?.length ?? 0) > 0;
 
+  const canApproveAccounts =
+    (scopes?.superAdmin ?? isSuperAdmin) ||
+    (scopes?.platforms?.length ?? 0) > 0;
+
   // Admin Management is for super admins and platform admins.
   const showAdminManagement = (scopes?.superAdmin ?? isSuperAdmin) || (scopes?.platforms?.length ?? 0) > 0;
 
@@ -52,10 +58,26 @@ export const Sidebar: React.FC = () => {
   const { data: pendingUserCreations = [] } = useQuery({
     queryKey: queryKeys.pendingUserCreations(),
     queryFn: listPendingUserCreations,
-    enabled: isSuperAdmin,
+    enabled: canApproveAccounts,
     refetchInterval: 60000,
   });
-  const pendingApprovalsCount = pendingRequests.length + pendingUserCreations.length;
+  const { data: pendingZkChanges = [] } = useQuery({
+    queryKey: queryKeys.zkChangeRequests('review'),
+    queryFn: () => listZkChangeRequests('review'),
+    enabled: showApprovals,
+    refetchInterval: 60000,
+  });
+  const { data: pendingSecretIngestionRequests = [] } = useQuery({
+    queryKey: queryKeys.secretIngestionRequests('review'),
+    queryFn: () => listIngestionRequests('review'),
+    enabled: showApprovals,
+    refetchInterval: 60000,
+  });
+  const pendingApprovalsCount =
+    pendingRequests.length +
+    pendingUserCreations.length +
+    pendingZkChanges.length +
+    pendingSecretIngestionRequests.length;
 
   const handleRoleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     switchSimulatedRole(e.target.value as any);

@@ -1,6 +1,12 @@
 import prisma from '../config/prisma';
-import secretsManagerService, { SecretScopePattern } from './secrets-manager.service';
+import { SecretScopePattern, getSecretsManagerService } from './secrets-manager.service';
+import {
+  SelectedTarget,
+  getInfraRepoSyncService,
+  isInfraRepoEnabled,
+} from './infra-repo-sync.service';
 import eventBus from './event-bus';
+import config from '../config/config';
 import logger from '../utils/logger';
 import { AuthenticatedUser } from '../middleware/auth.middleware';
 import { getManageableGroupIds } from '../utils/authz';
@@ -11,7 +17,35 @@ import {
   ConflictError,
 } from '../utils/errors';
 
+/** Default / prod Secret Ingestion instance key. Callers that omit `platform` target this. */
 const PLATFORM = 'secrets';
+
+/** Enabled Secret Ingestion instance keys (prod + any configured sandbox), from config. */
+export function secretsFamilyPlatforms(): string[] {
+  return config.secretsInstances.filter((i) => i.enabled).map((i) => i.key);
+}
+
+/**
+ * Whether `platform` belongs to the Secret Ingestion ('secrets') family — checked against ALL
+ * configured instances, not just enabled ones, so this stays true even for a since-disabled
+ * sandbox. Used to gate `openEnrollment`: that field only makes sense for secrets groups (it's
+ * what lets every user implicitly stage ingestion requests) — any other platform's groups still
+ * require the normal request/approve/provision flow, so open enrollment there would show a
+ * group as ACTIVE for every user with no actual grant or provisioning behind it.
+ */
+export function isSecretsFamilyPlatform(platform: string): boolean {
+  const key = (platform || '').toLowerCase();
+  return config.secretsInstances.some((i) => i.family === 'secrets' && i.key === key);
+}
+
+/** Guard: reject a platform that isn't a configured Secret Ingestion instance. */
+export function assertSecretsPlatform(platform: string): string {
+  const key = (platform || '').toLowerCase();
+  if (!secretsFamilyPlatforms().includes(key)) {
+    throw new ValidationError(`"${platform}" is not a configured Secret Ingestion instance.`);
+  }
+  return key;
+}
 
 export type IngestionDecision = 'APPROVED' | 'REJECTED';
 
@@ -47,14 +81,16 @@ export class SecretIngestionService {
    * Resolves the raw scope patterns (exact names and/or wildcards) from a user's active
    * secrets-platform grants. No AWS call — wildcards are expanded lazily by the callers below.
    */
-  async resolveUserScopePatterns(userId: string): Promise<ScopedPattern[]> {
+  async resolveUserScopePatterns(userId: string, platform: string = PLATFORM): Promise<ScopedPattern[]> {
+    const svc = getSecretsManagerService(platform);
     const grants = await prisma.userAccess.findMany({
-      where: { userId, isActive: true, group: { platform: PLATFORM } },
+      where: { userId, isActive: true, group: { platform } },
       include: { group: true, level: true },
       orderBy: { grantedAt: 'desc' },
     });
 
     const out: ScopedPattern[] = [];
+    const seenGroupIds = new Set<string>();
     for (const g of grants) {
       const externalGroupId = g.level?.externalGroupId ?? g.group.externalGroupId;
       if (!externalGroupId) {
@@ -62,12 +98,43 @@ export class SecretIngestionService {
       }
       let patterns: SecretScopePattern[] = [];
       try {
-        patterns = secretsManagerService.parseScopePatterns(externalGroupId);
+        patterns = svc.parseScopePatterns(externalGroupId);
       } catch {
         continue;
       }
+      seenGroupIds.add(g.groupId);
       for (const pattern of patterns) {
         out.push({ groupId: g.groupId, groupName: g.group.name, pattern });
+      }
+    }
+
+    // Open-enrollment secrets groups are implicitly granted to EVERY authenticated
+    // user — no UserAccess row exists, so add their scope here regardless of who the
+    // caller is. This is what lets all users request Secret Ingestion with no join
+    // step, while group admins still gate the ingestion requests. Deduped against the
+    // groups the user already holds an explicit grant on (a user could be both).
+    const openGroups = await prisma.group.findMany({
+      where: {
+        platform,
+        isActive: true,
+        openEnrollment: true,
+        externalGroupId: { not: null },
+      },
+      select: { id: true, name: true, externalGroupId: true },
+    });
+    for (const g of openGroups) {
+      if (seenGroupIds.has(g.id) || !g.externalGroupId) {
+        continue;
+      }
+      let patterns: SecretScopePattern[] = [];
+      try {
+        patterns = svc.parseScopePatterns(g.externalGroupId);
+      } catch {
+        continue;
+      }
+      seenGroupIds.add(g.id);
+      for (const pattern of patterns) {
+        out.push({ groupId: g.id, groupName: g.name, pattern });
       }
     }
     return out;
@@ -78,10 +145,11 @@ export class SecretIngestionService {
    * grants map to themselves; wildcard/prefix grants are expanded LIVE against AWS ListSecrets,
    * so newly-added secrets that match automatically appear without editing the group.
    */
-  async resolveUserSecretTargets(userId: string): Promise<SecretTarget[]> {
-    const scoped = await this.resolveUserScopePatterns(userId);
+  async resolveUserSecretTargets(userId: string, platform: string = PLATFORM): Promise<SecretTarget[]> {
+    const svc = getSecretsManagerService(platform);
+    const scoped = await this.resolveUserScopePatterns(userId, platform);
     const needsLive = scoped.some(s => s.pattern.kind !== 'exact');
-    const allNames = needsLive ? await secretsManagerService.listAllAwsSecrets() : [];
+    const allNames = needsLive ? await svc.listAllAwsSecrets() : [];
 
     const out: SecretTarget[] = [];
     for (const s of scoped) {
@@ -90,7 +158,7 @@ export class SecretIngestionService {
         continue;
       }
       for (const name of allNames) {
-        if (secretsManagerService.matchesPattern(s.pattern, name)) {
+        if (svc.matchesPattern(s.pattern, name)) {
           out.push({ groupId: s.groupId, groupName: s.groupName, secretName: name });
         }
       }
@@ -107,12 +175,13 @@ export class SecretIngestionService {
    * taken from the live AWS list when the secret already exists, else the caller's input — a
    * prefix scope may legitimately create a brand-new secret in its namespace.
    */
-  async resolveSecretForUser(userId: string, secretName: string): Promise<SecretTarget | null> {
+  async resolveSecretForUser(userId: string, secretName: string, platform: string = PLATFORM): Promise<SecretTarget | null> {
+    const svc = getSecretsManagerService(platform);
     const wanted = secretName.trim();
     if (!wanted) {
       return null;
     }
-    const scoped = await this.resolveUserScopePatterns(userId);
+    const scoped = await this.resolveUserScopePatterns(userId, platform);
 
     const exact = scoped
       .filter(s => s.pattern.kind === 'exact' && s.pattern.name.toLowerCase() === wanted.toLowerCase())
@@ -127,7 +196,7 @@ export class SecretIngestionService {
     }
 
     const wildcard = scoped
-      .filter(s => s.pattern.kind !== 'exact' && secretsManagerService.matchesPattern(s.pattern, wanted))
+      .filter(s => s.pattern.kind !== 'exact' && svc.matchesPattern(s.pattern, wanted))
       .sort((a, b) => a.groupId.localeCompare(b.groupId));
     if (wildcard.length === 0) {
       return null;
@@ -135,7 +204,7 @@ export class SecretIngestionService {
 
     // Canonicalize casing against the live list when the secret already exists.
     let canonical = wanted;
-    const existing = (await secretsManagerService.listAllAwsSecrets()).find(
+    const existing = (await svc.listAllAwsSecrets()).find(
       n => n.toLowerCase() === wanted.toLowerCase(),
     );
     if (existing) {
@@ -148,8 +217,8 @@ export class SecretIngestionService {
   /**
    * Prepares the UI-friendly list of authorized groups and secret names.
    */
-  async getUserScope(userId: string) {
-    const targets = await this.resolveUserSecretTargets(userId);
+  async getUserScope(userId: string, platform: string = PLATFORM) {
+    const targets = await this.resolveUserSecretTargets(userId, platform);
     const groups = new Map<string, { groupId: string; groupName: string; secretNames: Set<string> }>();
     
     for (const t of targets) {
@@ -173,12 +242,39 @@ export class SecretIngestionService {
    * the group's grant list — AWS secret names are case-sensitive, so looking up the
    * client-supplied casing directly could silently miss the real secret.
    */
-  async listSecretKeys(userId: string, secretName: string): Promise<{ exists: boolean; keys: string[] }> {
-    const match = await this.resolveSecretForUser(userId, secretName);
+  async listSecretKeys(userId: string, secretName: string, platform: string = PLATFORM): Promise<{ exists: boolean; keys: string[] }> {
+    const match = await this.resolveSecretForUser(userId, secretName, platform);
     if (!match) {
       throw new AuthorizationError(`You do not have access to secret "${secretName}".`);
     }
-    return secretsManagerService.listSecretKeys(match.secretName);
+    return getSecretsManagerService(platform).listSecretKeys(match.secretName);
+  }
+
+  /**
+   * Preview which infra-deployment manifests a request would edit — the compose screen
+   * shows this so the requester can review/adjust before submitting. Scope-checked exactly
+   * like a submit (you can only preview a secret you're allowed to write to).
+   */
+  async previewInfraTargets(userId: string, secretName: string, keys: string[], platform: string = PLATFORM) {
+    const owner = await this.resolveSecretForUser(userId, secretName, platform);
+    if (!owner) {
+      throw new AuthorizationError(`You don't have permission to write to secret "${secretName}".`);
+    }
+    // An instance whose infra-deployment repo isn't wired (the sandbox, until its repo is added)
+    // mirrors nothing — no manifest targets to preview.
+    if (!isInfraRepoEnabled(platform)) {
+      return { secretName: owner.secretName, targets: [] };
+    }
+    // The secret's current keys let the (simulated) resolver mark already-present keys as
+    // "no change". In live mode the resolver diffs the real manifest and ignores this.
+    let existingKeys: string[] = [];
+    try {
+      existingKeys = (await getSecretsManagerService(platform).listSecretKeys(owner.secretName)).keys;
+    } catch {
+      existingKeys = [];
+    }
+    const targets = await getInfraRepoSyncService(platform).resolveTargets(owner.secretName, keys, existingKeys);
+    return { secretName: owner.secretName, targets };
   }
 
   /**
@@ -189,12 +285,15 @@ export class SecretIngestionService {
     secretName: string;
     entries: { key: string; value: string }[];
     justification?: string;
+    infraTargets?: SelectedTarget[];
+    platform?: string;
   }) {
     // Key/value shape (non-empty entries, length limits) is validated at the
     // controller boundary via submitIngestionSchema — this is the only caller.
     const { requester, entries, justification } = opts;
+    const platform = assertSecretsPlatform(opts.platform ?? PLATFORM);
 
-    const owner = await this.resolveSecretForUser(requester.id, opts.secretName);
+    const owner = await this.resolveSecretForUser(requester.id, opts.secretName, platform);
     if (!owner) {
       throw new AuthorizationError(`You don't have permission to write to secret "${opts.secretName}".`);
     }
@@ -203,12 +302,29 @@ export class SecretIngestionService {
     // sibling secret instead of matching the one the group actually grants.
     const secretName = owner.secretName;
 
+    // The requester's chosen manifest files (from the compose preview). An explicit empty
+    // array is preserved (it means "no files → no PR", e.g. an update-only request) and is
+    // honored verbatim; null means the requester never saw the preview, so the PR falls back
+    // to the live auto-resolved consumer set. An instance whose infra repo isn't wired (sandbox,
+    // until configured) never opens a PR, so any targets are dropped up front.
+    const infraTargets =
+      isInfraRepoEnabled(platform) && opts.infraTargets
+        ? opts.infraTargets.map(t => ({
+            path: t.path.trim(),
+            manifestRef: t.manifestRef?.trim() || secretName,
+            format: t.format,
+            keys: t.keys && t.keys.length > 0 ? [...new Set(t.keys.map(k => k.trim()).filter(Boolean))] : undefined,
+            env: t.env?.trim() || undefined,
+          }))
+        : null;
+
     const row = await prisma.secretIngestionRequest.create({
       data: {
         requesterId: requester.id,
         requesterName: requester.username,
         requesterEmail: requester.email,
         groupId: owner.groupId,
+        platform,
         secretName,
         status: 'PENDING',
         entries: entries.map(e => ({
@@ -218,6 +334,7 @@ export class SecretIngestionService {
           applied: false,
         })) as any,
         justification: justification?.trim() || null,
+        infraTargets: infraTargets as any,
       },
     });
 
@@ -231,6 +348,7 @@ export class SecretIngestionService {
           requestId: row.id,
           secretName,
           keyCount: entries.length,
+          keys: entries.map(e => e.key.trim()),
           justification: row.justification,
         } as any,
       },
@@ -240,6 +358,7 @@ export class SecretIngestionService {
       type: 'secret-ingestion.submitted' as any,
       payload: {
         requestId: row.id,
+        platform,
         secretName,
         groupId: owner.groupId,
         groupName: owner.groupName,
@@ -256,32 +375,72 @@ export class SecretIngestionService {
   /**
    * Groups a platform admin/super admin/group admin has review rights over.
    */
-  async reviewableGroupIds(user: AuthenticatedUser): Promise<{ all: boolean; groupIds: string[] }> {
-    return getManageableGroupIds(user, PLATFORM);
+  async reviewableGroupIds(user: AuthenticatedUser, platform: string = PLATFORM): Promise<{ all: boolean; groupIds: string[] }> {
+    return getManageableGroupIds(user, platform);
   }
 
   /**
    * Lists personal requests, or requests awaiting review — PENDING plus retryable
    * APPLY_FAILED (a failed apply must re-surface in the review queue or it would be
    * stranded, reachable only from the requester's read-only "mine" list).
+   *
+   * `platform` scopes to one Secret Ingestion instance; omitted, it spans the whole
+   * secrets family (prod + sandbox) — the reviewer's inbox merges both, each row still
+   * carrying its own `platform` so the UI can badge it and the apply path hits the
+   * right AWS account.
    */
-  async listIngestionRequests(user: AuthenticatedUser, scope: 'mine' | 'review') {
+  async listIngestionRequests(user: AuthenticatedUser, scope: 'mine' | 'review', platform?: string) {
     if (scope === 'mine') {
+      // Unlike 'review' below, this is not scoped to what's currently actionable — it's a
+      // read of the caller's OWN history. If an instance is later disabled after having been
+      // used (e.g. secrets-sandbox env vars unset post-go-live), secretsFamilyPlatforms()
+      // would exclude it and silently hide the user's own past requests from that instance,
+      // even though the rows still exist. List against every KNOWN instance key (enabled or
+      // not) when no explicit platform is given, so historical rows never disappear. An
+      // explicit platform filter must honor the same intent — validate against every
+      // configured instance (not assertSecretsPlatform's enabled-only list), so filtering
+      // "mine" by a since-disabled instance still returns the caller's own history instead
+      // of 400ing.
+      let platforms: string[];
+      if (platform) {
+        if (!isSecretsFamilyPlatform(platform)) {
+          throw new ValidationError(`"${platform}" is not a configured Secret Ingestion instance.`);
+        }
+        platforms = [platform.toLowerCase()];
+      } else {
+        platforms = config.secretsInstances.map((i) => i.key);
+      }
       return prisma.secretIngestionRequest.findMany({
-        where: { requesterId: user.id },
+        where: { requesterId: user.id, platform: { in: platforms } },
         orderBy: { createdAt: 'desc' },
         // Cap the personal history — long-lived users accumulate rows forever.
         take: 200,
       });
     }
-    const { all, groupIds } = await this.reviewableGroupIds(user);
-    if (!all && groupIds.length === 0) {
+    // Review queue: only currently-enabled instances are actionable, so this intentionally
+    // stays scoped to secretsFamilyPlatforms() (enabled-only) — reviewing a disabled instance's
+    // requests wouldn't be able to apply anything against it anyway.
+    const platforms = platform ? [assertSecretsPlatform(platform)] : secretsFamilyPlatforms();
+    // Review queue: a request from instance P is visible when the reviewer is a super/platform
+    // admin for P (all) or a group admin of the request's group on P. Build a per-instance OR
+    // so a `secrets` platform admin never sees `secrets-sandbox` requests (and vice versa).
+    const perPlatform = await Promise.all(
+      platforms.map(async (p) => ({ platform: p, ...(await this.reviewableGroupIds(user, p)) })),
+    );
+    const orClauses = perPlatform
+      .map((m) => {
+        if (m.all) return { platform: m.platform };
+        if (m.groupIds.length > 0) return { platform: m.platform, groupId: { in: m.groupIds } };
+        return null;
+      })
+      .filter((c): c is NonNullable<typeof c> => c !== null);
+    if (orClauses.length === 0) {
       return [];
     }
     const rows = await prisma.secretIngestionRequest.findMany({
       where: {
         status: { in: ['PENDING', 'APPLY_FAILED'] },
-        ...(all ? {} : { groupId: { in: groupIds } }),
+        OR: orClauses,
       },
       orderBy: { createdAt: 'asc' },
     });
@@ -295,26 +454,29 @@ export class SecretIngestionService {
    * have moved on. One getSecretMap call per distinct secret name in the queue.
    */
   private async attachPreviousValues<
-    T extends { secretName: string; entries: unknown },
+    T extends { platform: string; secretName: string; entries: unknown },
   >(rows: T[]): Promise<T[]> {
-    const secretNames = [...new Set(rows.map(r => r.secretName))];
-    const mapByName = new Map<string, Record<string, string> | null>();
+    // Key by (platform, secretName): two instances may hold a secret of the same name in
+    // different AWS accounts, so each must be read from its own SecretsManagerService.
+    const keyOf = (r: { platform: string; secretName: string }) => `${r.platform} ${r.secretName}`;
+    const mapByKey = new Map<string, Record<string, string> | null>();
+    const distinct = [...new Map(rows.map(r => [keyOf(r), r])).values()];
     await Promise.all(
-      secretNames.map(async name => {
+      distinct.map(async r => {
         try {
-          mapByName.set(name, await secretsManagerService.getSecretMap(name));
+          mapByKey.set(keyOf(r), await getSecretsManagerService(r.platform).getSecretMap(r.secretName));
         } catch (err: any) {
           logger.warn(
-            { secretName: name, error: err.message },
+            { platform: r.platform, secretName: r.secretName, error: err.message },
             'Could not resolve current value for secret ingestion diff',
           );
-          mapByName.set(name, null);
+          mapByKey.set(keyOf(r), null);
         }
       }),
     );
 
     return rows.map(row => {
-      const currentMap = mapByName.get(row.secretName);
+      const currentMap = mapByKey.get(keyOf(row));
       const entries = ((row.entries as unknown as IngestionEntry[]) ?? []).map(
         e => ({
           ...e,
@@ -332,8 +494,8 @@ export class SecretIngestionService {
   /**
    * Can a user review this request.
    */
-  async canReview(user: AuthenticatedUser, request: { groupId: string | null }): Promise<boolean> {
-    const { all, groupIds } = await this.reviewableGroupIds(user);
+  async canReview(user: AuthenticatedUser, request: { groupId: string | null; platform?: string | null }): Promise<boolean> {
+    const { all, groupIds } = await this.reviewableGroupIds(user, request.platform ?? PLATFORM);
     if (all) {
       return true;
     }
@@ -366,6 +528,10 @@ export class SecretIngestionService {
       throw new ValidationError(`Request is not pending or retryable (status: ${row.status}).`);
     }
 
+    // Resolve the AWS account this request targets from the row itself, so the read/apply
+    // below hit the correct instance (prod vs sandbox) regardless of the caller.
+    const svc = getSecretsManagerService(row.platform);
+
     const claim = await prisma.secretIngestionRequest.updateMany({
       where: { id: requestId, status: { in: ['PENDING', 'APPLY_FAILED'] } },
       data: {
@@ -385,6 +551,18 @@ export class SecretIngestionService {
       ...e,
     }));
 
+    // Snapshot which keys already exist in AWS BEFORE the write below — this is the only
+    // point that can distinguish a genuinely NEW key (needs an infra-deployment PR) from a
+    // value UPDATE (doesn't), since once putSecretKeyValues runs every approved key exists.
+    // `previousValue` on entries is deliberately never persisted (see IngestionEntry) — it's
+    // computed live for display only — so this can't be recomputed later from the DB row.
+    let currentMap: Record<string, string> | null = null;
+    try {
+      currentMap = await svc.getSecretMap(row.secretName);
+    } catch {
+      currentMap = null;
+    }
+
     const approvedKv: Record<string, string> = {};
     let approvedCount = 0;
     let rejectedCount = 0;
@@ -399,12 +577,19 @@ export class SecretIngestionService {
       }
     }
 
+    // Approved keys with no existing AWS value — the ones an infra-deployment PR is
+    // actually for. Unknown (currentMap null, e.g. a non-JSON secret) errs toward "new" so
+    // a needed PR is never silently skipped.
+    const newApprovedKeys = entries
+      .filter(e => e.decision === 'APPROVED' && (!currentMap || currentMap[e.key] === undefined))
+      .map(e => e.key);
+
     let failedCount = 0;
     let applyError: string | null = null;
 
     if (approvedCount > 0) {
       try {
-        await secretsManagerService.putSecretKeyValues(row.secretName, approvedKv, {
+        await svc.putSecretKeyValues(row.secretName, approvedKv, {
           createIfMissing: true,
         });
         for (const e of entries) {
@@ -457,6 +642,13 @@ export class SecretIngestionService {
       },
     });
 
+    // Record the actual key names touched, not just counts, so the audit trail shows
+    // *which* keys changed. `appliedKeys` are the ones genuinely written to AWS
+    // (empty on APPLY_FAILED, where they were approved but the write threw).
+    const approvedKeys = entries.filter(e => e.decision === 'APPROVED').map(e => e.key);
+    const rejectedKeys = entries.filter(e => e.decision === 'REJECTED').map(e => e.key);
+    const appliedKeys = entries.filter(e => e.applied).map(e => e.key);
+
     await prisma.auditEntry.create({
       data: {
         action: `SECRET_INGESTION_${status}`,
@@ -466,9 +658,14 @@ export class SecretIngestionService {
         details: {
           requestId: row.id,
           secretName: row.secretName,
+          requesterName: row.requesterName,
+          reviewerName: reviewer.username,
           approvedCount,
           rejectedCount,
           failedCount,
+          approvedKeys,
+          rejectedKeys,
+          appliedKeys,
           applyError,
         } as any,
       },
@@ -478,12 +675,14 @@ export class SecretIngestionService {
       type: 'secret-ingestion.reviewed' as any,
       payload: {
         requestId: row.id,
+        platform: row.platform,
         secretName: row.secretName,
         status,
         reviewerName: reviewer.username,
         approvedCount,
         rejectedCount,
         failedCount,
+        newApprovedKeys,
       },
       timestamp: new Date(),
     });

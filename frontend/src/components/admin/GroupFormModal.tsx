@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Icons from 'lucide-react';
 import Modal from '../common/Modal';
 import { queryKeys } from '../../lib/queryKeys';
+import { isSecretsPlatform } from '../../lib/platforms';
 import { prettyPlatform, slugify } from './adminUtils';
 import {
   createGroup,
@@ -49,7 +50,7 @@ export const GroupFormModal: React.FC<GroupFormModalProps> = ({
   const [description, setDescription] = useState(group?.description ?? '');
   const [externalGroupId, setExternalGroupId] = useState('');
 
-  const isSecrets = platform === 'secrets';
+  const isSecrets = isSecretsPlatform(platform);
   const [selectedSecrets, setSelectedSecrets] = useState<string[]>([]);
   const [secretsSearch, setSecretsSearch] = useState('');
   const [newPattern, setNewPattern] = useState('');
@@ -60,8 +61,8 @@ export const GroupFormModal: React.FC<GroupFormModalProps> = ({
   const patternSecrets = selectedSecrets.filter(isPatternScope);
 
   const secretsQuery = useQuery({
-    queryKey: ['admin', 'awsSecrets'],
-    queryFn: getAwsSecrets,
+    queryKey: ['admin', 'awsSecrets', platform],
+    queryFn: () => getAwsSecrets(platform),
     enabled: isSecrets,
   });
 

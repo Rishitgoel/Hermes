@@ -1,7 +1,34 @@
 import eventBus from './event-bus';
 import notificationService from './notification.service';
 import { ensureDefaultGroupMembership } from './default-membership.service';
+import {
+  InfraSyncResult,
+  SelectedTarget,
+  getInfraRepoSyncService,
+  isInfraRepoEnabled,
+} from './infra-repo-sync.service';
+import prisma from '../config/prisma';
 import logger from '../utils/logger';
+
+/** Persist the outcome of an infra-deployment PR operation onto the ingestion request. */
+async function persistInfraResult(requestId: string, r: InfraSyncResult): Promise<void> {
+  await prisma.secretIngestionRequest.update({
+    where: { id: requestId },
+    data: {
+      // A field is only included in `data` when the result object actually specifies the
+      // key — `'prNumber' in r` distinguishes an explicit `null` (clear the column) from an
+      // omitted key (leave the column unchanged), which a plain `?? undefined` could not: it
+      // silently collapsed both to "unchanged", so a result that legitimately needs to clear
+      // a stale infraPrNumber/infraBranch would find it never actually clears.
+      ...('prNumber' in r ? { infraPrNumber: r.prNumber } : {}),
+      ...('prUrl' in r ? { infraPrUrl: r.prUrl } : {}),
+      ...('prNodeId' in r ? { infraPrNodeId: r.prNodeId } : {}),
+      ...('branch' in r ? { infraBranch: r.branch } : {}),
+      infraSyncState: r.state,
+      infraSyncNote: r.note ?? null,
+    },
+  });
+}
 
 export function registerEventListeners(): void {
   // Wildcard audit log
@@ -168,8 +195,8 @@ export function registerEventListeners(): void {
   // Secret Ingestion lifecycle
   eventBus.on('secret-ingestion.submitted' as any, async (event) => {
     try {
-      const { requestId, secretName, groupId, groupName, requesterName, justification, keyCount } = event.payload as any;
-      await notificationService.notifySecretIngestionSubmitted(requestId, groupId, groupName, secretName, requesterName, justification, keyCount);
+      const { requestId, secretName, groupId, groupName, requesterName, justification, keyCount, platform } = event.payload as any;
+      await notificationService.notifySecretIngestionSubmitted(requestId, groupId, groupName, secretName, requesterName, justification, keyCount, platform);
     } catch (err: any) {
       logger.error('Failed to notify secret-ingestion.submitted event:', err.message);
     }
@@ -181,6 +208,75 @@ export function registerEventListeners(): void {
       await notificationService.notifySecretIngestionReviewed(requestId, secretName, status, reviewerName, approvedCount, rejectedCount, failedCount);
     } catch (err: any) {
       logger.error('Failed to notify secret-ingestion.reviewed event:', err.message);
+    }
+  });
+
+  // infra-deployment PR mirror — best-effort, decoupled from the AWS write. A GitHub
+  // failure here never blocks Hermes; the outcome is recorded on the request row.
+  eventBus.on('secret-ingestion.submitted' as any, async (event) => {
+    try {
+      const { requestId, secretName, platform } = event.payload as any;
+      const instance = platform ?? 'secrets';
+      // Each instance mirrors to its OWN infra-deployment repo; skip when that repo isn't wired
+      // (the sandbox, until it's configured) — those requests write to AWS only, no PR.
+      if (!isInfraRepoEnabled(instance)) return;
+      const row = await prisma.secretIngestionRequest.findUnique({ where: { id: requestId } });
+      if (!row) return;
+      const proposedKeys = ((row.entries as any[]) || []).map(e => e.key).filter(Boolean);
+      const targets = (row.infraTargets as SelectedTarget[] | null) || undefined;
+      const result = await getInfraRepoSyncService(instance).openPrForRequest({ requestId, secretName, proposedKeys, targets });
+      await persistInfraResult(requestId, result);
+    } catch (err: any) {
+      logger.error('Failed to open infra-deployment PR for secret ingestion:', err.message);
+    }
+  });
+
+  eventBus.on('secret-ingestion.reviewed' as any, async (event) => {
+    try {
+      // `newApprovedKeys` (approved keys with no pre-existing AWS value, snapshotted in
+      // secret-ingestion.service BEFORE the AWS write) comes from the event payload, not
+      // recomputed here — entries.previousValue is deliberately never persisted to the DB
+      // row (it's a live-computed display field), so re-deriving it from a re-fetched row
+      // would always see it as undefined and wrongly treat every approved key as new.
+      const { requestId, status, platform, newApprovedKeys: newApprovedKeysFromEvent } = event.payload as any;
+      const instance = platform ?? 'secrets';
+      // Each instance mirrors to its OWN infra-deployment repo; skip when that repo isn't wired
+      // (the sandbox, until it's configured — see the submitted listener above).
+      if (!isInfraRepoEnabled(instance)) return;
+      const infra = getInfraRepoSyncService(instance);
+      const row = await prisma.secretIngestionRequest.findUnique({ where: { id: requestId } });
+      if (!row) return;
+      const entries = (row.entries as any[]) || [];
+      const approvedKeys = entries.filter(e => e.decision === 'APPROVED').map(e => e.key).filter(Boolean);
+      const newApprovedKeys: string[] = ((newApprovedKeysFromEvent ?? approvedKeys) as string[]).filter(Boolean);
+      const targets = (row.infraTargets as SelectedTarget[] | null) || undefined;
+
+      if (status === 'APPLIED' || status === 'PARTIALLY_APPLIED') {
+        // Ensure a PR exists (covers a submit-time open that was skipped/raced/failed),
+        // then merge it down to just the approved keys.
+        let req = row;
+        if (!row.infraPrNumber) {
+          const opened = await infra.openPrForRequest({
+            requestId,
+            secretName: row.secretName,
+            proposedKeys: newApprovedKeys,
+            targets,
+          });
+          await persistInfraResult(requestId, opened);
+          if (opened.state !== 'OPEN') return;
+          req = { ...row, infraPrNumber: opened.prNumber ?? null, infraBranch: opened.branch ?? null, infraPrNodeId: opened.prNodeId ?? null };
+        }
+        const merged = await infra.mergePrForRequest({ request: req, approvedKeys, targets, newApprovedKeys });
+        await persistInfraResult(requestId, merged);
+      } else if (status === 'REJECTED') {
+        const closed = await infra.closePrForRequest({ request: row, reason: row.reviewNote || 'all keys rejected' });
+        await persistInfraResult(requestId, closed);
+      } else if (status === 'APPLY_FAILED') {
+        const noted = await infra.notePrFailure({ request: row, error: row.applyError || 'apply failed' });
+        await persistInfraResult(requestId, noted);
+      }
+    } catch (err: any) {
+      logger.error('Failed to sync infra-deployment PR for secret ingestion review:', err.message);
     }
   });
 

@@ -8,18 +8,47 @@ import {
   ReconcileMembersContext,
   ReconcileMembersResult,
 } from './provisioner.interface';
-import secretsManagerService from './secrets-manager.service';
+import {
+  SecretsManagerService,
+  getSecretsManagerService,
+} from './secrets-manager.service';
 import prisma from '../config/prisma';
 import config from '../config/config';
 import logger from '../utils/logger';
 import { ValidationError } from '../utils/errors';
 import * as templates from '../utils/email-templates';
 
-const PLATFORM = 'secrets';
-
+/**
+ * Secret Ingestion implementation of {@link PlatformAdapter}.
+ *
+ * One instance is constructed per configured Secret Ingestion account (prod + QA share the
+ * `secrets` instance; `secrets-sandbox` is a second AWS account) — see
+ * {@link createSecretsProvisioner} and provisioning.registry.ts. `platform` is that instance's
+ * unique registry key; every cache row and DB lookup is tagged with it, and the injected
+ * {@link SecretsManagerService} points at that instance's AWS account, so prod and sandbox never
+ * share state. Both instances carry `family: 'secrets'` so the UI collapses them into one
+ * Secret Ingestion surface with a prod/sandbox chooser.
+ */
 export class SecretsProvisioner implements PlatformAdapter {
-  readonly platform = PLATFORM;
-  readonly displayName = 'Secret Ingestion';
+  readonly platform: string;
+  readonly displayName: string;
+  readonly family: string;
+  readonly label?: string;
+  private readonly service: SecretsManagerService;
+
+  constructor(opts: {
+    platform: string;
+    displayName: string;
+    family: string;
+    label?: string;
+    service: SecretsManagerService;
+  }) {
+    this.platform = opts.platform;
+    this.displayName = opts.displayName;
+    this.family = opts.family;
+    this.label = opts.label;
+    this.service = opts.service;
+  }
 
   // ── Provisioning lifecycle ────────────────────────────────────────────────────
 
@@ -50,7 +79,7 @@ export class SecretsProvisioner implements PlatformAdapter {
         return;
       }
       await prisma.platformExternalUser.update({
-        where: { platform_externalId: { platform: PLATFORM, externalId: ctx.externalUserId } },
+        where: { platform_externalId: { platform: this.platform, externalId: ctx.externalUserId } },
         data: { externalGroupIds: names, lastSyncedAt: new Date() },
       });
       return;
@@ -66,7 +95,7 @@ export class SecretsProvisioner implements PlatformAdapter {
     const cached = await prisma.platformExternalUser.findUnique({
       where: {
         platform_email: {
-          platform: PLATFORM,
+          platform: this.platform,
           email: this.cacheRowEmail(email, userId),
         },
       },
@@ -89,7 +118,7 @@ export class SecretsProvisioner implements PlatformAdapter {
     const rowEmail = aclId;
     const now = new Date();
     await prisma.platformExternalUser.upsert({
-      where: { platform_email: { platform: PLATFORM, email: rowEmail } },
+      where: { platform_email: { platform: this.platform, email: rowEmail } },
       update: {
         externalId: aclId,
         name,
@@ -98,7 +127,7 @@ export class SecretsProvisioner implements PlatformAdapter {
         lastSyncedAt: now,
       },
       create: {
-        platform: PLATFORM,
+        platform: this.platform,
         externalId: aclId,
         email: rowEmail,
         name,
@@ -124,7 +153,7 @@ export class SecretsProvisioner implements PlatformAdapter {
    * Validate a candidate group id BEFORE it is persisted: it must parse to at least one secret name.
    */
   validateExternalGroupId(externalGroupId: string): void {
-    secretsManagerService.parseSecretNames(externalGroupId);
+    this.service.parseSecretNames(externalGroupId);
   }
 
   /**
@@ -132,8 +161,8 @@ export class SecretsProvisioner implements PlatformAdapter {
    */
   async deleteExternalGroup(externalGroupId: string): Promise<void> {
     logger.info(
-      { externalGroupId },
-      'deleteExternalGroup called for platform secrets (no-op to prevent deletion of real AWS secrets)',
+      { externalGroupId, platform: this.platform },
+      'deleteExternalGroup called for a secrets platform (no-op to prevent deletion of real AWS secrets)',
     );
   }
 
@@ -147,10 +176,10 @@ export class SecretsProvisioner implements PlatformAdapter {
     ctx: ReconcileMembersContext,
   ): Promise<ReconcileMembersResult> {
     const oldSecrets = ctx.oldExternalGroupId
-      ? secretsManagerService.parseSecretNames(ctx.oldExternalGroupId)
+      ? this.service.parseSecretNames(ctx.oldExternalGroupId)
       : [];
     const newSecrets = ctx.newExternalGroupId
-      ? secretsManagerService.parseSecretNames(ctx.newExternalGroupId)
+      ? this.service.parseSecretNames(ctx.newExternalGroupId)
       : [];
     const oldSet = new Set(oldSecrets);
     const newSet = new Set(newSecrets);
@@ -182,12 +211,12 @@ export class SecretsProvisioner implements PlatformAdapter {
   }
 
   async healthCheck(): Promise<{ healthy: boolean; message?: string }> {
-    return secretsManagerService.healthCheck();
+    return this.service.healthCheck();
   }
 
   /** Whether the adapter is running against the in-process mock store. */
   isSimulation(): boolean {
-    return config.secrets.isSimulation;
+    return this.service.getIsSimulation();
   }
 
   isReservedExternalGroup(_group: {
@@ -226,18 +255,18 @@ export class SecretsProvisioner implements PlatformAdapter {
   private async resolveAclId(email: string, userId?: string): Promise<string> {
     if (userId) {
       const account = await prisma.userCreationRequest.findUnique({
-        where: { userId_platform: { userId, platform: PLATFORM } },
+        where: { userId_platform: { userId, platform: this.platform } },
       });
       if (account?.externalUserId) {return account.externalUserId;}
     }
     const cached = await prisma.platformExternalUser.findUnique({
       where: {
-        platform_email: { platform: PLATFORM, email: email.toLowerCase() },
+        platform_email: { platform: this.platform, email: email.toLowerCase() },
       },
     });
     if (!cached) {
       throw new ValidationError(
-        `No Secret Ingestion identity exists for ${email}. The user's Secret Ingestion account must be created (approved) before access can be provisioned.`,
+        `No ${this.displayName} identity exists for ${email}. The user's account must be created (approved) before access can be provisioned.`,
       );
     }
     return cached.externalId;
@@ -256,7 +285,7 @@ export class SecretsProvisioner implements PlatformAdapter {
    */
   private extractExactSecretNames(externalGroupId: string): string[] {
     const names: string[] = [];
-    for (const pattern of secretsManagerService.parseScopePatterns(externalGroupId)) {
+    for (const pattern of this.service.parseScopePatterns(externalGroupId)) {
       if (pattern.kind === 'exact') {
         names.push(pattern.name);
       }
@@ -269,14 +298,14 @@ export class SecretsProvisioner implements PlatformAdapter {
       UPDATE platform_external_users
       SET external_group_ids = array_append(external_group_ids, ${secretName}),
           last_synced_at = NOW()
-      WHERE platform = ${PLATFORM} AND external_id = ${aclId}
+      WHERE platform = ${this.platform} AND external_id = ${aclId}
         AND NOT (${secretName} = ANY(external_group_ids))
     `;
   }
 
   private async cacheRemoveGroup(aclId: string, _path: string): Promise<void> {
     const grants = await prisma.userAccess.findMany({
-      where: { externalUserId: aclId, isActive: true, group: { platform: PLATFORM } },
+      where: { externalUserId: aclId, isActive: true, group: { platform: this.platform } },
       include: { group: true, level: true },
     });
     const activeSecrets = new Set<string>();
@@ -293,7 +322,7 @@ export class SecretsProvisioner implements PlatformAdapter {
       }
     }
     await prisma.platformExternalUser.update({
-      where: { platform_externalId: { platform: PLATFORM, externalId: aclId } },
+      where: { platform_externalId: { platform: this.platform, externalId: aclId } },
       data: {
         externalGroupIds: [...activeSecrets],
         lastSyncedAt: new Date(),
@@ -302,5 +331,33 @@ export class SecretsProvisioner implements PlatformAdapter {
   }
 }
 
-export const secretsProvisioner = new SecretsProvisioner();
+/**
+ * Build a {@link SecretsProvisioner} for one registered Secret Ingestion instance.
+ * Resolves the instance's own {@link SecretsManagerService} (own AWS account/credentials).
+ */
+export function createSecretsProvisioner(instance: {
+  key: string;
+  family: string;
+  label: string;
+  displayName: string;
+}): SecretsProvisioner {
+  return new SecretsProvisioner({
+    platform: instance.key,
+    displayName: instance.displayName,
+    family: instance.family,
+    label: instance.label,
+    service: getSecretsManagerService(instance.key),
+  });
+}
+
+// Back-compat default export: the prod instance ("secrets"), sourced from config.secretsInstances.
+// Existing callers (tests, admin maintenance) keep working unchanged.
+const prodInstance =
+  config.secretsInstances.find((i) => i.key === 'secrets') ?? config.secretsInstances[0];
+export const secretsProvisioner = createSecretsProvisioner({
+  key: prodInstance.key,
+  family: prodInstance.family,
+  label: prodInstance.label,
+  displayName: prodInstance.displayName,
+});
 export default secretsProvisioner;

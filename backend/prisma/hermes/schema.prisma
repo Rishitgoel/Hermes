@@ -31,6 +31,12 @@ model Group {
   color            String?                              // Hex color for card
   externalGroupId  String?          @map("external_group_id")  // ID of the matching group on the target platform
   isActive         Boolean          @default(true) @map("is_active")
+  // When true, EVERY authenticated Hermes user is an implicit member of this
+  // group — no access request, no UserAccess row, no per-user account. Used to
+  // let all users self-serve a shared capability (e.g. requesting Secret
+  // Ingestion) while a handful of group admins still approve. Scope resolution
+  // treats such a group as granted to everyone; the request flow refuses it.
+  openEnrollment   Boolean          @default(false) @map("open_enrollment")
   createdAt        DateTime         @default(now()) @map("created_at")
   updatedAt        DateTime         @updatedAt @map("updated_at")
   tables           String[]
@@ -473,6 +479,11 @@ model SecretIngestionRequest {
   requesterName  String                @map("requester_name")
   requesterEmail String                @map("requester_email")
   groupId        String?               @map("group_id")
+  // Which Secret Ingestion instance (AWS account) this request targets: "secrets" (prod + QA)
+  // or "secrets-sandbox". Tagged directly on the row rather than derived from the group so it
+  // survives the group relation's onDelete: SetNull, and so the review queue / apply path
+  // resolve the correct AWS account without a join. Existing rows default to "secrets".
+  platform       String                @default("secrets")
   secretName     String                @map("secret_name")
   entries        Json                  // Array of { key, value, decision?: "APPROVED"|"REJECTED", applied?, error? }
   justification  String?
@@ -486,11 +497,26 @@ model SecretIngestionRequest {
   updatedAt      DateTime              @updatedAt @map("updated_at")
   status         SecretIngestionStatus @default(PENDING)
 
+  // infra-deployment GitHub PR mirror (see infra-repo-sync.service.ts). The PR lifecycle
+  // tracks the Hermes request: opened (draft) on submit, merged on approve, closed on
+  // reject, left open on a retryable APPLY_FAILED. All nullable — a request whose secret
+  // has no key-enumerated consumer in the repo simply carries infraSyncState = SKIPPED.
+  infraPrNumber  Int?                  @map("infra_pr_number")
+  infraPrUrl     String?               @map("infra_pr_url")
+  infraPrNodeId  String?               @map("infra_pr_node_id")
+  infraBranch    String?               @map("infra_branch")
+  infraSyncState String?               @map("infra_sync_state") // OPEN | MERGED | CLOSED | SKIPPED | FAILED
+  infraSyncNote  String?               @map("infra_sync_note")
+  // Requester-selected manifest files to edit: Array of { path, manifestRef, format }.
+  // Null = fall back to the live auto-resolved consumer set at PR time.
+  infraTargets   Json?                 @map("infra_targets")
+
   group          Group?                @relation(fields: [groupId], references: [id], onDelete: SetNull)
 
   @@index([status])
   @@index([requesterId])
   @@index([groupId])
+  @@index([platform])
   @@map("secret_ingestion_requests")
 }
 

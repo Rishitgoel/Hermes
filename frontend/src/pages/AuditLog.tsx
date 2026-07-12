@@ -7,7 +7,15 @@ import { Scroll, Search, RefreshCw, ChevronLeft, ChevronRight } from 'lucide-rea
 import { queryKeys } from '../lib/queryKeys';
 import { fetchPlatforms } from '../services/api/platforms';
 import { useToast } from '../contexts/ToastContext';
-import { AuditLogEntry, actionBadgeStyle } from '../lib/auditFormat';
+import {
+  AuditLogEntry,
+  actionBadgeStyle,
+  auditLabel,
+  auditActionGroups,
+  describeAuditEntry,
+  isSystemActor,
+  requestParticipants,
+} from '../lib/auditFormat';
 import { AuditDetailModal } from '../components/audit/AuditDetailModal';
 
 interface AuditResponse {
@@ -115,52 +123,13 @@ export const AuditLog: React.FC = () => {
     });
   };
 
-  const formatDetails = (entry: AuditLogEntry) => {
-    const details = entry.details;
-    if (!details) return '—';
-
-    if (entry.action === 'REQUEST_CREATED') {
-      return `Requested duration: ${details.duration?.replace('_', ' ').toLowerCase()}`;
-    }
-    if (entry.action === 'ACCESS_GRANTED') {
-      // Auto-membership in the built-in default group reads better than the generic line.
-      if (details.source === 'default-group-auto-membership') {
-        return `Auto-added to "${details.groupName ?? 'default'}" group`;
-      }
-      // `externalUserId` is the platform-agnostic key; older rows still carry the
-      // legacy `redashUserId`, so fall back to it for historic entries.
-      return `Access granted by admin. Platform User ID: ${details.externalUserId ?? details.redashUserId ?? 'mock'}`;
-    }
-    if (entry.action === 'ACCESS_IMPORTED') {
-      const lvl = details.levelName ? ` — ${details.levelName}` : '';
-      return `Imported access: ${details.groupName ?? 'group'}${lvl}`;
-    }
-    if (entry.action === 'REDASH_IMPORT_TRIGGERED') {
-      const mode = details.apply ? 'applied' : 'dry run';
-      return `Redash import (${mode}): ${details.grantsCreated ?? 0} grant(s), ${details.accountRequestsCreated ?? 0} account(s), ${details.usersMatched ?? 0} matched`;
-    }
-    if (entry.action === 'ACCESS_REVOKED') {
-      return `Revoked. Reason: "${details.reason || 'manual'}"`;
-    }
-    if (entry.action === 'ACCESS_EXPIRED') {
-      return `Expired (time-bound grant ended)`;
-    }
-    if (entry.action === 'MANUAL_SYNC_TRIGGERED') {
-      return `${details.platform ?? 'Platform'} synced: ${details.usersSynced} users, ${details.groupsSynced} groups`;
-    }
-    if (entry.action === 'GROUP_CREATED' || entry.action === 'GROUP_UPDATED') {
-      const changed = Array.isArray(details.changed) ? details.changed.join(', ') : null;
-      const name = details.slug ?? details.name ?? 'group';
-      return changed ? `${name}: changed ${changed}` : `${name}`;
-    }
-    if (entry.action === 'GROUP_ARCHIVED') {
-      return `Archived "${details.slug ?? details.name ?? 'group'}"`;
-    }
-    if (entry.action === 'GROUP_DELETED') {
-      return `Deleted "${details.slug ?? details.name ?? 'group'}"${details.forced ? ' (incl. history)' : ''}`;
-    }
-    return JSON.stringify(details);
-  };
+  // Group names resolved once per render — the summary sentences reference groups by
+  // name, and audit rows only carry the id.
+  const groupNameById = new Map(groupOptions.map((g) => [g.id, g.name]));
+  const summarize = (entry: AuditLogEntry) =>
+    describeAuditEntry(entry, entry.groupId ? groupNameById.get(entry.groupId) : null);
+  const formatParticipant = (name: string | null) =>
+    name ? name.replace(/_/g, ' ') : 'Pending review';
 
   const isSyncing = syncMutation.isPending;
 
@@ -210,7 +179,7 @@ export const AuditLog: React.FC = () => {
         </form>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-muted)' }}>Action:</span>
+          <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-muted)' }}>Event:</span>
           <select
             className="form-select"
             style={{ width: '220px' }}
@@ -220,13 +189,16 @@ export const AuditLog: React.FC = () => {
               setPage(1);
             }}
           >
-            <option value="">All Actions</option>
-            <option value="REQUEST_CREATED">REQUEST_CREATED</option>
-            <option value="REQUEST_REJECTED">REQUEST_REJECTED</option>
-            <option value="ACCESS_GRANTED">ACCESS_GRANTED</option>
-            <option value="ACCESS_REVOKED">ACCESS_REVOKED</option>
-            <option value="ACCESS_EXPIRED">ACCESS_EXPIRED</option>
-            <option value="MANUAL_SYNC_TRIGGERED">MANUAL_SYNC_TRIGGERED</option>
+            <option value="">All Events</option>
+            {auditActionGroups().map((grp) => (
+              <optgroup key={grp.category} label={grp.category}>
+                {grp.actions.map((a) => (
+                  <option key={a.value} value={a.value}>
+                    {a.label}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
           </select>
         </div>
 
@@ -344,53 +316,77 @@ export const AuditLog: React.FC = () => {
             <table className="hermes-table">
               <thead>
                 <tr>
-                  <th>Event Date</th>
-                  <th>Performer</th>
-                  <th>Action</th>
-                  <th>Target User</th>
-                  <th>Details</th>
+                  <th style={{ width: '140px' }}>When</th>
+                  <th style={{ width: '190px' }}>Maker / checker</th>
+                  <th style={{ width: '190px' }}>Event</th>
+                  <th>What happened</th>
                 </tr>
               </thead>
               <tbody>
-                {logs.map((entry) => (
-                  <tr
-                    key={entry.id}
-                    className="audit-row"
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => setSelectedEntry(entry)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        setSelectedEntry(entry);
-                      }
-                    }}
-                  >
+                {logs.map((entry) => {
+                  const participants = requestParticipants(entry);
+                  return (
+                    <tr
+                      key={entry.id}
+                      className="audit-row"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setSelectedEntry(entry)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          setSelectedEntry(entry);
+                        }
+                      }}
+                    >
                     <td style={{ fontSize: '13px', whiteSpace: 'nowrap' }}>
                       {formatDate(entry.createdAt)}
                     </td>
-                    <td style={{ fontWeight: 700 }}>
-                      {entry.performerName.replace('_', ' ')}
+                    <td style={{ fontSize: '13px' }}>
+                      {participants ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                          <span><strong>Maker:</strong> {formatParticipant(participants.maker)}</span>
+                          <span><strong>Checker:</strong> {formatParticipant(participants.checker)}</span>
+                        </div>
+                      ) : isSystemActor(entry) ? (
+                        <span
+                          style={{
+                            fontSize: '11px',
+                            fontWeight: 800,
+                            padding: '2px 8px',
+                            borderRadius: 'var(--radius-sm)',
+                            backgroundColor: 'var(--bg-app)',
+                            border: '1px solid var(--border)',
+                            color: 'var(--text-muted)',
+                          }}
+                        >
+                          SYSTEM
+                        </span>
+                      ) : (
+                        <strong>{entry.performerName.replace(/_/g, ' ')}</strong>
+                      )}
                     </td>
                     <td>
-                      <span style={{
-                        fontSize: '11px',
-                        fontWeight: 800,
-                        padding: '2px 8px',
-                        borderRadius: 'var(--radius-sm)',
-                        ...actionBadgeStyle(entry.action),
-                      }}>
-                        {entry.action}
+                      <span
+                        title={entry.action}
+                        style={{
+                          fontSize: '12px',
+                          fontWeight: 800,
+                          padding: '2px 8px',
+                          borderRadius: 'var(--radius-sm)',
+                          whiteSpace: 'nowrap',
+                          ...actionBadgeStyle(entry.action),
+                        }}
+                      >
+                        {auditLabel(entry.action)}
                       </span>
                     </td>
-                    <td>
-                      {entry.targetUserName ? entry.targetUserName.replace('_', ' ') : <span style={{ color: 'var(--text-light)' }}>System</span>}
+                    <td style={{ fontSize: '13px', maxWidth: '520px', whiteSpace: 'normal', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
+                      {summarize(entry)}
                     </td>
-                    <td style={{ fontSize: '13px', maxWidth: '460px', whiteSpace: 'normal', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
-                      {formatDetails(entry)}
-                    </td>
-                  </tr>
-                ))}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

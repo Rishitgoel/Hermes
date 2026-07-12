@@ -3,7 +3,7 @@ import { createRedashProvisioner } from './redash.provisioner';
 import { getRedashService } from './redash.service';
 import { awsProvisioner } from './aws.provisioner';
 import { zookeeperProvisioner } from './zookeeper.provisioner';
-import { secretsProvisioner } from './secrets.provisioner';
+import { createSecretsProvisioner } from './secrets.provisioner';
 import config from '../config/config';
 import logger from '../utils/logger';
 
@@ -35,7 +35,19 @@ export class ProvisioningRegistry {
     }
     this.register('aws', awsProvisioner);
     this.register('zookeeper', zookeeperProvisioner);
-    this.register('secrets', secretsProvisioner);
+
+    // Register every configured Secret Ingestion instance (prod + QA share the `secrets`
+    // instance; `secrets-sandbox` is a second AWS account). Same opt-in shape as Redash: an
+    // instance not enabled (sandbox with no region/profile and not explicitly simulated) is
+    // skipped so an unconfigured entry never registers a dead adapter. Each instance gets its
+    // own SecretsManagerService (own AWS account/credentials/cache) via its unique platform key.
+    for (const instance of config.secretsInstances) {
+      if (!instance.enabled) {
+        logger.info(`🔌 Provisioning Registry: Skipping Secret Ingestion instance "${instance.key}" (not configured)`);
+        continue;
+      }
+      this.register(instance.key, createSecretsProvisioner(instance));
+    }
   }
 
   /** Add (or replace) the adapter for a platform. Key is lower-cased. */

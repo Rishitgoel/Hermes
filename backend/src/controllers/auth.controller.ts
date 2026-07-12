@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import BaseController from './base.controller';
 import prisma from '../config/prisma';
 import userCreationService from '../services/user-creation.service';
+import { secretsFamilyPlatforms } from '../services/secret-ingestion.service';
 import { computeAdminScopes, AdminScopes } from '../utils/authz';
 import logger from '../utils/logger';
 
@@ -74,12 +75,22 @@ export class AuthController extends BaseController {
         logger.error({ err: err.message, userId: this.user.id }, 'hasZookeeperAccess check failed in /auth/me');
       }
 
+      // Show the Secret Ingestion page when the user has a real secrets grant OR when
+      // any open-enrollment secrets group exists (those are implicitly granted to
+      // everyone — see secretIngestionService.resolveUserScopePatterns), so the nav
+      // entry appears for all users the moment such a group is set up.
       let hasSecretsAccess = false;
       try {
-        hasSecretsAccess =
-          (await prisma.userAccess.count({
-            where: { userId: this.user.id, isActive: true, group: { platform: 'secrets' } },
-          })) > 0;
+        const secretsPlatforms = secretsFamilyPlatforms();
+        const [grantCount, openCount] = await Promise.all([
+          prisma.userAccess.count({
+            where: { userId: this.user.id, isActive: true, group: { platform: { in: secretsPlatforms } } },
+          }),
+          prisma.group.count({
+            where: { platform: { in: secretsPlatforms }, isActive: true, openEnrollment: true },
+          }),
+        ]);
+        hasSecretsAccess = grantCount > 0 || openCount > 0;
       } catch (err: any) {
         logger.error({ err: err.message, userId: this.user.id }, 'hasSecretsAccess check failed in /auth/me');
       }

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../../lib/queryKeys';
+import { isSecretsPlatform } from '../../lib/platforms';
 import { useToast } from '../../contexts/ToastContext';
 import { prettyPlatform, reconcileToast } from './adminUtils';
 import ConfirmModal from './ConfirmModal';
@@ -52,7 +53,24 @@ export const GroupSettingsTab: React.FC<GroupSettingsTabProps> = ({ group, onDel
   // ZooKeeper groups map to a newline-separated list of znode paths, editable here.
   // Saving reconciles existing members onto the new mapping (server-side).
   const isZk = group.platform === 'zookeeper';
-  const isSecrets = group.platform === 'secrets';
+  const isSecrets = isSecretsPlatform(group.platform);
+
+  // Open enrollment: flip the group between "everyone is an implicit member" and the
+  // normal request/grant model. Surfaced for Secret Ingestion, where the intent is to
+  // let all users file ingestion requests while a few group admins approve.
+  const openEnrollmentMutation = useMutation({
+    mutationFn: (next: boolean) => updateGroup(group.id, { openEnrollment: next }),
+    onSuccess: (_r, next) => {
+      toast.success(
+        next
+          ? 'Open enrollment on — every user can now request Secret Ingestion for this group with no access request.'
+          : 'Open enrollment off — access reverts to explicit grants (existing members are unaffected).',
+        { duration: 8000 },
+      );
+      refresh();
+    },
+    onError: (e: any) => toast.error(e.message || 'Failed to update open enrollment.'),
+  });
 
   const [pathsDraft, setPathsDraft] = useState(group.externalGroupId ?? '');
   // Selected secrets checklist state
@@ -66,8 +84,8 @@ export const GroupSettingsTab: React.FC<GroupSettingsTabProps> = ({ group, onDel
   const isPatternScope = (s: string) => s === '*' || s.endsWith('*');
 
   const secretsQuery = useQuery({
-    queryKey: ['admin', 'awsSecrets'],
-    queryFn: getAwsSecrets,
+    queryKey: ['admin', 'awsSecrets', group.platform],
+    queryFn: () => getAwsSecrets(group.platform),
     enabled: isSecrets,
   });
 
@@ -200,7 +218,42 @@ export const GroupSettingsTab: React.FC<GroupSettingsTabProps> = ({ group, onDel
             <span style={{ color: 'var(--text-light)', fontWeight: 700 }}>Archived</span>
           )}
         </Row>
+        {isSecrets && (
+          <Row label="Open enrollment">
+            {group.openEnrollment ? (
+              <span style={{ color: 'var(--status-approved-text)', fontWeight: 700 }}>On — every user is a member</span>
+            ) : (
+              <span style={{ color: 'var(--text-light)', fontWeight: 700 }}>Off</span>
+            )}
+          </Row>
+        )}
       </div>
+
+      {/* Open enrollment: makes every Hermes user an implicit member so they can
+          self-serve Secret Ingestion requests with no join step; admins still approve. */}
+      {isSecrets && (
+        <div style={{ marginBottom: '20px', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '14px' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px' }}>
+            <div>
+              <div className="admin-section-label" style={{ marginBottom: '4px' }}>Open enrollment</div>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.4 }}>
+                When on, <strong>every</strong> Hermes user is automatically a member — anyone can request
+                Secret Ingestion for this group's secrets with no access request, while group admins still
+                approve each ingestion. New users are covered automatically; no one needs to be added.
+              </div>
+            </div>
+            <button
+              type="button"
+              className={`btn btn-sm ${group.openEnrollment ? 'btn-primary' : 'btn-outline'}`}
+              style={{ flexShrink: 0, minWidth: 64 }}
+              disabled={openEnrollmentMutation.isPending}
+              onClick={() => openEnrollmentMutation.mutate(!group.openEnrollment)}
+            >
+              {openEnrollmentMutation.isPending ? '…' : group.openEnrollment ? 'On' : 'Off'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ZooKeeper: editable multi-path mapping. Each line is one znode path with
           optional #perms; saving reconciles current members onto the new set. */}

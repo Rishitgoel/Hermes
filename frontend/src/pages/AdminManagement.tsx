@@ -54,7 +54,11 @@ export const AdminManagement: React.FC = () => {
   // Warms lib/platforms' live-displayName cache (e.g. "redash-qa" → "Redash
   // (QA)") so prettyPlatform() below shows real adapter names even if this
   // page is opened directly, without waiting on Dashboard/Groups to fetch it.
-  useQuery({ queryKey: queryKeys.platforms(), queryFn: fetchPlatforms });
+  // Also gives us each platform's `family`, so a secrets-family instance (prod or sandbox)
+  // shows the All-Secrets maintenance button.
+  const livePlatformsQuery = useQuery({ queryKey: queryKeys.platforms(), queryFn: fetchPlatforms });
+  const activeFamily =
+    livePlatformsQuery.data?.find((p) => p.key === activePlatform)?.family ?? activePlatform;
 
   // Default to the first platform once they load.
   useEffect(() => {
@@ -109,14 +113,14 @@ export const AdminManagement: React.FC = () => {
   // Secrets maintenance — one-click, idempotent setup of the "All Secrets" group (the
   // no-terminal path for prod). Members of it can ingest into every AWS secret, live-resolved.
   const ensureSecretsGroupMutation = useMutation({
-    mutationFn: () => ensureAllSecretsGroup(),
+    mutationFn: () => ensureAllSecretsGroup(activePlatform ?? undefined),
     onSuccess: (res) => {
       toast.success(
         res.created
           ? `"${res.group.name}" created — grants access to every AWS secret.`
           : `"${res.group.name}" already exists — nothing to do.`,
       );
-      queryClient.invalidateQueries({ queryKey: queryKeys.adminGroups('secrets') });
+      queryClient.invalidateQueries({ queryKey: queryKeys.adminGroups(activePlatform ?? 'secrets') });
       queryClient.invalidateQueries({ queryKey: queryKeys.groups() });
     },
     onError: (e: any) => toast.error(e.message || 'Failed to set up the All-Secrets group.'),
@@ -275,13 +279,13 @@ export const AdminManagement: React.FC = () => {
                   <Icons.RefreshCw size={15} /> Sync with {activePlatform === 'redash-qa' ? 'Redash QA' : 'Redash'}
                 </button>
               )}
-              {superAdmin && activePlatform === 'secrets' && (
+              {superAdmin && activeFamily === 'secrets' && (
                 <button
                   type="button"
                   className="btn btn-outline btn-sm"
                   disabled={ensureSecretsGroupMutation.isPending}
                   onClick={() => ensureSecretsGroupMutation.mutate()}
-                  title="Idempotently create the 'All Secrets' group (grants every AWS secret, resolved live)"
+                  title="Idempotently create the 'All Secrets' group on this instance (grants every AWS secret, resolved live)"
                 >
                   <Icons.KeyRound size={15} /> Set up All-Secrets group
                 </button>
@@ -449,7 +453,7 @@ export const AdminManagement: React.FC = () => {
 
       {/* Group detail drawer */}
       {selectedGroup && (
-        <GroupDrawer group={selectedGroup} onClose={() => setSelectedGroupId(null)} />
+        <GroupDrawer group={selectedGroup} manageablePlatforms={platforms} onClose={() => setSelectedGroupId(null)} />
       )}
 
       {/* Create group */}

@@ -63,7 +63,12 @@ export class GroupController extends BaseController {
           r => r.groupId === g.id && r.status === RequestStatus.PENDING,
         );
 
-        if (hasActive) {
+        // Open-enrollment groups are granted to everyone implicitly — always ACTIVE,
+        // never requestable (createRequest refuses them). This must win over the
+        // grant/request checks so the card renders as "you have access", not "Request".
+        if (g.openEnrollment) {
+          accessStatus = 'ACTIVE';
+        } else if (hasActive) {
           accessStatus = 'ACTIVE';
         } else if (hasWaitingForSetup) {
           accessStatus = 'AWAITING_SETUP';
@@ -82,6 +87,7 @@ export class GroupController extends BaseController {
           externalGroupId: g.externalGroupId,
           tables: g.tables,
           memberCount: g._count.userAccesses,
+          openEnrollment: g.openEnrollment,
           accessStatus,
           // Public level list — intentionally omits each level's externalGroupId
           // (platform config, exposed only via the admin level endpoints).
@@ -161,7 +167,10 @@ export class GroupController extends BaseController {
       // admin short-circuit (admin role = approval rights, not data access). An admin
       // with no grant sees NONE and requests access through the normal flow.
       let accessStatus = 'NONE';
-      if (activeAccess) {
+      if (group.openEnrollment) {
+        // Implicitly granted to everyone — always ACTIVE, never requestable.
+        accessStatus = 'ACTIVE';
+      } else if (activeAccess) {
         accessStatus = 'ACTIVE';
       } else if (openRequest?.status === RequestStatus.WAITING_FOR_SETUP) {
         accessStatus = 'AWAITING_SETUP';
@@ -189,6 +198,7 @@ export class GroupController extends BaseController {
         platform: group.platform,
         externalGroupId: group.externalGroupId,
         tables: group.tables,
+        openEnrollment: group.openEnrollment,
         accessStatus,
         levels: group.levels.map(l => ({
           id: l.id,

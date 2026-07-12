@@ -44,6 +44,8 @@ export interface ManageableGroup {
   tables: string[];
   externalGroupId: string | null;
   isActive: boolean;
+  /** When true, every user is an implicit member (no request/grant) — see below. */
+  openEnrollment: boolean;
   memberCount: number;
   adminCount: number;
 }
@@ -60,6 +62,7 @@ export interface GroupRecord {
   externalGroupId: string | null;
   tables: string[];
   isActive: boolean;
+  openEnrollment: boolean;
 }
 
 export interface CreateGroupInput {
@@ -71,6 +74,8 @@ export interface CreateGroupInput {
   color?: string;
   tables?: string[];
   externalGroupId?: string;
+  /** Make every user an implicit member (no request needed). Defaults false. */
+  openEnrollment?: boolean;
 }
 
 /**
@@ -86,6 +91,7 @@ export interface UpdateGroupInput {
   tables?: string[];
   externalGroupId?: string;
   isActive?: boolean;
+  openEnrollment?: boolean;
 }
 
 /**
@@ -251,10 +257,11 @@ export async function deleteGroup(groupId: string, force = false): Promise<Delet
   return res.data as DeleteGroupResult;
 }
 
-// Maintenance (super-admin): idempotently create the "All Secrets" group (platform=secrets,
-// externalGroupId='*' — the wildcard-all scope resolved live from AWS). Safe to click twice.
-export async function ensureAllSecretsGroup(): Promise<{ group: GroupRecord; created: boolean }> {
-  const res = await apiClient.post('/api/admin/maintenance/ensure-secrets-group');
+// Maintenance (super-admin): idempotently create the "All Secrets" group (externalGroupId='*' —
+// the wildcard-all scope resolved live from AWS) on a Secret Ingestion instance. `platform`
+// selects prod ("secrets", default) vs sandbox ("secrets-sandbox"). Safe to click twice.
+export async function ensureAllSecretsGroup(platform?: string): Promise<{ group: GroupRecord; created: boolean }> {
+  const res = await apiClient.post('/api/admin/maintenance/ensure-secrets-group', platform ? { platform } : {});
   return res.data as { group: GroupRecord; created: boolean };
 }
 
@@ -312,6 +319,25 @@ export async function addGroupMember(
 ): Promise<AddGroupMemberResult> {
   const res = await apiClient.post(`/api/admin/groups/${groupId}/members`, body);
   return res.data as AddGroupMemberResult;
+}
+
+export interface OnboardUserResult {
+  account: { status: string; platform: string };
+  membership: AddGroupMemberResult;
+}
+
+/**
+ * Recovery path for addGroupMember's USER_NOT_APPROVED error: creates the user's
+ * platform account (skipping the self-service submit/approve cycle) and then adds
+ * them to the group. Not a standalone action — only called after addGroupMember
+ * fails with that specific error, and only surfaced to platform admins.
+ */
+export async function onboardUserToGroup(
+  groupId: string,
+  body: { userId: string; levelId?: string; duration: AccessDurationValue },
+): Promise<OnboardUserResult> {
+  const res = await apiClient.post(`/api/admin/groups/${groupId}/onboard`, body);
+  return res.data as OnboardUserResult;
 }
 
 export async function removeGroupMember(groupId: string, userAccessId: string): Promise<void> {
@@ -466,8 +492,8 @@ export async function migrateZookeeperAcls(apply: boolean): Promise<ZookeeperMig
   return res.data as ZookeeperMigrationReport;
 }
 
-export async function getAwsSecrets(): Promise<string[]> {
-  const res = await apiClient.get('/api/admin/aws-secrets');
+export async function getAwsSecrets(platform?: string): Promise<string[]> {
+  const res = await apiClient.get('/api/admin/aws-secrets', { params: platform ? { platform } : {} });
   return res.data;
 }
 

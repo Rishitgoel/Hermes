@@ -58,6 +58,13 @@ export class AccessWorkflowService {
     const group = await prisma.group.findUnique({ where: { id: groupId } });
     if (!group) throw new NotFoundError('Group not found');
 
+    // Open-enrollment groups are granted to everyone implicitly — there is nothing
+    // to request. Refuse so no pending request is ever created for one (that would
+    // be exactly the friction open enrollment is meant to remove).
+    if (group.openEnrollment) {
+      throw new ValidationError('This group is open to all users — you already have access, no request is needed.');
+    }
+
     // Resolve the requested level. If the group has any active levels, one must be
     // chosen; if it has none, a level must NOT be supplied. The single `find` check
     // enforces both "belongs to this group" and "is active".
@@ -127,6 +134,11 @@ export class AccessWorkflowService {
   ): Promise<AccessRequest> {
     const group = await prisma.group.findUnique({ where: { id: groupId } });
     if (!group) throw new NotFoundError('Group not found');
+
+    // Open enrollment never expires and holds no grant to extend.
+    if (group.openEnrollment) {
+      throw new ValidationError('This group is open to all users — access does not expire and cannot be renewed.');
+    }
 
     // Must already hold active access — otherwise this is a first-time request and
     // belongs in createRequest (which enforces level requiredness and the account gate).
@@ -239,6 +251,12 @@ export class AccessWorkflowService {
       }
       const fail = (error: string) => failed.push({ groupId: it.groupId, groupName: group.name, error });
 
+      // Open enrollment: implicitly granted to everyone, so there is nothing to request.
+      if (group.openEnrollment) {
+        fail('This group is open to all users — no request is needed.');
+        continue;
+      }
+
       // Level requiredness — mirrors createRequest exactly.
       const levels = levelsByGroup.get(it.groupId) ?? [];
       let level: LevelRow | null = null;
@@ -314,6 +332,8 @@ export class AccessWorkflowService {
                 expiresAt,
                 levelId: v.level?.id ?? null,
                 levelName: v.level?.name ?? null,
+                requesterName: requester.username,
+                justification: v.justification,
                 bulkId,
                 bulk: true,
               },
@@ -412,7 +432,14 @@ export class AccessWorkflowService {
         targetUserName: requester.username,
         groupId: group.id,
         accessRequestId: request.id,
-        details: { duration, expiresAt, levelId: level?.id ?? null, levelName: level?.name ?? null },
+        details: {
+          duration,
+          expiresAt,
+          levelId: level?.id ?? null,
+          levelName: level?.name ?? null,
+          requesterName: requester.username,
+          justification,
+        },
       },
     });
 
@@ -485,6 +512,9 @@ export class AccessWorkflowService {
           expiresAt,
           levelId: opts.level?.id ?? null,
           levelName: opts.level?.name ?? null,
+          requesterName: opts.target.name,
+          reviewerName: opts.performer.username,
+          reviewNote: opts.reviewNote,
           ...opts.auditDetails,
         },
       },
@@ -746,7 +776,12 @@ export class AccessWorkflowService {
           targetUserName: request.requesterName,
           groupId: request.groupId,
           accessRequestId: requestId,
-          details: { note },
+          details: {
+            note,
+            requesterName: request.requesterName,
+            reviewerName: reviewer.username,
+            justification: request.justification,
+          },
         },
       });
 
@@ -811,7 +846,13 @@ export class AccessWorkflowService {
           targetUserName: request.requesterName,
           groupId: request.groupId,
           accessRequestId: requestId,
-          details: { userCreationStatus: userCreation.status },
+          details: {
+            userCreationStatus: userCreation.status,
+            requesterName: request.requesterName,
+            reviewerName: reviewer.username,
+            justification: request.justification,
+            reviewNote: note,
+          },
         },
       });
 
@@ -1234,6 +1275,10 @@ export class AccessWorkflowService {
             levelId: request.levelId ?? null,
             levelName: request.level?.name ?? null,
             expiresAt,
+            requesterName: request.requesterName,
+            reviewerName: request.reviewerName ?? performer.name,
+            justification: request.justification,
+            reviewNote: note ?? request.reviewNote,
           },
         },
       });
@@ -1303,6 +1348,10 @@ export class AccessWorkflowService {
             oldExternalGroupId,
             newExternalGroupId,
             oldDeprovisionError,
+            requesterName: request.requesterName,
+            reviewerName: request.reviewerName ?? performer.name,
+            justification: request.justification,
+            reviewNote: note ?? request.reviewNote,
             ...(isRenewal ? { renewal: true, newExpiresAt: expiresAt } : {}),
           },
         },
@@ -1375,6 +1424,10 @@ export class AccessWorkflowService {
           levelId: request.levelId ?? null,
           levelName: request.level?.name ?? null,
           expiresAt,
+          requesterName: request.requesterName,
+          reviewerName: request.reviewerName ?? performer.name,
+          justification: request.justification,
+          reviewNote: note ?? request.reviewNote,
         },
       },
     });

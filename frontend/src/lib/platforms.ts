@@ -116,10 +116,12 @@ export const PLATFORMS: PlatformMetadata[] = [
  * since these are plain helper functions called outside any component's render.
  */
 const liveDisplayNames: Record<string, string> = {};
+const liveFamilies: Record<string, string> = {};
 
-export function registerLivePlatforms(platforms: { key: string; displayName: string }[]): void {
+export function registerLivePlatforms(platforms: { key: string; displayName: string; family?: string }[]): void {
   for (const p of platforms) {
     liveDisplayNames[p.key] = p.displayName;
+    if (p.family) liveFamilies[p.key] = p.family;
   }
 }
 
@@ -135,4 +137,17 @@ export function platformDisplayName(id: string): string {
   const meta = PLATFORMS.find((p) => p.id === id);
   if (meta) return meta.name;
   return id.charAt(0).toUpperCase() + id.slice(1);
+}
+
+/**
+ * Whether a platform key belongs to the Secret Ingestion family (prod "secrets" or any
+ * additional instance like "secrets-sandbox"). Prefers the live adapter's own `family`
+ * (populated by registerLivePlatforms from GET /api/platforms — the actual source of
+ * truth) so this never depends on a naming convention. Falls back to the "secrets" /
+ * "secrets-<name>" prefix only before the live platforms list has loaded.
+ */
+export function isSecretsPlatform(id: string): boolean {
+  const family = liveFamilies[id];
+  if (family) return family === 'secrets';
+  return id === 'secrets' || id.startsWith('secrets-');
 }
