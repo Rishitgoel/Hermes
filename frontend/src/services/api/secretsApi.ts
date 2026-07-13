@@ -84,6 +84,9 @@ export interface InfraTargetSelection {
 
 export interface SecretIngestionRequest {
   id: string;
+  /** Human-friendly, monotonically increasing handle shown as "#12" — stable across both the
+   *  requester's list and the reviewer's queue. Optional for rows fetched before this existed. */
+  requestNumber?: number;
   requesterId: string;
   requesterName: string;
   requesterEmail: string;
@@ -140,3 +143,79 @@ export const reviewIngestionRequest = (
   payload: { decisions: { key: string; decision: 'APPROVED' | 'REJECTED' }[]; note?: string }
 ): Promise<SecretIngestionRequest> =>
   apiClient.put(`/api/secrets/requests/${id}/review`, payload).then((r) => r.data);
+
+/** Retries a stuck deployment PR merge (infraSyncState FAILED — e.g. GitHub branch protection
+ *  blocked the auto-merge) once a human has unblocked the underlying cause. */
+export const retryIngestionMerge = (id: string): Promise<SecretIngestionRequest> =>
+  apiClient.post(`/api/secrets/requests/${id}/retry-merge`, {}).then((r) => r.data);
+
+/** Dismisses a stuck deployment PR merge (infraSyncState FAILED — e.g. after a merge failure
+ *  has been manually resolved or is obsolete). */
+export const dismissIngestionMerge = (id: string): Promise<SecretIngestionRequest> =>
+  apiClient.post(`/api/secrets/requests/${id}/dismiss-merge`, {}).then((r) => r.data);
+
+// ── Drift detection (AWS Secrets Manager ⇄ infra-deployment manifests) ──────────────
+
+/** One consuming manifest's registered-vs-AWS state for a secret. */
+export interface DriftManifestView {
+  path: string;
+  env: string;
+  format: string;
+  registeredKeys: string[];
+  missingKeys: string[];
+  unmatched: boolean;
+}
+
+/** Drift for a single secret. */
+export interface SecretDrift {
+  secretName: string;
+  groupId: string;
+  groupName: string;
+  awsExists: boolean;
+  awsKeyCount: number;
+  /** In AWS but not registered in ≥1 manifest → CSI driver won't sync it. Fixable via a draft PR. */
+  missingInManifest: string[];
+  /** Registered in a manifest but absent from AWS → dangling reference. Report-only. */
+  missingInAws: string[];
+  /** Subset of missingInAws marked "ignore" — still shown here, but excluded from scheduled
+   * drift notifications. */
+  missingInAwsIgnored: string[];
+  /** Manifests referencing the secret whose key-list shape couldn't be parsed. */
+  unmatchedManifests: string[];
+  manifests: DriftManifestView[];
+  fixable: boolean;
+}
+
+export interface DriftReport {
+  platform: string;
+  infraEnabled: boolean;
+  scannedSecretCount: number;
+  truncated: boolean;
+  generatedAt: string;
+  drifts: SecretDrift[];
+}
+
+export interface DriftResolveResult {
+  state: 'OPEN' | 'MERGED' | 'CLOSED' | 'SKIPPED' | 'FAILED';
+  secretName: string;
+  keys?: string[];
+  prNumber?: number | null;
+  prUrl?: string | null;
+  branch?: string | null;
+  note?: string | null;
+}
+
+export const getSecretDrift = (platform?: string): Promise<DriftReport> =>
+  apiClient.get('/api/secrets/drift', { params: platform ? { platform } : {} }).then((r) => r.data);
+
+export const resolveSecretDrift = (secretName: string, platform?: string): Promise<DriftResolveResult> =>
+  apiClient.post('/api/secrets/drift/resolve', { secretName, ...(platform ? { platform } : {}) }).then((r) => r.data);
+
+export const mergeSecretDrift = (secretName: string, platform?: string): Promise<DriftResolveResult> =>
+  apiClient.post('/api/secrets/drift/merge', { secretName, ...(platform ? { platform } : {}) }).then((r) => r.data);
+
+export const ignoreDriftKey = (secretName: string, key: string, platform?: string): Promise<{ secretName: string; key: string; ignored: boolean }> =>
+  apiClient.post('/api/secrets/drift/ignore', { secretName, key, ...(platform ? { platform } : {}) }).then((r) => r.data);
+
+export const unignoreDriftKey = (secretName: string, key: string, platform?: string): Promise<{ secretName: string; key: string; ignored: boolean }> =>
+  apiClient.post('/api/secrets/drift/unignore', { secretName, key, ...(platform ? { platform } : {}) }).then((r) => r.data);

@@ -2,33 +2,13 @@ import eventBus from './event-bus';
 import notificationService from './notification.service';
 import { ensureDefaultGroupMembership } from './default-membership.service';
 import {
-  InfraSyncResult,
   SelectedTarget,
   getInfraRepoSyncService,
   isInfraRepoEnabled,
 } from './infra-repo-sync.service';
+import { persistInfraResult } from './secret-ingestion.service';
 import prisma from '../config/prisma';
 import logger from '../utils/logger';
-
-/** Persist the outcome of an infra-deployment PR operation onto the ingestion request. */
-async function persistInfraResult(requestId: string, r: InfraSyncResult): Promise<void> {
-  await prisma.secretIngestionRequest.update({
-    where: { id: requestId },
-    data: {
-      // A field is only included in `data` when the result object actually specifies the
-      // key — `'prNumber' in r` distinguishes an explicit `null` (clear the column) from an
-      // omitted key (leave the column unchanged), which a plain `?? undefined` could not: it
-      // silently collapsed both to "unchanged", so a result that legitimately needs to clear
-      // a stale infraPrNumber/infraBranch would find it never actually clears.
-      ...('prNumber' in r ? { infraPrNumber: r.prNumber } : {}),
-      ...('prUrl' in r ? { infraPrUrl: r.prUrl } : {}),
-      ...('prNodeId' in r ? { infraPrNodeId: r.prNodeId } : {}),
-      ...('branch' in r ? { infraBranch: r.branch } : {}),
-      infraSyncState: r.state,
-      infraSyncNote: r.note ?? null,
-    },
-  });
-}
 
 export function registerEventListeners(): void {
   // Wildcard audit log
@@ -277,6 +257,27 @@ export function registerEventListeners(): void {
       }
     } catch (err: any) {
       logger.error('Failed to sync infra-deployment PR for secret ingestion review:', err.message);
+      // Fallback: the AWS write already succeeded (this is the reviewed event), but mirroring
+      // the approved keys into the deployment PR threw before it could record its own outcome
+      // (openPrForRequest, or mergePrForRequest's pre-finalize content phase — only the finalize
+      // phase returns FAILED without throwing). Without recording FAILED here the request keeps a
+      // stale infraSyncState (null or OPEN) that never re-enters an admin queue and can't be
+      // retried — so the key lives in AWS but is never registered in a manifest, invisibly, with
+      // only this log line. Persist FAILED so it surfaces in the review queue for Retry/Dismiss.
+      try {
+        const { requestId, status } = (event.payload ?? {}) as any;
+        if (requestId && (status === 'APPLIED' || status === 'PARTIALLY_APPLIED')) {
+          await prisma.secretIngestionRequest.update({
+            where: { id: requestId },
+            data: {
+              infraSyncState: 'FAILED',
+              infraSyncNote: `Deployment PR sync failed: ${err.message}. Retry from the review queue once the cause is resolved.`,
+            },
+          });
+        }
+      } catch (persistErr: any) {
+        logger.error('Also failed to record deployment PR FAILED state:', persistErr.message);
+      }
     }
   });
 

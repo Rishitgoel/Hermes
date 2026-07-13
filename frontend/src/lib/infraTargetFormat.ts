@@ -26,6 +26,7 @@ export const envBg = (env: string): string => ENV_BG[env] || '#6b7280';
 
 /** infraSyncState → badge label + class. */
 export const INFRA_STATE_META: Record<string, { label: string; cls: string }> = {
+  PREPARING: { label: 'Preparing PR...', cls: 'badge-pending' },
   OPEN: { label: 'PR open', cls: 'badge-pending' },
   MERGED: { label: 'PR merged', cls: 'badge-active' },
   CLOSED: { label: 'PR closed', cls: 'badge-danger' },

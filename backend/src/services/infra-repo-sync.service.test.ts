@@ -363,6 +363,7 @@ describe('live-mode GitHub calls (axios mocked)', () => {
   it('mergePrForRequest returns FAILED (does not throw) when the merge is blocked by branch protection', async () => {
     const svc = new InfraRepoSyncService();
     mockGet.mockImplementation((url: string) => {
+      if (url.includes('/git/ref/heads/')) return Promise.resolve({ data: { object: { sha: 'base-commit-sha' } } });
       if (url.includes('/contents/')) {
         return Promise.resolve({ data: { sha: 'base-sha', content: Buffer.from(VALUES, 'utf8').toString('base64') } });
       }
@@ -377,6 +378,7 @@ describe('live-mode GitHub calls (axios mocked)', () => {
       return Promise.resolve({ data: {} }); // putContent
     });
     mockPost.mockResolvedValue({ data: {} }); // markReady (/graphql) + comment
+    mockPatch.mockResolvedValue({ data: {} }); // resetBranchToSha
 
     const result = await svc.mergePrForRequest({
       request: {

@@ -41,6 +41,7 @@ export const queryKeys = {
     ['secrets', 'ingestion-requests', scope, platform ?? 'all'] as const,
   secretInfraPreview: (platform: string, name: string, keys: string[]) =>
     ['secrets', 'infra-preview', platform, name, [...keys].sort().join(',')] as const,
+  secretDrift: (platform: string) => ['secrets', 'drift', platform] as const,
 
   // Admin Management
   adminPlatforms: () => ['admin', 'platforms'] as const,

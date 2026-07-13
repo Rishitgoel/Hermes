@@ -475,6 +475,10 @@ enum SecretIngestionStatus {
 
 model SecretIngestionRequest {
   id             String                @id @default(uuid())
+  // Human-friendly, monotonically increasing handle shown in the UI as "#12" — a stable,
+  // orderable reference the requester and reviewer both see (the UUID id is not referenceable).
+  // Global across instances (Postgres serial); the platform badge already distinguishes accounts.
+  requestNumber  Int                   @unique @default(autoincrement()) @map("request_number")
   requesterId    String                @map("requester_id")
   requesterName  String                @map("requester_name")
   requesterEmail String                @map("requester_email")

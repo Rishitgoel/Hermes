@@ -1,6 +1,7 @@
 import prisma from '../config/prisma';
 import { SecretScopePattern, getSecretsManagerService } from './secrets-manager.service';
 import {
+  InfraSyncResult,
   SelectedTarget,
   getInfraRepoSyncService,
   isInfraRepoEnabled,
@@ -45,6 +46,30 @@ export function assertSecretsPlatform(platform: string): string {
     throw new ValidationError(`"${platform}" is not a configured Secret Ingestion instance.`);
   }
   return key;
+}
+
+/**
+ * Persist the outcome of an infra-deployment PR operation onto the ingestion request. Shared
+ * by the async review-time listener (event-listeners.ts) and the manual retry path below, so
+ * the field-presence nuance below has one home instead of drifting between two copies.
+ */
+export async function persistInfraResult(requestId: string, r: InfraSyncResult): Promise<void> {
+  await prisma.secretIngestionRequest.update({
+    where: { id: requestId },
+    data: {
+      // A field is only included in `data` when the result object actually specifies the
+      // key — `'prNumber' in r` distinguishes an explicit `null` (clear the column) from an
+      // omitted key (leave the column unchanged), which a plain `?? undefined` could not: it
+      // silently collapsed both to "unchanged", so a result that legitimately needs to clear
+      // a stale infraPrNumber/infraBranch would find it never actually clears.
+      ...('prNumber' in r ? { infraPrNumber: r.prNumber } : {}),
+      ...('prUrl' in r ? { infraPrUrl: r.prUrl } : {}),
+      ...('prNodeId' in r ? { infraPrNodeId: r.prNodeId } : {}),
+      ...('branch' in r ? { infraBranch: r.branch } : {}),
+      infraSyncState: r.state,
+      infraSyncNote: r.note ?? null,
+    },
+  });
 }
 
 export type IngestionDecision = 'APPROVED' | 'REJECTED';
@@ -439,8 +464,17 @@ export class SecretIngestionService {
     }
     const rows = await prisma.secretIngestionRequest.findMany({
       where: {
-        status: { in: ['PENDING', 'APPLY_FAILED'] },
-        OR: orClauses,
+        AND: [
+          { OR: orClauses },
+          {
+            // Normally "actionable" means still PENDING/retryable APPLY_FAILED. But a request
+            // whose AWS write already succeeded (APPLIED/PARTIALLY_APPLIED — terminal, can't be
+            // re-reviewed) can still have infraSyncState FAILED (e.g. GitHub branch protection
+            // blocked the auto-merge, 405) — that's a stuck deployment PR with no other way back
+            // into an admin's queue, so surface it here too so "Retry merge" has somewhere to live.
+            OR: [{ status: { in: ['PENDING', 'APPLY_FAILED'] } }, { infraSyncState: 'FAILED' }],
+          },
+        ],
       },
       orderBy: { createdAt: 'asc' },
     });
@@ -685,6 +719,108 @@ export class SecretIngestionService {
         newApprovedKeys,
       },
       timestamp: new Date(),
+    });
+
+    return updated;
+  }
+
+  /**
+   * Retries the infra-deployment PR merge for a request whose AWS write already succeeded
+   * (status APPLIED/PARTIALLY_APPLIED — terminal, no longer re-reviewable) but whose PR merge
+   * failed, e.g. GitHub branch protection blocking a bot-authored merge (405). The branch
+   * already holds the approved keys at that point, so this just re-invokes the same merge —
+   * useful once a human has unblocked the underlying cause (bypassed/adjusted the protection
+   * rule, satisfied a required check, etc.). Only meaningful when infraSyncState is FAILED.
+   */
+  async retryInfraMerge(requestId: string) {
+    const row = await prisma.secretIngestionRequest.findUnique({ where: { id: requestId } });
+    if (!row) {
+      throw new NotFoundError('Secret Ingestion Request not found');
+    }
+    if (row.infraSyncState !== 'FAILED') {
+      throw new ValidationError(
+        `Nothing to retry — deployment PR sync state is "${row.infraSyncState ?? 'none'}", not FAILED.`,
+      );
+    }
+    if (!isInfraRepoEnabled(row.platform)) {
+      throw new ValidationError(`Deployment PR sync is not enabled for platform "${row.platform}".`);
+    }
+
+    const entries = ((row.entries as unknown as IngestionEntry[]) ?? []);
+    const approvedKeys = entries.filter(e => e.decision === 'APPROVED').map(e => e.key).filter(Boolean);
+    const targets = (row.infraTargets as SelectedTarget[] | null) || undefined;
+
+    const infra = getInfraRepoSyncService(row.platform);
+
+    // A FAILED sync where no PR was ever recorded means the ORIGINAL open threw (not just the
+    // merge) — e.g. GitHub was unreachable when the request was approved. Re-open the PR here so
+    // Retry is a complete recovery path, not merely a merge-retry. openPrForRequest diffs the live
+    // manifest and adds only genuinely-missing keys, so passing the full approved set is safe (an
+    // already-registered key just yields SKIPPED). Mirrors the reviewed-event listener's re-open.
+    let req = row;
+    if (!row.infraPrNumber || !row.infraBranch) {
+      const opened = await infra.openPrForRequest({
+        requestId: row.id,
+        secretName: row.secretName,
+        proposedKeys: approvedKeys,
+        targets,
+      });
+      await persistInfraResult(requestId, opened);
+      // Nothing to merge (no consumers, keys already present, or open failed again) — the
+      // persisted state above already reflects the outcome, so stop here.
+      if (opened.state !== 'OPEN') {
+        return prisma.secretIngestionRequest.findUnique({ where: { id: requestId } });
+      }
+      req = {
+        ...row,
+        infraPrNumber: opened.prNumber ?? null,
+        infraBranch: opened.branch ?? null,
+        infraPrNodeId: opened.prNodeId ?? null,
+      };
+    }
+
+    const merged = await infra.mergePrForRequest({
+      request: req,
+      approvedKeys,
+      targets,
+    });
+    await persistInfraResult(requestId, merged);
+    return prisma.secretIngestionRequest.findUnique({ where: { id: requestId } });
+  }
+
+  /**
+   * Dismisses a stuck deployment PR merge (infraSyncState FAILED — e.g. after a merge failure
+   * has been manually resolved or is obsolete). Updates database state to CLOSED and attempts
+   * to close the corresponding Pull Request on GitHub.
+   */
+  async dismissInfraMerge(requestId: string) {
+    const row = await prisma.secretIngestionRequest.findUnique({ where: { id: requestId } });
+    if (!row) {
+      throw new NotFoundError('Secret Ingestion Request not found');
+    }
+    if (row.infraSyncState !== 'FAILED') {
+      throw new ValidationError(
+        `Nothing to dismiss — deployment PR sync state is "${row.infraSyncState ?? 'none'}", not FAILED.`,
+      );
+    }
+
+    if (row.infraPrNumber && isInfraRepoEnabled(row.platform)) {
+      try {
+        await getInfraRepoSyncService(row.platform).closePrForRequest({
+          request: { infraPrNumber: row.infraPrNumber },
+          reason: 'Hermes: deployment PR dismissed by admin (marked resolved manually or obsolete).',
+        });
+      } catch (err: any) {
+        logger.warn({ requestId, err: err.message }, 'Failed to close PR on GitHub during dismiss');
+      }
+    }
+
+    const updated = await prisma.secretIngestionRequest.update({
+      where: { id: requestId },
+      data: {
+        infraSyncState: 'CLOSED',
+        infraSyncNote: 'Dismissed by admin (marked resolved manually or obsolete)',
+      },
     });
 
     return updated;

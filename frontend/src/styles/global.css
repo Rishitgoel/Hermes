@@ -1213,6 +1213,9 @@ a:focus-visible {
   overflow: hidden;
   border: 1px solid var(--border);
   animation: modal-in 0.2s ease-out;
+  display: flex;
+  flex-direction: column;
+  max-height: 90vh;
 }
 
 /* Wider variant for content that needs more room, e.g. audit-log diffs. */
@@ -1251,6 +1254,8 @@ a:focus-visible {
 
 .modal-body {
   padding: 24px;
+  overflow-y: auto;
+  flex: 1;
 }
 
 .modal-footer {

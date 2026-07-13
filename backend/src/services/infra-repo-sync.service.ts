@@ -119,6 +119,22 @@ export interface ResolvedTarget {
   unmatched?: boolean;
 }
 
+/**
+ * One consuming manifest's drift for a secret: what it currently enumerates (`registeredKeys`)
+ * vs what AWS actually holds. `missingKeys` are the AWS keys NOT registered here — the exact
+ * keys a "solve drift" draft PR would add. `unmatched` mirrors the editors: the secret is
+ * referenced but its key-list structure couldn't be located, so its registered set is unknown
+ * (NOT empty) and it can't be auto-fixed.
+ */
+export interface DriftManifest {
+  path: string;
+  env: string;
+  format: Mechanism;
+  registeredKeys: string[];
+  missingKeys: string[];
+  unmatched: boolean;
+}
+
 /** The requester's final file selection, stored on the request and used to open the PR. */
 export interface SelectedTarget {
   path: string;
@@ -345,6 +361,115 @@ export function editSpc(
   return { status: 'up-to-date' };
 }
 
+/**
+ * The keys currently REGISTERED for `secretName` in a manifest — the flip side of the editors
+ * above (used by drift detection to diff the repo's enumerated keys against what AWS holds).
+ * `referenced` is false when the secret isn't mentioned at all; `unmatched` is true when it IS
+ * referenced but its key-list structure couldn't be located, so `keys` is unknown, not empty.
+ */
+export function registeredKeysInFile(
+  path: string,
+  content: string,
+  secretName: string,
+): { referenced: boolean; keys: string[]; unmatched: boolean } {
+  return isSpcFile(path)
+    ? registeredKeysSpc(content, secretName)
+    : registeredKeysValues(content, secretName);
+}
+
+/** Registered keys under the `items:` list of the values mapping matching `secretName`. */
+function registeredKeysValues(
+  content: string,
+  secretName: string,
+): { referenced: boolean; keys: string[]; unmatched: boolean } {
+  const lines = content.split(/\r?\n/);
+  const target = secretName.trim();
+
+  let mapIdx = -1;
+  let mapIndent = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^(\s*)-?\s*awsSecretName:\s*(.+?)\s*$/);
+    if (m && stripQuotes(m[2]) === target) {
+      mapIdx = i;
+      mapIndent = m[1].length;
+      break;
+    }
+  }
+  if (mapIdx === -1) return { referenced: false, keys: [], unmatched: false };
+
+  let itemsIdx = -1;
+  let itemsIndent = 0;
+  for (let j = mapIdx + 1; j < lines.length; j++) {
+    const ln = lines[j];
+    if (/^\s*$/.test(ln) || /^\s*#/.test(ln)) continue;
+    if (indentOf(ln) <= mapIndent) break;
+    if (/^\s*items:\s*$/.test(ln)) {
+      itemsIdx = j;
+      itemsIndent = indentOf(ln);
+      break;
+    }
+  }
+  if (itemsIdx === -1) return { referenced: true, keys: [], unmatched: true };
+
+  const keys: string[] = [];
+  for (let j = itemsIdx + 1; j < lines.length; j++) {
+    const ln = lines[j];
+    if (/^\s*$/.test(ln) || /^\s*#/.test(ln)) continue;
+    if (indentOf(ln) <= itemsIndent) break;
+    const im = ln.match(/^\s*-\s+(.+?)\s*$/);
+    // A non-scalar item (mapping-style entry) means this list isn't the flat shape we read —
+    // report unmatched rather than returning a partial registered set, same as the editor.
+    if (!im) return { referenced: true, keys: [], unmatched: true };
+    keys.push(stripQuotes(im[1]));
+  }
+  return { referenced: true, keys, unmatched: false };
+}
+
+/** Registered keys under the `jmesPath:` list of the SPC object matching `secretName`. */
+function registeredKeysSpc(
+  content: string,
+  secretName: string,
+): { referenced: boolean; keys: string[]; unmatched: boolean } {
+  const lines = content.split(/\r?\n/);
+  const target = secretName.trim();
+
+  let objIdx = -1;
+  let objIndent = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^(\s*)-?\s*objectName:\s*(.+?)\s*$/);
+    if (m && stripQuotes(m[2]) === target) {
+      objIdx = i;
+      objIndent = m[1].length;
+      break;
+    }
+  }
+  if (objIdx === -1) return { referenced: false, keys: [], unmatched: false };
+
+  let jpIdx = -1;
+  let jpIndent = 0;
+  for (let j = objIdx + 1; j < lines.length; j++) {
+    const ln = lines[j];
+    if (/^\s*$/.test(ln) || /^\s*#/.test(ln)) continue;
+    if (indentOf(ln) <= objIndent) break;
+    if (/^\s*jmesPath:\s*$/.test(ln)) {
+      jpIdx = j;
+      jpIndent = indentOf(ln);
+      break;
+    }
+  }
+  if (jpIdx === -1) return { referenced: true, keys: [], unmatched: true };
+
+  const keys: string[] = [];
+  for (let j = jpIdx + 1; j < lines.length; j++) {
+    const ln = lines[j];
+    if (/^\s*$/.test(ln) || /^\s*#/.test(ln)) continue;
+    if (indentOf(ln) <= jpIndent) break;
+    const pm = ln.match(/^\s*-\s*path:\s*(.+?)\s*$/);
+    if (pm) keys.push(stripQuotes(pm[1]));
+  }
+  return { referenced: true, keys, unmatched: false };
+}
+
 const isValuesFile = (p: string): boolean => /(^|\/)values-[^/]*\.ya?ml$/i.test(p);
 const isSpcFile = (p: string): boolean => /(^|\/)secretproviderclass[^/]*\.ya?ml$/i.test(p);
 // Only values-*.yaml is ever auto-discovered as a consumer — SecretProviderClass files are
@@ -484,6 +609,22 @@ export class InfraRepoSyncService {
     }
   }
 
+  /**
+   * Force-moves an existing branch ref to `sha` (a rebase-by-reset). Used at merge time to
+   * re-point a PR branch at the CURRENT base commit before re-writing its content: without
+   * this, the branch keeps its original (stale) merge-base, so an earlier PR that already
+   * landed keys in the same `items:` region makes git's three-way merge see two overlapping
+   * insertions → a conflict GitHub never auto-resolves — even though the recomputed file bytes
+   * are logically correct. Resetting the merge-base to current base leaves the branch's only
+   * diff as the new key(s), so the PR merges cleanly.
+   */
+  private async resetBranchToSha(branch: string, sha: string): Promise<void> {
+    await this.gh().patch(this.repoPath(`/git/refs/heads/${branch}`), {
+      sha,
+      force: true,
+    });
+  }
+
   private async putContent(
     path: string,
     branch: string,
@@ -538,26 +679,47 @@ export class InfraRepoSyncService {
   }
 
   private async mergePull(number: number, title: string): Promise<void> {
-    try {
-      await this.gh().put(this.repoPath(`/pulls/${number}/merge`), {
-        merge_method: 'squash',
-        commit_title: title,
-      });
-    } catch (err: any) {
-      const status = err.response?.status;
-      if (status === 405) {
-        // Branch protection rules block the merge (required reviews / status checks).
-        // Log and re-throw with a clear message so the caller can persist the failure.
-        const msg = `PR #${number} cannot be merged — branch protection rules are blocking (405). Ensure the PAT has admin/bypass permissions or that required checks pass.`;
-        logger.error({ pr: number, status }, msg);
-        throw new Error(msg);
+    const maxAttempts = 4;
+    let lastError: any;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await this.gh().put(this.repoPath(`/pulls/${number}/merge`), {
+          merge_method: 'squash',
+          commit_title: title,
+        });
+        return;
+      } catch (err: any) {
+        lastError = err;
+        const status = err.response?.status;
+        if (status === 405 && attempt < maxAttempts) {
+          logger.info(
+            { pr: number, attempt },
+            `PR merge returned 405 (calculating mergeability?), retrying in 1.5s...`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+          continue;
+        }
+        break;
       }
-      throw err;
     }
+
+    const status = lastError.response?.status;
+    if (status === 405) {
+      // Branch protection rules block the merge (required reviews / status checks).
+      // Log and re-throw with a clear message so the caller can persist the failure.
+      const msg = `PR #${number} cannot be merged — branch protection rules are blocking (405). Ensure the PAT has admin/bypass permissions or that required checks pass.`;
+      logger.error({ pr: number, status }, msg);
+      throw new Error(msg);
+    }
+    throw lastError;
   }
 
   private async closePull(number: number): Promise<void> {
     await this.gh().patch(this.repoPath(`/pulls/${number}`), { state: 'closed' });
+  }
+
+  private async reopenPull(number: number): Promise<void> {
+    await this.gh().patch(this.repoPath(`/pulls/${number}`), { state: 'open' });
   }
 
   private async comment(number: number, body: string): Promise<void> {
@@ -708,6 +870,57 @@ export class InfraRepoSyncService {
       return target;
     });
     return resolved.filter((t): t is ResolvedTarget => t !== null);
+  }
+
+  /**
+   * Drift view for the admin report: for every manifest that consumes `secretName`, what it
+   * currently enumerates vs the live AWS key set. Read-only (no commit). In simulation there's
+   * no real repo, so it returns one representative manifest that registers all-but-one AWS key,
+   * making the "keys missing from the manifest" drift (and its Solve button) demoable offline.
+   */
+  async resolveDrift(secretName: string, awsKeys: string[]): Promise<DriftManifest[]> {
+    const keys = [...new Set(awsKeys.map(k => k.trim()).filter(Boolean))];
+    if (this.isSimulation) {
+      const safe = secretName.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+      const registeredKeys = keys.length > 1 ? keys.slice(0, -1) : [];
+      const missingKeys = keys.filter(k => !registeredKeys.includes(k));
+      return [
+        {
+          path: `(simulated) ${safe}/prod/values-prod.yaml`,
+          env: 'prod',
+          format: 'helm-values',
+          registeredKeys,
+          missingKeys,
+          unmatched: false,
+        },
+      ];
+    }
+    try {
+      const consumers = await this.consumersOf(secretName);
+      const resolved = await mapWithConcurrency(consumers, 6, async c => {
+        const file = await this.getContent(c.path, this.cfg.baseBranch);
+        if (!file) return null;
+        const reg = registeredKeysInFile(c.path, file.content, secretName);
+        const m: DriftManifest = {
+          path: c.path,
+          env: envOf(c.path),
+          format: c.mech,
+          registeredKeys: reg.keys,
+          // A file whose structure we couldn't parse (`unmatched`) can't be auto-fixed, so it
+          // proposes no missing keys — the drift report surfaces the unmatched flag separately.
+          missingKeys: reg.unmatched ? [] : keys.filter(k => !reg.keys.includes(k)),
+          unmatched: reg.unmatched,
+        };
+        return m;
+      });
+      return resolved.filter((m): m is DriftManifest => m !== null);
+    } catch (err: any) {
+      if (err instanceof BaseError) throw err;
+      throw new ExternalServiceError(
+        `Failed to resolve infra-deployment drift for "${secretName}": ${err.message || err}`,
+        { secretName, repo: this.slug },
+      );
+    }
   }
 
   private branchName(secretName: string, requestId: string): string {
@@ -928,6 +1141,15 @@ export class InfraRepoSyncService {
     }
 
     const branch = request.infraBranch;
+    // Rebase the branch onto the CURRENT base before recomputing content. The branch was cut
+    // from base at open time; if another request's PR landed keys in the same manifest region
+    // since then, the stale merge-base makes GitHub flag this PR as conflicting and refuse to
+    // auto-merge — recomputing the file bytes alone does NOT clear that (git conflicts on the
+    // overlapping insertion, not on the final content). Force-resetting the branch head to the
+    // live base commit makes its only diff the approved keys, so the merge is clean. The
+    // per-consumer reads below then see the branch == base, and re-apply the keys on top.
+    const currentBaseSha = await this.getBaseCommitSha();
+    await this.resetBranchToSha(branch, currentBaseSha);
     const consumers = await this.targetConsumers(request.secretName, opts.targets);
     // Each consumer is an independent file: its own base+branch reads and (if needed) its own
     // write, none of which depend on another consumer's outcome — parallelize across them.
@@ -991,6 +1213,14 @@ export class InfraRepoSyncService {
     // exact bug this FAILED branch exists to close. Report FAILED instead so the caller
     // always has something to persist, and leave a breadcrumb on the PR for a human.
     try {
+      try {
+        await this.reopenPull(request.infraPrNumber);
+      } catch (reopenErr: any) {
+        logger.info(
+          { pr: request.infraPrNumber, err: reopenErr.message },
+          'Failed to reopen PR (already open, merged, or permission issue) — proceeding to merge anyway',
+        );
+      }
       if (request.infraPrNodeId) {
         await this.markReady(request.infraPrNodeId);
       }
@@ -1014,6 +1244,40 @@ export class InfraRepoSyncService {
           ? `${unmatchedPaths.length} manifest(s) could not be auto-edited (unrecognized structure): ${unmatchedPaths.join(', ')}`
           : undefined,
     };
+  }
+
+  /**
+   * Merges the drift-reconciliation PR for a secret (the deterministic `requestId: 'drift'`
+   * branch opened by resolveDrift/openPrForRequest). Unlike the ingestion-request merge path,
+   * there's no DB row carrying the PR number/branch for a drift PR, so this looks it up live by
+   * branch name first. `missingKeys` should be freshly recomputed (not cached from the original
+   * scan) so a merge some time after "Solve drift" still applies whatever is *currently* missing.
+   */
+  async mergeDriftPr(secretName: string, missingKeys: string[]): Promise<InfraSyncResult> {
+    const branch = this.branchName(secretName, 'drift');
+    if (this.isSimulation) {
+      if (missingKeys.length === 0) {
+        return { state: 'SKIPPED', branch, note: 'no missing keys to merge (simulation)' };
+      }
+      return {
+        state: 'MERGED',
+        prNumber: simPrNumber('drift'),
+        prUrl: `https://github.com/${this.slug}/pull/${simPrNumber('drift')}`,
+        branch,
+        keysAdded: missingKeys,
+        note: 'simulation (no GitHub calls)',
+      };
+    }
+    const pr = await this.findPullByBranch(branch);
+    if (!pr) {
+      return { state: 'SKIPPED', branch, note: 'No open drift PR found for this secret — click "Solve drift" first.' };
+    }
+    const result = await this.mergePrForRequest({
+      request: { id: 'drift', secretName, infraPrNumber: pr.number, infraPrNodeId: pr.nodeId, infraBranch: branch },
+      approvedKeys: missingKeys,
+      newApprovedKeys: missingKeys,
+    });
+    return { ...result, prUrl: result.prUrl ?? pr.url };
   }
 
   async closePrForRequest(opts: {

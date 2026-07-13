@@ -876,11 +876,11 @@ export const SecretIngestion: React.FC = () => {
               type="button"
               className="btn btn-primary"
               style={{ gap: 6 }}
-              disabled={submitMutation.isPending}
+              disabled={submitMutation.isPending || infraLoading}
               onClick={() => submitMutation.mutate()}
             >
-              {submitMutation.isPending ? <Icons.Loader size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <Icons.Send size={16} />}
-              Submit Ingestion Request
+              {submitMutation.isPending || infraLoading ? <Icons.Loader size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <Icons.Send size={16} />}
+              {infraLoading ? 'Resolving deployment targets…' : 'Submit Ingestion Request'}
             </button>
           </div>
         </div>
@@ -899,6 +899,7 @@ export const SecretIngestion: React.FC = () => {
             <table className="hermes-table">
               <thead>
                 <tr>
+                  <th style={{ width: 64 }}>#</th>
                   <th>Secret</th>
                   <th>Keys Info</th>
                   <th style={{ width: 140 }}>Status</th>
@@ -909,6 +910,9 @@ export const SecretIngestion: React.FC = () => {
               <tbody>
                 {myRequests.map((r) => (
                   <tr key={r.id}>
+                    <td style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 13, color: 'var(--primary)' }}>
+                      {r.requestNumber !== undefined ? `#${r.requestNumber}` : '—'}
+                    </td>
                     <td style={{ fontWeight: 600, fontFamily: 'monospace', fontSize: 13 }}>{r.secretName}</td>
                     <td>
                       <details>

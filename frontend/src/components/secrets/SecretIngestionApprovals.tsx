@@ -6,8 +6,10 @@ import { queryKeys } from '../../lib/queryKeys';
 import { envBg, envOf, formatTargetPath, INFRA_STATE_META } from '../../lib/infraTargetFormat';
 import { useToast } from '../../contexts/ToastContext';
 import {
+  dismissIngestionMerge,
   listIngestionRequests,
   listSecretsInstances,
+  retryIngestionMerge,
   reviewIngestionRequest,
   type SecretIngestionEntry,
 } from '../../services/api/secretsApi';
@@ -23,6 +25,41 @@ const KIND_STYLES: Record<'ADD' | 'UPDATE' | 'UNCHANGED', { bg: string; color: s
   UPDATE: { bg: '#d97706', color: '#fff' },
   UNCHANGED: { bg: 'var(--border)', color: 'var(--text-muted)' },
 };
+
+const fmtWhen = (iso: string): string =>
+  new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+/** The "#12" handle chip — the same reference the requester sees in their own list. */
+const RequestChip: React.FC<{ n?: number }> = ({ n }) =>
+  n === undefined ? null : (
+    <span
+      title="Request number"
+      style={{
+        fontFamily: 'monospace',
+        fontWeight: 700,
+        fontSize: 13,
+        color: 'var(--primary)',
+        background: 'var(--bg-inset)',
+        border: '1px solid var(--border)',
+        borderRadius: 5,
+        padding: '1px 7px',
+        flexShrink: 0,
+      }}
+    >
+      #{n}
+    </span>
+  );
+
+/** Instance (AWS account) badge — only meaningful when more than one instance is configured. */
+const InstanceBadge: React.FC<{ label: string }> = ({ label }) => (
+  <span
+    className="badge badge-sm"
+    title="Which Secret Ingestion instance (AWS account) this request targets"
+    style={{ fontSize: 10, fontWeight: 700, background: 'var(--bg-inset)', color: 'var(--text-muted)', border: '1px solid var(--border)' }}
+  >
+    {label}
+  </span>
+);
 
 const AcceptReject: React.FC<{
   decision: 'APPROVED' | 'REJECTED' | undefined;
@@ -120,6 +157,33 @@ export const SecretIngestionApprovals: React.FC = () => {
     onError: (err: any) => toast.error(err?.message || 'Failed to review request.'),
   });
 
+  // Retries a deployment PR merge that's stuck FAILED (e.g. branch protection blocked the
+  // auto-merge) for a request whose AWS write already succeeded — status is terminal by this
+  // point, so re-review isn't an option; this just re-invokes the merge.
+  const retryMutation = useMutation({
+    mutationFn: (id: string) => retryIngestionMerge(id),
+    onSuccess: (data) => {
+      if (data.infraSyncState === 'MERGED') {
+        toast.success('Deployment PR merged.');
+      } else {
+        toast.error(data.infraSyncNote || `Merge still not resolved (${data.infraSyncState}).`);
+      }
+      queryClient.invalidateQueries({ queryKey: queryKeys.secretIngestionRequests('review') });
+    },
+    onError: (err: any) => toast.error(err?.message || 'Failed to retry deployment PR merge.'),
+  });
+
+  // Dismisses a deployment PR merge that's stuck FAILED. Updates the status to CLOSED in the DB
+  // and closes the PR on GitHub, removing the request from the admin review inbox.
+  const dismissMutation = useMutation({
+    mutationFn: (id: string) => dismissIngestionMerge(id),
+    onSuccess: () => {
+      toast.success('Deployment PR merge failure dismissed.');
+      queryClient.invalidateQueries({ queryKey: queryKeys.secretIngestionRequests('review') });
+    },
+    onError: (err: any) => toast.error(err?.message || 'Failed to dismiss deployment PR merge.'),
+  });
+
   const handleSubmit = (reqId: string, entries: SecretIngestionEntry[]) => {
     const decided = entries.map((entry) => ({ key: entry.key, decision: decisionFor(reqId, entry.key) }));
     if (decided.some((d) => d.decision === undefined)) {
@@ -137,12 +201,23 @@ export const SecretIngestionApprovals: React.FC = () => {
 
   if (isLoading || requests.length === 0) return null;
 
+  // Terminal requests only surface here when their deployment PR merge is stuck — count them
+  // separately so the header doesn't call an already-applied request "pending".
+  const stuckMergeCount = requests.filter(
+    (r) => (r.status === 'APPLIED' || r.status === 'PARTIALLY_APPLIED') && r.infraSyncState === 'FAILED',
+  ).length;
+  const pendingCount = requests.length - stuckMergeCount;
+
   return (
     <div style={{ marginTop: 36 }}>
       <SectionHeader
         title="Secret Ingestion Requests"
         icon={<Icons.KeyRound size={18} />}
-        meta={`${requests.length} pending`}
+        meta={
+          stuckMergeCount > 0
+            ? `${pendingCount} pending · ${stuckMergeCount} merge failed`
+            : `${pendingCount} pending`
+        }
       />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {requests.map((r) => {
@@ -157,26 +232,99 @@ export const SecretIngestionApprovals: React.FC = () => {
           ).length;
           const allDecided = decidedCount === r.entries.length;
 
+          // AWS write already succeeded (status is terminal — no more re-review), but the
+          // deployment PR merge itself failed (e.g. branch protection blocked the bot-authored
+          // merge, 405). Nothing left to decide here — just offer a retry once someone has
+          // unblocked the underlying cause on GitHub.
+          const stuckMerge = (r.status === 'APPLIED' || r.status === 'PARTIALLY_APPLIED') && r.infraSyncState === 'FAILED';
+          const retryBusy = retryMutation.isPending && retryMutation.variables === r.id;
+          const dismissBusy = dismissMutation.isPending && dismissMutation.variables === r.id;
+
+          if (stuckMerge) {
+            return (
+              <div key={r.id} className="table-container" style={{ padding: 16 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 0 7px', flexWrap: 'wrap' }}>
+                      <RequestChip n={r.requestNumber} />
+                      <Icons.KeyRound size={17} style={{ color: 'var(--primary)', flexShrink: 0 }} />
+                      <code style={{ fontSize: 17, fontWeight: 700, color: 'var(--text-main)', wordBreak: 'break-all' }}>{r.secretName}</code>
+                      {multiInstance && <InstanceBadge label={instanceLabel(r.platform)} />}
+                    </div>
+                    <div style={{ fontSize: 13, color: 'var(--text-muted)', display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <span>by <strong style={{ color: 'var(--text-main)', fontWeight: 600 }}>{r.requesterName.replace(/_/g, ' ')}</strong></span>
+                      <span style={{ color: 'var(--border)' }}>·</span>
+                      <span title={r.requesterEmail}>{fmtWhen(r.createdAt)}</span>
+                    </div>
+                    <div style={{ marginTop: 8, border: '1px solid var(--border)', borderRadius: 6, padding: '10px 12px', maxWidth: 640 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12 }}>
+                        <Icons.GitPullRequestArrow size={14} style={{ color: 'var(--primary)', flexShrink: 0 }} />
+                        <span style={{ fontWeight: 600 }}>Deployment PR</span>
+                        <span className="badge badge-sm" style={{ background: '#dc2626', color: '#fff' }}>MERGE FAILED</span>
+                        {r.infraPrUrl && (
+                          <a href={r.infraPrUrl} target="_blank" rel="noopener noreferrer" className="btn btn-outline btn-sm" style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 5, textDecoration: 'none' }}>
+                            <Icons.ExternalLink size={12} />
+                            View PR{r.infraPrNumber ? ` #${r.infraPrNumber}` : ''}
+                          </a>
+                        )}
+                      </div>
+                      {r.infraSyncNote && (
+                        <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text-muted)' }}>{r.infraSyncNote}</div>
+                      )}
+                      <div style={{ marginTop: 10, display: 'flex', gap: '8px' }}>
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-sm"
+                          disabled={retryBusy || dismissBusy}
+                          onClick={() => retryMutation.mutate(r.id)}
+                        >
+                          {retryBusy ? <Icons.Loader size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Icons.RefreshCw size={14} />}
+                          Retry merge
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-outline btn-danger-outline btn-sm"
+                          style={{ gap: 6 }}
+                          disabled={retryBusy || dismissBusy}
+                          onClick={() => {
+                            if (window.confirm('Are you sure you want to dismiss this PR? This will mark it resolved manually and attempt to close the PR on GitHub.')) {
+                              dismissMutation.mutate(r.id);
+                            }
+                          }}
+                        >
+                          {dismissBusy ? <Icons.Loader size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Icons.Trash2 size={14} />}
+                          Dismiss PR
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          }
+
           return (
             <div key={r.id} className="table-container" style={{ padding: 16 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
                 <div>
-                  <div style={{ fontSize: 10.5, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '.05em', fontWeight: 600 }}>
-                    AWS Secret
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '3px 0 7px', flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 0 7px', flexWrap: 'wrap' }}>
+                    <RequestChip n={r.requestNumber} />
                     <Icons.KeyRound size={17} style={{ color: 'var(--primary)', flexShrink: 0 }} />
                     <code style={{ fontSize: 17, fontWeight: 700, color: 'var(--text-main)', wordBreak: 'break-all' }}>{r.secretName}</code>
-                    {multiInstance && (
-                      <span className="badge badge-sm" title="Which Secret Ingestion instance (AWS account) this request targets" style={{ fontSize: 10, fontWeight: 700, background: 'var(--bg-inset)', color: 'var(--text-muted)', border: '1px solid var(--border)' }}>
-                        {instanceLabel(r.platform)}
-                      </span>
-                    )}
+                    {multiInstance && <InstanceBadge label={instanceLabel(r.platform)} />}
                   </div>
-                  <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
-                    Requested by <strong style={{ color: 'var(--text-main)', fontWeight: 600 }}>{r.requesterName.replace(/_/g, ' ')}</strong> ({r.requesterEmail})
-                    {r.justification ? ` · "${r.justification}"` : ''}
+                  <div style={{ fontSize: 13, color: 'var(--text-muted)', display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <span>by <strong style={{ color: 'var(--text-main)', fontWeight: 600 }}>{r.requesterName.replace(/_/g, ' ')}</strong></span>
+                    <span style={{ color: 'var(--border)' }}>·</span>
+                    <span title={r.requesterEmail}>{fmtWhen(r.createdAt)}</span>
+                    <span style={{ color: 'var(--border)' }}>·</span>
+                    <span>{r.entries.length} key{r.entries.length === 1 ? '' : 's'}</span>
                   </div>
+                  {r.justification && (
+                    <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4, fontStyle: 'italic' }}>
+                      "{r.justification}"
+                    </div>
+                  )}
                   {r.status === 'APPLY_FAILED' && (
                     <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#dc2626' }}>
                       <Icons.AlertTriangle size={13} style={{ flexShrink: 0 }} />
@@ -190,18 +338,26 @@ export const SecretIngestionApprovals: React.FC = () => {
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12, padding: '7px 10px', background: 'var(--bg-card)', borderBottom: (r.infraTargets && r.infraTargets.length > 0) ? '1px solid var(--border)' : 'none' }}>
                         <Icons.GitPullRequestArrow size={14} style={{ color: 'var(--primary)', flexShrink: 0 }} />
                         <span style={{ fontWeight: 600 }}>Deployment PR</span>
-                        {r.infraSyncState && (() => {
-                          const meta = INFRA_STATE_META[r.infraSyncState] ?? { label: r.infraSyncState, cls: 'badge-pending' };
+                        {(() => {
+                          const state = r.infraSyncState || 'PREPARING';
+                          const meta = INFRA_STATE_META[state] ?? { label: state, cls: 'badge-pending' };
                           return <span className={`badge ${meta.cls} badge-sm`} title={r.infraSyncNote ?? undefined}>{meta.label}</span>;
                         })()}
                         {r.infraTargets && r.infraTargets.some((t) => formatTargetPath(t.path).simulated) && (
                           <span className="badge badge-sm" style={{ fontSize: 9, fontWeight: 700, background: '#6b7280', color: '#fff' }}>SIMULATED</span>
                         )}
-                        {r.infraPrUrl && (
+                        {r.infraPrUrl ? (
                           <a href={r.infraPrUrl} target="_blank" rel="noopener noreferrer" className="btn btn-outline btn-sm" style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 5, textDecoration: 'none' }}>
                             <Icons.ExternalLink size={12} />
                             Verify diff{r.infraPrNumber ? ` #${r.infraPrNumber}` : ''}
                           </a>
+                        ) : (
+                          r.infraSyncState !== 'SKIPPED' && r.infraSyncState !== 'FAILED' && (
+                            <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--text-muted)', fontSize: 11, fontWeight: 500 }}>
+                              <Icons.Loader size={12} className="animate-spin" style={{ animation: 'spin 1.5s linear infinite' }} />
+                              Generating PR...
+                            </span>
+                          )
                         )}
                       </div>
                       {r.infraTargets && r.infraTargets.length > 0 && newKeys.length > 0 && (

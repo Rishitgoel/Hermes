@@ -2,8 +2,9 @@ import { Request, Response, NextFunction } from 'express';
 import BaseController from './base.controller';
 import prisma from '../config/prisma';
 import secretIngestionService, { assertSecretsPlatform, isSecretsFamilyPlatform } from '../services/secret-ingestion.service';
+import secretDriftService from '../services/secret-drift.service';
 import { AuthorizationError, NotFoundError, ValidationError } from '../utils/errors';
-import { submitIngestionSchema, reviewIngestionSchema, infraPreviewSchema } from '../validations/secret-ingestion.validation';
+import { submitIngestionSchema, reviewIngestionSchema, infraPreviewSchema, resolveDriftSchema, driftKeySchema } from '../validations/secret-ingestion.validation';
 
 /**
  * Controller for approval-gated Secret Ingestion workflows.
@@ -116,6 +117,78 @@ export class SecretIngestionController extends BaseController {
     }
   }
 
+  // GET /api/secrets/drift[?platform=secrets] — admin drift report (AWS keys vs infra manifests)
+  async getDrift(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const report = await secretDriftService.detectDrift(this.user!, this.resolvePlatform() ?? 'secrets');
+      this.sendResponse(report, 'Secret drift report generated');
+    } catch (error) {
+      this.handleError(error, 'Failed to generate secret drift report');
+    }
+  }
+
+  // POST /api/secrets/drift/resolve — open a draft PR registering the missing keys for one secret
+  async resolveDrift(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const validated = this.validateWithZod(resolveDriftSchema, this.req.body);
+      if (!validated.success) return;
+      const platform = validated.data.platform ? assertSecretsPlatform(validated.data.platform) : undefined;
+      const result = await secretDriftService.resolveDrift(this.user!, validated.data.secretName, platform ?? 'secrets');
+      this.sendResponse(result, 'Drift reconciliation PR opened');
+    } catch (error) {
+      this.handleError(error, 'Failed to reconcile secret drift');
+    }
+  }
+
+  // POST /api/secrets/drift/merge — merge the already-open drift PR for one secret (after review)
+  async mergeDrift(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const validated = this.validateWithZod(resolveDriftSchema, this.req.body);
+      if (!validated.success) return;
+      const platform = validated.data.platform ? assertSecretsPlatform(validated.data.platform) : undefined;
+      const result = await secretDriftService.mergeDrift(this.user!, validated.data.secretName, platform ?? 'secrets');
+      this.sendResponse(result, 'Drift reconciliation PR merged');
+    } catch (error) {
+      this.handleError(error, 'Failed to merge secret drift PR');
+    }
+  }
+
+  // POST /api/secrets/drift/ignore — stop notifying about one missingInAws (dangling) key
+  async ignoreDriftKey(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const validated = this.validateWithZod(driftKeySchema, this.req.body);
+      if (!validated.success) return;
+      const platform = validated.data.platform ? assertSecretsPlatform(validated.data.platform) : undefined;
+      const result = await secretDriftService.ignoreDriftKey(
+        this.user!,
+        validated.data.secretName,
+        validated.data.key,
+        platform ?? 'secrets',
+      );
+      this.sendResponse(result, 'Drift key ignored');
+    } catch (error) {
+      this.handleError(error, 'Failed to ignore drift key');
+    }
+  }
+
+  // POST /api/secrets/drift/unignore — resume notifications for a previously-ignored key
+  async unignoreDriftKey(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const validated = this.validateWithZod(driftKeySchema, this.req.body);
+      if (!validated.success) return;
+      const platform = validated.data.platform ? assertSecretsPlatform(validated.data.platform) : undefined;
+      const result = await secretDriftService.unignoreDriftKey(
+        this.user!,
+        validated.data.secretName,
+        validated.data.key,
+        platform ?? 'secrets',
+      );
+      this.sendResponse(result, 'Drift key un-ignored');
+    } catch (error) {
+      this.handleError(error, 'Failed to un-ignore drift key');
+    }
+  }
+
   // PUT /api/secrets/requests/:id/review
   async reviewRequest(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
@@ -144,6 +217,54 @@ export class SecretIngestionController extends BaseController {
       this.sendResponse(updated, 'Secret ingestion request reviewed');
     } catch (error) {
       this.handleError(error, 'Failed to review secret ingestion request');
+    }
+  }
+
+  // POST /api/secrets/requests/:id/retry-merge — retry a stuck deployment PR merge (e.g. after
+  // GitHub branch protection blocked the auto-merge and a human has since unblocked it)
+  async retryMerge(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const userId = this.getUserId();
+      if (!userId) return;
+      const id = this.req.params.id as string;
+
+      const row = await prisma.secretIngestionRequest.findUnique({
+        where: { id },
+        select: { groupId: true, platform: true },
+      });
+      if (!row) throw new NotFoundError('Secret ingestion request not found');
+      if (!(await secretIngestionService.canReview(this.user!, row))) {
+        throw new AuthorizationError('You do not have permission to retry this secret ingestion request.');
+      }
+
+      const updated = await secretIngestionService.retryInfraMerge(id);
+      this.sendResponse(updated, 'Deployment PR merge retried');
+    } catch (error) {
+      this.handleError(error, 'Failed to retry deployment PR merge');
+    }
+  }
+
+  // POST /api/secrets/requests/:id/dismiss-merge — dismiss a stuck deployment PR merge (e.g. mark it CLOSED
+  // in the database and close the PR on GitHub)
+  async dismissMerge(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const userId = this.getUserId();
+      if (!userId) return;
+      const id = this.req.params.id as string;
+
+      const row = await prisma.secretIngestionRequest.findUnique({
+        where: { id },
+        select: { groupId: true, platform: true },
+      });
+      if (!row) throw new NotFoundError('Secret ingestion request not found');
+      if (!(await secretIngestionService.canReview(this.user!, row))) {
+        throw new AuthorizationError('You do not have permission to dismiss this secret ingestion request.');
+      }
+
+      const updated = await secretIngestionService.dismissInfraMerge(id);
+      this.sendResponse(updated, 'Deployment PR merge dismissed');
+    } catch (error) {
+      this.handleError(error, 'Failed to dismiss deployment PR merge');
     }
   }
 }

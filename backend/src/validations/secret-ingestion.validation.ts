@@ -68,6 +68,23 @@ export const infraPreviewSchema = z.object({
     .max(200, 'Too many keys'),
 });
 
+// Solve drift: open a draft infra-deployment PR registering the AWS keys missing from the
+// manifests for one secret. Platform is validated against the secrets family in the controller.
+export const resolveDriftSchema = z.object({
+  platform: platformSchema,
+  secretName: z
+    .string()
+    .trim()
+    .min(1, 'Secret name cannot be empty')
+    .max(512, 'Secret name is too long'),
+});
+
+// Ignore/unignore one missingInAws (dangling) drift key so it stops counting toward scheduled
+// drift notifications.
+export const driftKeySchema = resolveDriftSchema.extend({
+  key: z.string().trim().min(1, 'Key cannot be empty').max(512, 'Key is too long'),
+});
+
 export const reviewIngestionSchema = z.object({
   decisions: z
     .array(

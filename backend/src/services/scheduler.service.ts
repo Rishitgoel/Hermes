@@ -5,6 +5,7 @@ import syncService from './sync.service';
 import adminReconciliationService from './admin-reconciliation.service';
 import zookeeperConfigService from './zookeeper-config.service';
 import secretIngestionService from './secret-ingestion.service';
+import secretDriftService from './secret-drift.service';
 import config from '../config/config';
 import logger from '../utils/logger';
 
@@ -35,9 +36,10 @@ export class SchedulerService {
   private adminReconcileJob: ScheduledTask | null = null;
   private zkApplyingSweepJob: ScheduledTask | null = null;
   private secretIngestionSweepJob: ScheduledTask | null = null;
+  private secretDriftScanJob: ScheduledTask | null = null;
   private notificationPruneJob: ScheduledTask | null = null;
 
-  // Starts all cron jobs (auto-revoke + expiry warnings + periodic platform sync + admin reconcile + ZK sweep + notification prune)
+  // Starts all cron jobs (auto-revoke + expiry warnings + periodic platform sync + admin reconcile + ZK sweep + secret drift scan + notification prune)
   start(): void {
     this.startExpiryJob();
     this.startExpiryWarningJob();
@@ -45,6 +47,7 @@ export class SchedulerService {
     this.startAdminReconcileJob();
     this.startZkApplyingSweepJob();
     this.startSecretIngestionSweepJob();
+    this.startSecretDriftScanJob();
     this.startNotificationPruneJob();
   }
 
@@ -80,6 +83,11 @@ export class SchedulerService {
       void this.secretIngestionSweepJob.stop();
       this.secretIngestionSweepJob = null;
       logger.info('⏰ Scheduler Service: Secret Ingestion APPLYING sweep cron job stopped.');
+    }
+    if (this.secretDriftScanJob) {
+      void this.secretDriftScanJob.stop();
+      this.secretDriftScanJob = null;
+      logger.info('⏰ Scheduler Service: Secret drift scan cron job stopped.');
     }
     if (this.notificationPruneJob) {
       void this.notificationPruneJob.stop();
@@ -183,6 +191,23 @@ export class SchedulerService {
       } catch (err: any) {
         // Never throw out of the cron handler.
         logger.warn(`⏰ Scheduler Service: Secret Ingestion APPLYING sweep failed: ${err.message}`);
+      }
+    });
+  }
+
+  private startSecretDriftScanJob(): void {
+    // Drift changes slowly (only when someone edits AWS or the infra repo out of band), and each
+    // scan reads AWS + GitHub, so run it sparingly: every 3 hours in prod, every 15 min in dev so
+    // the behaviour is observable. Notifies admins only about NEW drift (deduped via audit rows).
+    const pattern = config.isDev ? '*/15 * * * *' : '0 */3 * * *';
+    logger.info(`⏰ Scheduler Service: Starting secret drift scan (pattern: ${pattern}).`);
+
+    this.secretDriftScanJob = cron.schedule(pattern, async () => {
+      try {
+        await secretDriftService.scanAllAndNotify();
+      } catch (err: any) {
+        // Never throw out of the cron handler.
+        logger.warn(`⏰ Scheduler Service: Secret drift scan failed: ${err.message}`);
       }
     });
   }

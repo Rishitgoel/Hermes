@@ -12,6 +12,7 @@ import {
 import { getSecretsManagerService } from './secrets-manager.service';
 import { createSecretsProvisioner } from './secrets.provisioner';
 import { isInfraRepoEnabled } from './infra-repo-sync.service';
+import config from '../config/config';
 
 const PROD = 'secrets';
 const SANDBOX = 'secrets-sandbox';
@@ -112,16 +113,24 @@ describe('Secret Ingestion — multi-instance (prod + sandbox)', () => {
 
   it('has the infra-deployment flow wired per-instance: prod on, sandbox off until its repo is configured', () => {
     expect(isInfraRepoEnabled(PROD)).toBe(true);
-    // Sandbox is off by default (no SECRETS_SANDBOX_INFRA_REPO_NAME / _ENABLED set).
-    expect(isInfraRepoEnabled(SANDBOX)).toBe(false);
 
-    const prev = process.env.SECRETS_SANDBOX_INFRA_REPO_NAME;
+    const prevEnabled = process.env.SECRETS_SANDBOX_INFRA_REPO_ENABLED;
+    const prevName = process.env.SECRETS_SANDBOX_INFRA_REPO_NAME;
+    delete process.env.SECRETS_SANDBOX_INFRA_REPO_ENABLED;
+    delete process.env.SECRETS_SANDBOX_INFRA_REPO_NAME;
+
     try {
+      // Sandbox is off by default (no SECRETS_SANDBOX_INFRA_REPO_NAME / _ENABLED set).
+      expect(isInfraRepoEnabled(SANDBOX)).toBe(false);
+
       process.env.SECRETS_SANDBOX_INFRA_REPO_NAME = 'infra-deployment-sandbox';
       expect(isInfraRepoEnabled(SANDBOX)).toBe(true);
     } finally {
-      if (prev === undefined) delete process.env.SECRETS_SANDBOX_INFRA_REPO_NAME;
-      else process.env.SECRETS_SANDBOX_INFRA_REPO_NAME = prev;
+      if (prevEnabled !== undefined) process.env.SECRETS_SANDBOX_INFRA_REPO_ENABLED = prevEnabled;
+      else delete process.env.SECRETS_SANDBOX_INFRA_REPO_ENABLED;
+
+      if (prevName !== undefined) process.env.SECRETS_SANDBOX_INFRA_REPO_NAME = prevName;
+      else delete process.env.SECRETS_SANDBOX_INFRA_REPO_NAME;
     }
   });
 

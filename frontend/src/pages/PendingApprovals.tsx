@@ -14,6 +14,7 @@ import { platformDisplayName } from '../lib/platforms';
 import SectionHeader from '../components/common/SectionHeader';
 import ZkChangeApprovals from '../components/zookeeper/ZkChangeApprovals';
 import SecretIngestionApprovals from '../components/secrets/SecretIngestionApprovals';
+import SecretDriftPanel from '../components/secrets/SecretDriftPanel';
 
 interface PendingRequest {
   id: string;
@@ -558,12 +559,9 @@ export const PendingApprovals: React.FC = () => {
         </>
       )}
 
-      {canReviewZk && <ZkChangeApprovals />}
-      {canReviewSecrets && <SecretIngestionApprovals />}
-
       {/* One compact, professional placeholder when every queue is empty — no big block. */}
       {nothingToReview && (
-        <div className="empty-state empty-state-compact">
+        <div className="empty-state empty-state-compact" style={{ marginBottom: 24 }}>
           <Icons.CheckCircle2 size={22} className="empty-state-icon" style={{ color: 'var(--status-approved-text)' }} />
           <div>
             <h3 className="empty-state-title">You're all caught up</h3>
@@ -571,6 +569,10 @@ export const PendingApprovals: React.FC = () => {
           </div>
         </div>
       )}
+
+      {canReviewZk && <ZkChangeApprovals />}
+      {canReviewSecrets && <SecretIngestionApprovals />}
+      {canReviewSecrets && <SecretDriftPanel />}
     </div>
   );
 };
