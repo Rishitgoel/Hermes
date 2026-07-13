@@ -188,6 +188,10 @@ export class SchedulerService {
         if (recovered > 0) {
           logger.warn(`⏰ Scheduler Service: Recovered ${recovered} stuck Secret Ingestion change request(s).`);
         }
+        const synced = await secretIngestionService.syncOpenDeploymentPRs();
+        if (synced > 0) {
+          logger.info(`⏰ Scheduler Service: Synced ${synced} open Secret Ingestion deployment PR(s).`);
+        }
       } catch (err: any) {
         // Never throw out of the cron handler.
         logger.warn(`⏰ Scheduler Service: Secret Ingestion APPLYING sweep failed: ${err.message}`);

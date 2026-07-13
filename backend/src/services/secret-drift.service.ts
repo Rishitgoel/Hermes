@@ -3,6 +3,7 @@ import { getSecretsManagerService } from './secrets-manager.service';
 import {
   DriftManifest,
   getInfraRepoSyncService,
+  isInfraAutoMergeEnabled,
   isInfraRepoEnabled,
 } from './infra-repo-sync.service';
 import {
@@ -350,7 +351,8 @@ export class SecretDriftService {
 
   /**
    * Opens a DRAFT infra-deployment PR that registers the keys currently in AWS but missing from
-   * the manifests for `secretName`. A human reviews + merges it in GitHub — Hermes never merges.
+   * the manifests for `secretName`. When auto-merge is off (default), a human reviews + merges it
+   * manually on GitHub. When auto-merge is on, Hermes merges immediately after opening.
    * Authorization: the caller must manage a secrets group whose scope covers the secret.
    */
   async resolveDrift(
@@ -401,6 +403,39 @@ export class SecretDriftService {
       },
     });
 
+    // Auto-merge ON: immediately merge the just-opened PR so "Solve drift" is a one-click
+    // full resolution. When off (default), the PR stays open for a human to review and merge
+    // manually on GitHub (the existing two-step flow).
+    if (result.state === 'OPEN' && isInfraAutoMergeEnabled(key)) {
+      const mergeResult = await getInfraRepoSyncService(key).mergeDriftPr(secretName, drift.missingInManifest);
+      await prisma.auditEntry.create({
+        data: {
+          action: 'SECRET_DRIFT_MERGED',
+          performerId: user.id,
+          performerName: user.username,
+          groupId: owner.id,
+          details: {
+            platform: key,
+            secretName,
+            keys: drift.missingInManifest,
+            prNumber: mergeResult.prNumber ?? null,
+            prUrl: mergeResult.prUrl ?? null,
+            prState: mergeResult.state,
+            note: mergeResult.note ?? null,
+          } as any,
+        },
+      });
+      return {
+        state: mergeResult.state,
+        secretName,
+        keys: drift.missingInManifest,
+        prNumber: mergeResult.prNumber ?? null,
+        prUrl: mergeResult.prUrl ?? null,
+        branch: result.branch ?? null,
+        note: mergeResult.note ?? null,
+      };
+    }
+
     return {
       state: result.state,
       secretName,
@@ -408,59 +443,6 @@ export class SecretDriftService {
       prNumber: result.prNumber ?? null,
       prUrl: result.prUrl ?? null,
       branch: result.branch ?? null,
-      note: result.note ?? null,
-    };
-  }
-
-  /**
-   * Merges the drift-reconciliation PR opened by resolveDrift() for `secretName` — the
-   * "review it in GitHub, then click Merge PR" second step. Recomputes the current drift live
-   * (rather than trusting the caller's stale view) so the merge always applies whatever keys
-   * are *actually* still missing, even if the PR has sat open for a while. Authorization
-   * mirrors resolveDrift.
-   */
-  async mergeDrift(
-    user: AuthenticatedUser,
-    secretName: string,
-    platform: string = PLATFORM,
-  ) {
-    const key = assertSecretsPlatform(platform);
-    if (!isInfraRepoEnabled(key)) {
-      throw new ValidationError(
-        `The "${key}" Secret Ingestion instance has no infra-deployment repo configured, so there is nothing to merge.`,
-      );
-    }
-    const owner = await this.resolveOwnerGroup(key, user, secretName);
-
-    const drift = await this.driftForSecret(key, secretName, owner);
-    const missingKeys = drift?.missingInManifest ?? [];
-
-    const result = await getInfraRepoSyncService(key).mergeDriftPr(secretName, missingKeys);
-
-    await prisma.auditEntry.create({
-      data: {
-        action: 'SECRET_DRIFT_MERGED',
-        performerId: user.id,
-        performerName: user.username,
-        groupId: owner.id,
-        details: {
-          platform: key,
-          secretName,
-          keys: missingKeys,
-          prNumber: result.prNumber ?? null,
-          prUrl: result.prUrl ?? null,
-          prState: result.state,
-          note: result.note ?? null,
-        } as any,
-      },
-    });
-
-    return {
-      state: result.state,
-      secretName,
-      keys: missingKeys,
-      prNumber: result.prNumber ?? null,
-      prUrl: result.prUrl ?? null,
       note: result.note ?? null,
     };
   }

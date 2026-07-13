@@ -48,9 +48,6 @@ router.post('/drift/resolve', authenticateToken, (req: Request, res: Response, n
   new SecretIngestionController(req, res, next).resolveDrift(req, res, next).catch(next);
 });
 
-router.post('/drift/merge', authenticateToken, (req: Request, res: Response, next: NextFunction) => {
-  new SecretIngestionController(req, res, next).mergeDrift(req, res, next).catch(next);
-});
 
 router.post('/drift/ignore', authenticateToken, (req: Request, res: Response, next: NextFunction) => {
   new SecretIngestionController(req, res, next).ignoreDriftKey(req, res, next).catch(next);

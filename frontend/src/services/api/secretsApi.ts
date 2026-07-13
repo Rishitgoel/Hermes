@@ -211,8 +211,6 @@ export const getSecretDrift = (platform?: string): Promise<DriftReport> =>
 export const resolveSecretDrift = (secretName: string, platform?: string): Promise<DriftResolveResult> =>
   apiClient.post('/api/secrets/drift/resolve', { secretName, ...(platform ? { platform } : {}) }).then((r) => r.data);
 
-export const mergeSecretDrift = (secretName: string, platform?: string): Promise<DriftResolveResult> =>
-  apiClient.post('/api/secrets/drift/merge', { secretName, ...(platform ? { platform } : {}) }).then((r) => r.data);
 
 export const ignoreDriftKey = (secretName: string, key: string, platform?: string): Promise<{ secretName: string; key: string; ignored: boolean }> =>
   apiClient.post('/api/secrets/drift/ignore', { secretName, key, ...(platform ? { platform } : {}) }).then((r) => r.data);

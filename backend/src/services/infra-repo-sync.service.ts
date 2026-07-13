@@ -1310,6 +1310,28 @@ export class InfraRepoSyncService {
     );
     return { state: 'OPEN', prNumber: request.infraPrNumber, note: 'apply failed; PR kept open for retry' };
   }
+
+  /**
+   * Fetches the state of a PR from GitHub live.
+   * Returns 'MERGED', 'CLOSED' (closed but not merged), or 'OPEN'.
+   */
+  async getPrState(prNumber: number): Promise<'OPEN' | 'MERGED' | 'CLOSED' | null> {
+    if (this.isSimulation) {
+      // In simulation, we fake the PR being merged.
+      return 'MERGED';
+    }
+    try {
+      const res = await this.gh().get(this.repoPath(`/pulls/${prNumber}`));
+      const pr = res.data;
+      if (!pr) return null;
+      if (pr.merged) return 'MERGED';
+      if (pr.state === 'closed') return 'CLOSED';
+      return 'OPEN';
+    } catch (err: any) {
+      logger.warn({ prNumber, err: err.message }, 'infra-repo-sync: failed to fetch PR status');
+      return null;
+    }
+  }
 }
 
 // Canonical manifest scan: every enumerated secret name a file references, name-carrying
@@ -1420,4 +1442,15 @@ export function getInfraRepoSyncService(platform: string): InfraRepoSyncService 
 export function isInfraRepoEnabled(platform: string): boolean {
   const instance = config.secretsInstances.find((i) => i.key === (platform || '').toLowerCase());
   return !!instance?.infraEnabled;
+}
+
+/**
+ * Whether auto-merge is enabled for a given Secret Ingestion instance's infra-deployment PRs.
+ * When true, both the ingestion-approval and drift-resolve flows merge the PR automatically the
+ * moment it's ready. When false (default), the PR is opened and left for a human to review and
+ * merge manually on GitHub. Controlled by INFRA_REPO_AUTO_MERGE / SECRETS_SANDBOX_INFRA_REPO_AUTO_MERGE.
+ */
+export function isInfraAutoMergeEnabled(platform: string): boolean {
+  const instance = config.secretsInstances.find((i) => i.key === (platform || '').toLowerCase());
+  return !!instance?.infraRepo?.autoMergeEnabled;
 }

@@ -847,6 +847,45 @@ export class SecretIngestionService {
     }
     return result.count;
   }
+
+  /**
+   * Syncs the status of open infra-deployment PRs on GitHub with the database.
+   * Finds all requests with status APPLIED or PARTIALLY_APPLIED that are still marked
+   * as OPEN in infraSyncState, checks their state on GitHub, and updates the database.
+   */
+  async syncOpenDeploymentPRs(): Promise<number> {
+    const openRequests = await prisma.secretIngestionRequest.findMany({
+      where: {
+        status: { in: ['APPLIED', 'PARTIALLY_APPLIED'] },
+        infraSyncState: 'OPEN',
+        infraPrNumber: { not: null },
+      },
+    });
+
+    let updatedCount = 0;
+    for (const row of openRequests) {
+      if (!isInfraRepoEnabled(row.platform)) continue;
+      const infra = getInfraRepoSyncService(row.platform);
+      if (!row.infraPrNumber) continue;
+
+      const state = await infra.getPrState(row.infraPrNumber);
+      if (state && state !== 'OPEN') {
+        await prisma.secretIngestionRequest.update({
+          where: { id: row.id },
+          data: {
+            infraSyncState: state,
+            infraSyncNote: `Status updated by sweep (${state.toLowerCase()})`,
+          },
+        });
+        updatedCount++;
+        logger.info(
+          { requestId: row.id, prNumber: row.infraPrNumber, state },
+          'Synced open secret ingestion deployment PR state from GitHub',
+        );
+      }
+    }
+    return updatedCount;
+  }
 }
 
 export const secretIngestionService = new SecretIngestionService();

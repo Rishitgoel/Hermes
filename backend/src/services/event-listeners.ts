@@ -4,6 +4,7 @@ import { ensureDefaultGroupMembership } from './default-membership.service';
 import {
   SelectedTarget,
   getInfraRepoSyncService,
+  isInfraAutoMergeEnabled,
   isInfraRepoEnabled,
 } from './infra-repo-sync.service';
 import { persistInfraResult } from './secret-ingestion.service';
@@ -233,7 +234,7 @@ export function registerEventListeners(): void {
 
       if (status === 'APPLIED' || status === 'PARTIALLY_APPLIED') {
         // Ensure a PR exists (covers a submit-time open that was skipped/raced/failed),
-        // then merge it down to just the approved keys.
+        // then — if auto-merge is on — merge it down to just the approved keys.
         let req = row;
         if (!row.infraPrNumber) {
           const opened = await infra.openPrForRequest({
@@ -246,8 +247,13 @@ export function registerEventListeners(): void {
           if (opened.state !== 'OPEN') return;
           req = { ...row, infraPrNumber: opened.prNumber ?? null, infraBranch: opened.branch ?? null, infraPrNodeId: opened.prNodeId ?? null };
         }
-        const merged = await infra.mergePrForRequest({ request: req, approvedKeys, targets, newApprovedKeys });
-        await persistInfraResult(requestId, merged);
+        // Auto-merge OFF (default): leave the PR open for a human to review + click
+        // "Merge PR" in the UI. Auto-merge ON: merge immediately, matching the original
+        // always-merge behavior (now opt-in).
+        if (isInfraAutoMergeEnabled(instance)) {
+          const merged = await infra.mergePrForRequest({ request: req, approvedKeys, targets, newApprovedKeys });
+          await persistInfraResult(requestId, merged);
+        }
       } else if (status === 'REJECTED') {
         const closed = await infra.closePrForRequest({ request: row, reason: row.reviewNote || 'all keys rejected' });
         await persistInfraResult(requestId, closed);

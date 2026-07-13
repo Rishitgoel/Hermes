@@ -9,7 +9,6 @@ import {
   getSecretDrift,
   ignoreDriftKey,
   listSecretsInstances,
-  mergeSecretDrift,
   resolveSecretDrift,
   unignoreDriftKey,
   type DriftReport,
@@ -44,14 +43,12 @@ const DriftCard: React.FC<{
   drift: SecretDrift;
   resolved?: DriftResolveResult;
   onSolve: () => void;
-  onMerge: () => void;
   onIgnoreKey: (key: string) => void;
   onUnignoreKey: (key: string) => void;
   solving: boolean;
-  merging: boolean;
   /** The single missingInAws key currently being ignored/un-ignored for this secret, if any. */
   mutatingKey: string | null;
-}> = ({ drift, resolved, onSolve, onMerge, onIgnoreKey, onUnignoreKey, solving, merging, mutatingKey }) => {
+}> = ({ drift, resolved, onSolve, onIgnoreKey, onUnignoreKey, solving, mutatingKey }) => {
   const merged = resolved?.state === 'MERGED';
   const open = resolved?.state === 'OPEN';
   return (
@@ -81,40 +78,21 @@ const DriftCard: React.FC<{
                 <Icons.CheckCircle2 size={12} /> Merged
               </span>
             ) : (
-              <>
-                <button
-                  type="button"
-                  className="btn btn-primary btn-sm"
-                  style={{ gap: 6 }}
-                  disabled={solving || open}
-                  onClick={onSolve}
-                  title="Open a draft infra-deployment PR registering the missing keys"
-                >
-                  {solving ? (
-                    <Icons.Loader size={14} style={{ animation: 'spin 1s linear infinite' }} />
-                  ) : (
-                    <Icons.GitPullRequestArrow size={14} />
-                  )}
-                  {open ? 'PR opened' : 'Solve drift'}
-                </button>
-                {open && (
-                  <button
-                    type="button"
-                    className="btn btn-outline btn-sm"
-                    style={{ gap: 6 }}
-                    disabled={merging}
-                    onClick={onMerge}
-                    title="Merge the draft PR — review it in GitHub first"
-                  >
-                    {merging ? (
-                      <Icons.Loader size={14} style={{ animation: 'spin 1s linear infinite' }} />
-                    ) : (
-                      <Icons.GitMerge size={14} />
-                    )}
-                    Merge PR
-                  </button>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                style={{ gap: 6 }}
+                disabled={solving || open}
+                onClick={onSolve}
+                title="Open a draft infra-deployment PR registering the missing keys"
+              >
+                {solving ? (
+                  <Icons.Loader size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                ) : (
+                  <Icons.GitPullRequestArrow size={14} />
                 )}
-              </>
+                {open ? 'PR opened' : 'Solve drift'}
+              </button>
             )}
           </div>
         )}
@@ -264,7 +242,7 @@ export const SecretDriftPanel: React.FC = () => {
     onSuccess: (result) => {
       setResolvedBySecret((prev) => ({ ...prev, [result.secretName]: result }));
       if (result.state === 'OPEN') {
-        toast.success(`Draft PR opened${result.prNumber ? ` (#${result.prNumber})` : ''} — review it, then click Merge PR.`);
+        toast.success(`Draft PR opened${result.prNumber ? ` (#${result.prNumber})` : ''} — review and merge it on GitHub.`);
       } else if (result.state === 'SKIPPED') {
         toast.info(result.note || 'Nothing to reconcile.');
       } else {
@@ -274,20 +252,6 @@ export const SecretDriftPanel: React.FC = () => {
     onError: (err: any) => toast.error(err?.message || 'Failed to reconcile drift.'),
   });
 
-  const mergeMutation = useMutation({
-    mutationFn: (secretName: string) => mergeSecretDrift(secretName, platform),
-    onSuccess: (result) => {
-      setResolvedBySecret((prev) => ({ ...prev, [result.secretName]: result }));
-      if (result.state === 'MERGED') {
-        toast.success(`Merged${result.prNumber ? ` PR #${result.prNumber}` : ''} — the manifests now register the missing key(s).`);
-      } else if (result.state === 'SKIPPED') {
-        toast.info(result.note || 'Nothing to merge.');
-      } else {
-        toast.info(`Merge ${result.state.toLowerCase()}.${result.note ? ` ${result.note}` : ''}`);
-      }
-    },
-    onError: (err: any) => toast.error(err?.message || 'Failed to merge the drift PR.'),
-  });
 
   // Ignoring/un-ignoring is a lightweight audit-only toggle (see backend) — patch the cached
   // report in place instead of triggering a full re-scan (which re-reads AWS + GitHub).
@@ -422,9 +386,7 @@ export const SecretDriftPanel: React.FC = () => {
               drift={d}
               resolved={resolvedBySecret[d.secretName]}
               solving={solveMutation.isPending && solveMutation.variables === d.secretName}
-              merging={mergeMutation.isPending && mergeMutation.variables === d.secretName}
               onSolve={() => solveMutation.mutate(d.secretName)}
-              onMerge={() => mergeMutation.mutate(d.secretName)}
               onIgnoreKey={(key) => ignoreMutation.mutate({ secretName: d.secretName, key })}
               onUnignoreKey={(key) => unignoreMutation.mutate({ secretName: d.secretName, key })}
               mutatingKey={

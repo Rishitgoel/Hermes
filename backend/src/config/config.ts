@@ -432,6 +432,9 @@ export const config = {
             get isSimulation(): boolean {
               return process.env.SECRETS_SANDBOX_INFRA_REPO_SIMULATION === 'true' || !this.token;
             },
+            get autoMergeEnabled(): boolean {
+              return process.env.SECRETS_SANDBOX_INFRA_REPO_AUTO_MERGE === 'true';
+            },
           };
         },
         get infraEnabled(): boolean {
@@ -473,6 +476,9 @@ export const config = {
     // contents + pull-request write on the repo.
     get isSimulation() {
       return process.env.INFRA_REPO_SIMULATION === 'true' || !this.token;
+    },
+    get autoMergeEnabled() {
+      return process.env.INFRA_REPO_AUTO_MERGE === 'true';
     },
   },
 

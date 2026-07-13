@@ -140,18 +140,6 @@ export class SecretIngestionController extends BaseController {
     }
   }
 
-  // POST /api/secrets/drift/merge — merge the already-open drift PR for one secret (after review)
-  async mergeDrift(req: Request, res: Response, next: NextFunction): Promise<void> {
-    try {
-      const validated = this.validateWithZod(resolveDriftSchema, this.req.body);
-      if (!validated.success) return;
-      const platform = validated.data.platform ? assertSecretsPlatform(validated.data.platform) : undefined;
-      const result = await secretDriftService.mergeDrift(this.user!, validated.data.secretName, platform ?? 'secrets');
-      this.sendResponse(result, 'Drift reconciliation PR merged');
-    } catch (error) {
-      this.handleError(error, 'Failed to merge secret drift PR');
-    }
-  }
 
   // POST /api/secrets/drift/ignore — stop notifying about one missingInAws (dangling) key
   async ignoreDriftKey(req: Request, res: Response, next: NextFunction): Promise<void> {
