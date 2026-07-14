@@ -69,8 +69,10 @@ export type ManifestEditResult =
 // ---------------------------------------------------------------------------
 
 const stripQuotes = (s: string): string => s.trim().replace(/^["']|["']$/g, '');
-const indentOf = (line: string): number => (line.match(/^(\s*)/) as RegExpMatchArray)[1].length;
-const detectEol = (content: string): string => (content.includes('\r\n') ? '\r\n' : '\n');
+const indentOf = (line: string): number =>
+  (line.match(/^(\s*)/) as RegExpMatchArray)[1].length;
+const detectEol = (content: string): string =>
+  content.includes('\r\n') ? '\r\n' : '\n';
 
 /**
  * Runs `fn` over `items` with at most `limit` in flight at once — faster than a fully
@@ -85,12 +87,15 @@ async function mapWithConcurrency<T, R>(
 ): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let next = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) {
-      const i = next++;
-      results[i] = await fn(items[i], i);
-    }
-  });
+  const workers = Array.from(
+    { length: Math.min(limit, items.length) },
+    async () => {
+      while (next < items.length) {
+        const i = next++;
+        results[i] = await fn(items[i], i);
+      }
+    },
+  );
   await Promise.all(workers);
   return results;
 }
@@ -98,9 +103,13 @@ async function mapWithConcurrency<T, R>(
 /** Best-effort environment label for a manifest path (for display + approver context). */
 export function envOf(path: string): string {
   const m = path.match(/(^|\/)(prod|qa2|qa|uat|local|dev|staging)(\/|$)/i);
-  if (m) return m[2].toLowerCase();
+  if (m) {
+    return m[2].toLowerCase();
+  }
   const v = path.match(/values-(prod|qa2|qa|uat|local|dev|staging)/i);
-  if (v) return v[1].toLowerCase();
+  if (v) {
+    return v[1].toLowerCase();
+  }
   return 'root';
 }
 
@@ -176,15 +185,21 @@ export function editValuesItems(
       break;
     }
   }
-  if (mapIdx === -1) return { status: 'not-referenced' };
+  if (mapIdx === -1) {
+    return { status: 'not-referenced' };
+  }
 
   let itemsIdx = -1;
   let itemsIndent = 0;
   for (let j = mapIdx + 1; j < lines.length; j++) {
     const ln = lines[j];
-    if (/^\s*$/.test(ln) || /^\s*#/.test(ln)) continue;
+    if (/^\s*$/.test(ln) || /^\s*#/.test(ln)) {
+      continue;
+    }
     const ind = indentOf(ln);
-    if (ind <= mapIndent) break;
+    if (ind <= mapIndent) {
+      break;
+    }
     if (/^\s*items:\s*$/.test(ln)) {
       itemsIdx = j;
       itemsIndent = ind;
@@ -193,15 +208,21 @@ export function editValuesItems(
   }
   // The mapping was found but has no `items:` list — a different/unrecognized shape
   // (e.g. flow-style `items: []`, or a wholesale mount) rather than "keys already there".
-  if (itemsIdx === -1) return { status: 'unmatched' };
+  if (itemsIdx === -1) {
+    return { status: 'unmatched' };
+  }
 
   const existing = new Set<string>();
   let lastItemIdx = itemsIdx;
   let itemIndent = itemsIndent + 2;
   for (let j = itemsIdx + 1; j < lines.length; j++) {
     const ln = lines[j];
-    if (/^\s*$/.test(ln) || /^\s*#/.test(ln)) continue;
-    if (indentOf(ln) <= itemsIndent) break;
+    if (/^\s*$/.test(ln) || /^\s*#/.test(ln)) {
+      continue;
+    }
+    if (indentOf(ln) <= itemsIndent) {
+      break;
+    }
     const im = ln.match(/^(\s*)-\s+(.+?)\s*$/);
     // A line still inside the list's indent that isn't a plain "- value" entry (e.g. a
     // mapping-style item split across lines) means this list's shape isn't the flat scalar
@@ -209,17 +230,25 @@ export function editValuesItems(
     // `existing` incomplete, so a key already present further down could be wrongly judged
     // "missing" and re-inserted as a duplicate. Report `unmatched` instead of guessing —
     // same principle as the `items:`-not-found case above.
-    if (!im) return { status: 'unmatched' };
+    if (!im) {
+      return { status: 'unmatched' };
+    }
     existing.add(stripQuotes(im[2]));
     lastItemIdx = j;
     itemIndent = im[1].length;
   }
 
   const missing = keys.filter(k => !existing.has(k));
-  if (missing.length === 0) return { status: 'up-to-date' };
+  if (missing.length === 0) {
+    return { status: 'up-to-date' };
+  }
 
   const insert = missing.map(k => ' '.repeat(itemIndent) + '- ' + k);
-  const out = [...lines.slice(0, lastItemIdx + 1), ...insert, ...lines.slice(lastItemIdx + 1)];
+  const out = [
+    ...lines.slice(0, lastItemIdx + 1),
+    ...insert,
+    ...lines.slice(lastItemIdx + 1),
+  ];
   return { status: 'edited', content: out.join(eol), added: missing };
 }
 
@@ -256,16 +285,22 @@ export function editSpc(
       break;
     }
   }
-  if (objIdx === -1) return { status: 'not-referenced' };
+  if (objIdx === -1) {
+    return { status: 'not-referenced' };
+  }
 
   let jpIdx = -1;
   let jpIndent = 0;
   const matchingAliases = new Set<string>();
   for (let j = objIdx + 1; j < lines.length; j++) {
     const ln = lines[j];
-    if (/^\s*$/.test(ln) || /^\s*#/.test(ln)) continue;
+    if (/^\s*$/.test(ln) || /^\s*#/.test(ln)) {
+      continue;
+    }
     const ind = indentOf(ln);
-    if (ind <= objIndent) break;
+    if (ind <= objIndent) {
+      break;
+    }
     if (/^\s*jmesPath:\s*$/.test(ln)) {
       jpIdx = j;
       jpIndent = ind;
@@ -281,8 +316,12 @@ export function editSpc(
     let currentPath = '';
     for (let j = jpIdx + 1; j < lines.length; j++) {
       const ln = lines[j];
-      if (/^\s*$/.test(ln) || /^\s*#/.test(ln)) continue;
-      if (indentOf(ln) <= jpIndent) break;
+      if (/^\s*$/.test(ln) || /^\s*#/.test(ln)) {
+        continue;
+      }
+      if (indentOf(ln) <= jpIndent) {
+        break;
+      }
       const pm = ln.match(/^(\s*)-\s*path:\s*(.+?)\s*$/);
       if (pm) {
         currentPath = stripQuotes(pm[2]);
@@ -311,7 +350,11 @@ export function editSpc(
         insert.push(' '.repeat(aliasIndent) + 'objectAlias: ' + k);
         added.add(k);
       }
-      lines = [...lines.slice(0, lastIdx + 1), ...insert, ...lines.slice(lastIdx + 1)];
+      lines = [
+        ...lines.slice(0, lastIdx + 1),
+        ...insert,
+        ...lines.slice(lastIdx + 1),
+      ];
     }
   }
 
@@ -343,9 +386,9 @@ export function editSpc(
 
     for (let j = soIdx + 1; j < lines.length; j++) {
       const ln = lines[j];
-      if (/^\s*$/.test(ln) || /^\s*#/.test(ln)) continue;
+      if (/^\s*$/.test(ln) || /^\s*#/.test(ln)) {continue;}
       const ind = indentOf(ln);
-      if (ind <= soIndent) break;
+      if (ind <= soIndent) {break;}
 
       const isArrayItem = /^\s*-\s+/.test(ln);
       if (isArrayItem) {
@@ -398,7 +441,7 @@ export function editSpc(
     let selectedBlock: SecretObjectBlock | null = null;
     if (blocks.length > 0) {
       selectedBlock = blocks.find(b =>
-        b.existingObjectNames.some(name => matchingAliases.has(name))
+        b.existingObjectNames.some(name => matchingAliases.has(name)),
       ) || null;
 
       if (!selectedBlock && target) {
@@ -407,7 +450,7 @@ export function editSpc(
             b.secretNameLine.toLowerCase() === target.toLowerCase() ||
             target.toLowerCase().includes(b.secretNameLine.toLowerCase()) ||
             b.secretNameLine.toLowerCase().includes(target.toLowerCase())
-          )
+          ),
         ) || null;
       }
 
@@ -427,15 +470,23 @@ export function editSpc(
           insert.push(' '.repeat(selectedBlock.keyIndent) + 'key: ' + k);
           added.add(k);
         }
-        lines = [...lines.slice(0, selectedBlock.lastIdx + 1), ...insert, ...lines.slice(selectedBlock.lastIdx + 1)];
+        lines = [
+          ...lines.slice(0, selectedBlock.lastIdx + 1),
+          ...insert,
+          ...lines.slice(selectedBlock.lastIdx + 1),
+        ];
       }
     }
   }
 
-  if (added.size > 0) return { status: 'edited', content: lines.join(eol), added: [...added] };
+  if (added.size > 0) {
+    return { status: 'edited', content: lines.join(eol), added: [...added] };
+  }
   // objectName was found but neither the jmesPath: nor the secretObjects[].data: list could
   // be located — an unrecognized shape, not "already present".
-  if (!structureFound) return { status: 'unmatched' };
+  if (!structureFound) {
+    return { status: 'unmatched' };
+  }
   return { status: 'up-to-date' };
 }
 
@@ -473,31 +524,45 @@ function registeredKeysValues(
       break;
     }
   }
-  if (mapIdx === -1) return { referenced: false, keys: [], unmatched: false };
+  if (mapIdx === -1) {
+    return { referenced: false, keys: [], unmatched: false };
+  }
 
   let itemsIdx = -1;
   let itemsIndent = 0;
   for (let j = mapIdx + 1; j < lines.length; j++) {
     const ln = lines[j];
-    if (/^\s*$/.test(ln) || /^\s*#/.test(ln)) continue;
-    if (indentOf(ln) <= mapIndent) break;
+    if (/^\s*$/.test(ln) || /^\s*#/.test(ln)) {
+      continue;
+    }
+    if (indentOf(ln) <= mapIndent) {
+      break;
+    }
     if (/^\s*items:\s*$/.test(ln)) {
       itemsIdx = j;
       itemsIndent = indentOf(ln);
       break;
     }
   }
-  if (itemsIdx === -1) return { referenced: true, keys: [], unmatched: true };
+  if (itemsIdx === -1) {
+    return { referenced: true, keys: [], unmatched: true };
+  }
 
   const keys: string[] = [];
   for (let j = itemsIdx + 1; j < lines.length; j++) {
     const ln = lines[j];
-    if (/^\s*$/.test(ln) || /^\s*#/.test(ln)) continue;
-    if (indentOf(ln) <= itemsIndent) break;
+    if (/^\s*$/.test(ln) || /^\s*#/.test(ln)) {
+      continue;
+    }
+    if (indentOf(ln) <= itemsIndent) {
+      break;
+    }
     const im = ln.match(/^\s*-\s+(.+?)\s*$/);
     // A non-scalar item (mapping-style entry) means this list isn't the flat shape we read —
     // report unmatched rather than returning a partial registered set, same as the editor.
-    if (!im) return { referenced: true, keys: [], unmatched: true };
+    if (!im) {
+      return { referenced: true, keys: [], unmatched: true };
+    }
     keys.push(stripQuotes(im[1]));
   }
   return { referenced: true, keys, unmatched: false };
@@ -521,35 +586,51 @@ function registeredKeysSpc(
       break;
     }
   }
-  if (objIdx === -1) return { referenced: false, keys: [], unmatched: false };
+  if (objIdx === -1) {
+    return { referenced: false, keys: [], unmatched: false };
+  }
 
   let jpIdx = -1;
   let jpIndent = 0;
   for (let j = objIdx + 1; j < lines.length; j++) {
     const ln = lines[j];
-    if (/^\s*$/.test(ln) || /^\s*#/.test(ln)) continue;
-    if (indentOf(ln) <= objIndent) break;
+    if (/^\s*$/.test(ln) || /^\s*#/.test(ln)) {
+      continue;
+    }
+    if (indentOf(ln) <= objIndent) {
+      break;
+    }
     if (/^\s*jmesPath:\s*$/.test(ln)) {
       jpIdx = j;
       jpIndent = indentOf(ln);
       break;
     }
   }
-  if (jpIdx === -1) return { referenced: true, keys: [], unmatched: true };
+  if (jpIdx === -1) {
+    return { referenced: true, keys: [], unmatched: true };
+  }
 
   const keys: string[] = [];
   for (let j = jpIdx + 1; j < lines.length; j++) {
     const ln = lines[j];
-    if (/^\s*$/.test(ln) || /^\s*#/.test(ln)) continue;
-    if (indentOf(ln) <= jpIndent) break;
+    if (/^\s*$/.test(ln) || /^\s*#/.test(ln)) {
+      continue;
+    }
+    if (indentOf(ln) <= jpIndent) {
+      break;
+    }
     const pm = ln.match(/^\s*-\s*path:\s*(.+?)\s*$/);
-    if (pm) keys.push(stripQuotes(pm[1]));
+    if (pm) {
+      keys.push(stripQuotes(pm[1]));
+    }
   }
   return { referenced: true, keys, unmatched: false };
 }
 
-const isValuesFile = (p: string): boolean => /(^|\/)values-[^/]*\.ya?ml$/i.test(p);
-const isSpcFile = (p: string): boolean => /(^|\/)secretproviderclass[^/]*\.ya?ml$/i.test(p);
+const isValuesFile = (p: string): boolean =>
+  /(^|\/)values-[^/]*\.ya?ml$/i.test(p);
+const isSpcFile = (p: string): boolean =>
+  /(^|\/)secretproviderclass[^/]*\.ya?ml$/i.test(p);
 // Only values-*.yaml is ever auto-discovered as a consumer — SecretProviderClass files are
 // deliberately excluded (product decision — Hermes must never edit that file).
 const isCandidate = (p: string): boolean => isValuesFile(p);
@@ -559,7 +640,10 @@ const isCandidate = (p: string): boolean => isValuesFile(p);
  * SecretProviderClass object with no `jmesPath`) are intentionally excluded — adding a
  * key there needs no edit, so they must not appear as consumers.
  */
-export function referencedEnumeratedSecrets(path: string, content: string): Consumer[] {
+export function referencedEnumeratedSecrets(
+  path: string,
+  content: string,
+): Consumer[] {
   // Thin wrapper over namedSecretsInFile — the actual scan production's buildIndex() runs.
   // Kept as a SINGLE implementation (rather than two independently-maintained copies of the
   // same regex-based scan) so a fix to the scanning heuristic can't silently apply to only
@@ -602,7 +686,10 @@ export interface InfraRepoConfig {
 
 export class InfraRepoSyncService {
   private client: AxiosInstance | null = null;
-  private indexCache: { treeSha: string; index: Map<string, Consumer[]> } | null = null;
+  private indexCache: {
+    treeSha: string;
+    index: Map<string, Consumer[]>;
+  } | null = null;
 
   /**
    * `instanceCfg` points this service at one instance's repo. Omitted ⇒ the prod repo
@@ -621,7 +708,9 @@ export class InfraRepoSyncService {
   }
 
   private gh(): AxiosInstance {
-    if (this.client) return this.client;
+    if (this.client) {
+      return this.client;
+    }
     this.client = createHttpClient({
       baseURL: this.cfg.apiBaseUrl,
       timeout: 20000,
@@ -642,7 +731,9 @@ export class InfraRepoSyncService {
   // --- low-level GitHub calls ---
 
   private async getBaseCommitSha(): Promise<string> {
-    const res = await this.gh().get(this.repoPath(`/git/ref/heads/${this.cfg.baseBranch}`));
+    const res = await this.gh().get(
+      this.repoPath(`/git/ref/heads/${this.cfg.baseBranch}`),
+    );
     return res.data.object.sha;
   }
 
@@ -664,26 +755,58 @@ export class InfraRepoSyncService {
     ref: string,
   ): Promise<{ sha: string; content: string } | null> {
     try {
-      const res = await this.gh().get(this.repoPath(`/contents/${encodeURIComponent(path).replace(/%2F/g, '/')}`), {
-        params: { ref },
-      });
-      const content = Buffer.from(res.data.content || '', 'base64').toString('utf8');
+      const res = await this.gh().get(
+        this.repoPath(
+          `/contents/${encodeURIComponent(path).replace(/%2F/g, '/')}`,
+        ),
+        {
+          params: { ref },
+        },
+      );
+      const content = Buffer.from(res.data.content || '', 'base64').toString(
+        'utf8',
+      );
       return { sha: res.data.sha, content };
     } catch (err: any) {
-      if (err.response?.status === 404) return null;
+      if (err.response?.status === 404) {
+        return null;
+      }
       throw err;
     }
   }
 
-  private async createBranch(branch: string, fromSha: string): Promise<void> {
+  /**
+   * Points `branch` at `fromSha`, creating it or force-resetting it if it already exists.
+   *
+   * Reusing an existing branch AS-IS is not safe here: branch names are deterministic
+   * (`branchName`), and the drift branch is deterministic per SECRET (`requestId: 'drift'`), so
+   * a branch left behind by an already-merged/closed PR is routinely still present when we open
+   * the next one. Such a branch sits on a stale base commit, which breaks the caller two ways:
+   * its `putContent` SHAs come from a fresh read of the BASE branch, so any path whose blob
+   * differs between stale-branch and base 409s; and even when the writes land, the PR carries
+   * the previous round's commits and a stale merge-base. Resetting to base first makes the new
+   * PR's only diff the keys we are about to add — same invariant `prepareApprovedBranch` relies
+   * on at merge time.
+   *
+   * Callers must only reach this once no OPEN PR exists for the branch (see
+   * `findOpenPullByBranch`), otherwise this would rewrite a PR someone is reviewing.
+   */
+  private async createOrResetBranch(
+    branch: string,
+    fromSha: string,
+  ): Promise<void> {
     try {
       await this.gh().post(this.repoPath('/git/refs'), {
         ref: `refs/heads/${branch}`,
         sha: fromSha,
       });
     } catch (err: any) {
-      // 422 = ref already exists (e.g. a retry) — reuse it.
-      if (err.response?.status !== 422) throw err;
+      // 422 = ref already exists — left over from a previous PR on this deterministic branch
+      // name. Force it back to base rather than building on its stale history.
+      if (err.response?.status !== 422) {
+        throw err;
+      }
+      await this.resetBranchToSha(branch, fromSha);
     }
   }
 
@@ -710,12 +833,17 @@ export class InfraRepoSyncService {
     newContent: string,
     sha: string,
   ): Promise<void> {
-    await this.gh().put(this.repoPath(`/contents/${encodeURIComponent(path).replace(/%2F/g, '/')}`), {
-      message,
-      content: Buffer.from(newContent, 'utf8').toString('base64'),
-      branch,
-      sha,
-    });
+    await this.gh().put(
+      this.repoPath(
+        `/contents/${encodeURIComponent(path).replace(/%2F/g, '/')}`,
+      ),
+      {
+        message,
+        content: Buffer.from(newContent, 'utf8').toString('base64'),
+        branch,
+        sha,
+      },
+    );
   }
 
   private async createDraftPull(
@@ -730,21 +858,40 @@ export class InfraRepoSyncService {
       base: this.cfg.baseBranch,
       draft: true,
     });
-    return { number: res.data.number, url: res.data.html_url, nodeId: res.data.node_id };
+    return {
+      number: res.data.number,
+      url: res.data.html_url,
+      nodeId: res.data.node_id,
+    };
   }
 
   /**
-   * Finds an already-open PR for a branch (any state — including one GitHub already merged
-   * or closed out from under us). Used to make `openPrForRequest` idempotent: the submit-time
-   * and review-time listeners can both race to open a PR for the same deterministic branch
-   * name, and this lets the loser discover the winner's PR instead of erroring.
+   * Finds the currently-OPEN PR for a branch, or null. Used to make `openPrForRequest`
+   * idempotent: the submit-time and review-time listeners can both race to open a PR for the
+   * same deterministic branch name, and this lets the loser discover the winner's PR instead
+   * of erroring.
+   *
+   * `state` MUST stay 'open'. Branch names are deterministic, and the drift branch is
+   * deterministic per secret (`requestId: 'drift'`), so the same branch is reused every time
+   * drift is solved for that secret. Querying 'all' means the second Solve — after the first
+   * PR merged — matches that merged PR, and the caller "adopts" it: reporting state OPEN with
+   * its number while creating no branch, editing no file, and registering none of the new keys.
+   * A merged or closed PR is finished work, never something to adopt.
    */
-  private async findPullByBranch(branch: string): Promise<{ number: number; url: string; nodeId: string } | null> {
+  private async findOpenPullByBranch(
+    branch: string,
+  ): Promise<{ number: number; url: string; nodeId: string } | null> {
     const res = await this.gh().get(this.repoPath('/pulls'), {
-      params: { head: `${this.cfg.owner}:${branch}`, state: 'all', per_page: 1 },
+      params: {
+        head: `${this.cfg.owner}:${branch}`,
+        state: 'open',
+        per_page: 1,
+      },
     });
     const pr = (res.data || [])[0];
-    if (!pr) return null;
+    if (!pr) {
+      return null;
+    }
     return { number: pr.number, url: pr.html_url, nodeId: pr.node_id };
   }
 
@@ -754,14 +901,6 @@ export class InfraRepoSyncService {
         'mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{id}}}',
       variables: { id: nodeId },
     });
-  }
-
-  async markPrReady(nodeId: string): Promise<void> {
-    if (this.isSimulation) {
-      logger.info({ nodeId }, 'infra-repo-sync: simulated marking PR as ready');
-      return;
-    }
-    await this.markReady(nodeId);
   }
 
   private async mergePull(number: number, title: string): Promise<void> {
@@ -780,9 +919,9 @@ export class InfraRepoSyncService {
         if (status === 405 && attempt < maxAttempts) {
           logger.info(
             { pr: number, attempt },
-            `PR merge returned 405 (calculating mergeability?), retrying in 1.5s...`,
+            'PR merge returned 405 (calculating mergeability?), retrying in 1.5s...',
           );
-          await new Promise((resolve) => setTimeout(resolve, 1500));
+          await new Promise(resolve => setTimeout(resolve, 1500));
           continue;
         }
         break;
@@ -801,11 +940,20 @@ export class InfraRepoSyncService {
   }
 
   private async closePull(number: number): Promise<void> {
-    await this.gh().patch(this.repoPath(`/pulls/${number}`), { state: 'closed' });
+    await this.gh().patch(this.repoPath(`/pulls/${number}`), {
+      state: 'closed',
+    });
   }
 
   private async reopenPull(number: number): Promise<void> {
     await this.gh().patch(this.repoPath(`/pulls/${number}`), { state: 'open' });
+  }
+
+  private async updatePull(
+    number: number,
+    fields: { title?: string; body?: string },
+  ): Promise<void> {
+    await this.gh().patch(this.repoPath(`/pulls/${number}`), fields);
   }
 
   private async comment(number: number, body: string): Promise<void> {
@@ -821,20 +969,28 @@ export class InfraRepoSyncService {
       return this.indexCache.index;
     }
     const entries = await this.getTreeEntries(treeSha);
-    const candidates = entries.filter(e => e.type === 'blob' && isCandidate(e.path));
+    const candidates = entries.filter(
+      e => e.type === 'blob' && isCandidate(e.path),
+    );
     // Independent reads — bounded concurrency instead of one-at-a-time (this can scan every
     // values-*.yaml in the whole repo), but capped well under GitHub's secondary rate limit
     // rather than firing all of them at once.
     const scanned = await mapWithConcurrency(candidates, 6, async e => {
       const file = await this.getContent(e.path, this.cfg.baseBranch);
-      return file ? { path: e.path, refs: namedSecretsInFile(e.path, file.content) } : null;
+      return file
+        ? { path: e.path, refs: namedSecretsInFile(e.path, file.content) }
+        : null;
     });
     const index = new Map<string, Consumer[]>();
     for (const result of scanned) {
-      if (!result) continue;
+      if (!result) {
+        continue;
+      }
       for (const { name, mech } of result.refs) {
         const list = index.get(name) || [];
-        if (!list.some(c => c.path === result.path)) list.push({ path: result.path, mech });
+        if (!list.some(c => c.path === result.path)) {
+          list.push({ path: result.path, mech });
+        }
         index.set(name, list);
       }
     }
@@ -859,12 +1015,19 @@ export class InfraRepoSyncService {
   private async targetConsumers(
     secretName: string,
     targets?: SelectedTarget[],
-  ): Promise<{ path: string; mech: Mechanism; manifestRef: string; keys?: string[] }[]> {
+  ): Promise<
+    { path: string; mech: Mechanism; manifestRef: string; keys?: string[] }[]
+  > {
     // An explicitly-provided selection is honored verbatim — even an empty array, which
     // means "the requester chose no files" (e.g. an update-only request, or they unticked
     // everything) → no PR. Only `undefined` (the caller never specified) falls back to the
     // live auto-resolved set.
-    let result: { path: string; mech: Mechanism; manifestRef: string; keys?: string[] }[];
+    let result: {
+      path: string;
+      mech: Mechanism;
+      manifestRef: string;
+      keys?: string[];
+    }[];
     if (targets !== undefined) {
       result = targets.map(t => ({
         path: t.path,
@@ -872,16 +1035,24 @@ export class InfraRepoSyncService {
         manifestRef: (t.manifestRef || secretName).trim(),
         // A requester-narrowed key subset for this specific file — undefined means "apply
         // every proposed/approved key", the historical default.
-        keys: t.keys && t.keys.length > 0 ? [...new Set(t.keys.map(k => k.trim()).filter(Boolean))] : undefined,
+        keys:
+          t.keys && t.keys.length > 0
+            ? [...new Set(t.keys.map(k => k.trim()).filter(Boolean))]
+            : undefined,
       }));
     } else {
-      result = (await this.consumersOf(secretName)).map(c => ({ ...c, manifestRef: secretName }));
+      result = (await this.consumersOf(secretName)).map(c => ({
+        ...c,
+        manifestRef: secretName,
+      }));
     }
     // Deduplicate by path — if the same file appears twice (e.g. user-provided targets with
     // duplicates) the second putContent would 409/422 because the SHA changed after the first.
     const seen = new Set<string>();
     return result.filter(c => {
-      if (seen.has(c.path)) return false;
+      if (seen.has(c.path)) {
+        return false;
+      }
       seen.add(c.path);
       return true;
     });
@@ -903,7 +1074,9 @@ export class InfraRepoSyncService {
       // model: only keys NOT already in the secret count as "to add" (a live yaml diff does
       // exactly this against the file). An update-only request → keysToAdd empty → no PR.
       const existing = new Set(existingKeys);
-      const safe = secretName.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+      const safe = secretName
+        .replace(/[^a-zA-Z0-9._-]+/g, '-')
+        .replace(/^-+|-+$/g, '');
       return [
         {
           path: `(simulated) ${safe}/prod/values-prod.yaml`,
@@ -922,7 +1095,9 @@ export class InfraRepoSyncService {
     try {
       return await this.resolveTargetsLive(secretName, wanted);
     } catch (err: any) {
-      if (err instanceof BaseError) throw err;
+      if (err instanceof BaseError) {
+        throw err;
+      }
       throw new ExternalServiceError(
         `Failed to resolve infra-deployment targets for "${secretName}": ${err.message || err}`,
         { secretName, repo: this.slug },
@@ -930,14 +1105,19 @@ export class InfraRepoSyncService {
     }
   }
 
-  private async resolveTargetsLive(secretName: string, wanted: string[]): Promise<ResolvedTarget[]> {
+  private async resolveTargetsLive(
+    secretName: string,
+    wanted: string[],
+  ): Promise<ResolvedTarget[]> {
     const consumers = await this.consumersOf(secretName);
     // Independent reads — this sits on the interactive compose-screen preview path, so
     // parallelize across consumers (typically a small, secret-scoped set) instead of one
     // sequential round-trip per file.
     const resolved = await mapWithConcurrency(consumers, 6, async c => {
       const file = await this.getContent(c.path, this.cfg.baseBranch);
-      if (!file) return null;
+      if (!file) {
+        return null;
+      }
       const res = editForFile(c.path, file.content, secretName, wanted);
       if (res.status === 'unmatched') {
         logger.warn(
@@ -964,10 +1144,15 @@ export class InfraRepoSyncService {
    * no real repo, so it returns one representative manifest that registers all-but-one AWS key,
    * making the "keys missing from the manifest" drift (and its Solve button) demoable offline.
    */
-  async resolveDrift(secretName: string, awsKeys: string[]): Promise<DriftManifest[]> {
+  async resolveDrift(
+    secretName: string,
+    awsKeys: string[],
+  ): Promise<DriftManifest[]> {
     const keys = [...new Set(awsKeys.map(k => k.trim()).filter(Boolean))];
     if (this.isSimulation) {
-      const safe = secretName.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+      const safe = secretName
+        .replace(/[^a-zA-Z0-9._-]+/g, '-')
+        .replace(/^-+|-+$/g, '');
       const registeredKeys = keys.length > 1 ? keys.slice(0, -1) : [];
       const missingKeys = keys.filter(k => !registeredKeys.includes(k));
       return [
@@ -985,7 +1170,9 @@ export class InfraRepoSyncService {
       const consumers = await this.consumersOf(secretName);
       const resolved = await mapWithConcurrency(consumers, 6, async c => {
         const file = await this.getContent(c.path, this.cfg.baseBranch);
-        if (!file) return null;
+        if (!file) {
+          return null;
+        }
         const reg = registeredKeysInFile(c.path, file.content, secretName);
         const m: DriftManifest = {
           path: c.path,
@@ -994,14 +1181,18 @@ export class InfraRepoSyncService {
           registeredKeys: reg.keys,
           // A file whose structure we couldn't parse (`unmatched`) can't be auto-fixed, so it
           // proposes no missing keys — the drift report surfaces the unmatched flag separately.
-          missingKeys: reg.unmatched ? [] : keys.filter(k => !reg.keys.includes(k)),
+          missingKeys: reg.unmatched
+            ? []
+            : keys.filter(k => !reg.keys.includes(k)),
           unmatched: reg.unmatched,
         };
         return m;
       });
       return resolved.filter((m): m is DriftManifest => m !== null);
     } catch (err: any) {
-      if (err instanceof BaseError) throw err;
+      if (err instanceof BaseError) {
+        throw err;
+      }
       throw new ExternalServiceError(
         `Failed to resolve infra-deployment drift for "${secretName}": ${err.message || err}`,
         { secretName, repo: this.slug },
@@ -1010,7 +1201,9 @@ export class InfraRepoSyncService {
   }
 
   private branchName(secretName: string, requestId: string): string {
-    const safe = secretName.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+    const safe = secretName
+      .replace(/[^a-zA-Z0-9._-]+/g, '-')
+      .replace(/^-+|-+$/g, '');
     return `hermes/secret-keys/${safe}-${requestId}`;
   }
 
@@ -1031,15 +1224,24 @@ export class InfraRepoSyncService {
     requesterEmail?: string;
   }): Promise<InfraSyncResult> {
     const { requestId, secretName } = opts;
-    const proposedKeys = [...new Set(opts.proposedKeys.map(k => k.trim()).filter(Boolean))];
+    const proposedKeys = [
+      ...new Set(opts.proposedKeys.map(k => k.trim()).filter(Boolean)),
+    ];
     const branch = this.branchName(secretName, requestId);
 
     if (this.isSimulation) {
       // An explicit empty selection (update-only request, or everything unticked), or no
       // proposed keys at all (every key was already present), → no PR — mirroring the live
       // "nothing to add" path.
-      if ((opts.targets && opts.targets.length === 0) || proposedKeys.length === 0) {
-        return { state: 'SKIPPED', branch: null, note: 'no manifest changes needed — written to AWS only (simulation)' };
+      if (
+        (opts.targets && opts.targets.length === 0) ||
+        proposedKeys.length === 0
+      ) {
+        return {
+          state: 'SKIPPED',
+          branch: null,
+          note: 'no manifest changes needed — written to AWS only (simulation)',
+        };
       }
       // Simulation only ever previews one representative target — honor its key subset if
       // the requester narrowed it, same as the live per-file path would.
@@ -1060,10 +1262,16 @@ export class InfraRepoSyncService {
     // Idempotency guard: the submit-time and review-time listeners can both call this for the
     // same request (review-time retries when it still sees no infraPrNumber persisted, e.g.
     // because the submit-time call is still mid-flight). Both target the SAME deterministic
-    // branch name, so if a PR for it already exists, adopt it instead of racing to recreate it.
-    const existingPr = await this.findPullByBranch(branch);
+    // branch name, so if an OPEN PR for it already exists, adopt it instead of racing to
+    // recreate it. Only an open PR counts — a merged/closed one on this branch is a previous
+    // round's finished work (the drift branch is reused across solves), so we fall through and
+    // open a fresh PR for the keys that are missing now.
+    const existingPr = await this.findOpenPullByBranch(branch);
     if (existingPr) {
-      logger.info({ requestId, secretName, pr: existingPr.number }, 'infra-repo-sync: PR already open for this branch — adopting it');
+      logger.info(
+        { requestId, secretName, pr: existingPr.number },
+        'infra-repo-sync: PR already open for this branch — adopting it',
+      );
       return {
         state: 'OPEN',
         prNumber: existingPr.number,
@@ -1080,7 +1288,11 @@ export class InfraRepoSyncService {
     if (consumers.length === 0) {
       // Either no manifest consumes the secret, or the requester selected no files — both
       // mean "written to AWS only, no PR".
-      return { state: 'SKIPPED', branch: null, note: `no manifest changes for "${secretName}" — written to AWS only` };
+      return {
+        state: 'SKIPPED',
+        branch: null,
+        note: `no manifest changes for "${secretName}" — written to AWS only`,
+      };
     }
 
     const baseSha = await this.getBaseCommitSha();
@@ -1088,18 +1300,37 @@ export class InfraRepoSyncService {
     // since each PUT mutates the same branch and must happen one at a time).
     const editResults = await mapWithConcurrency(consumers, 6, async c => {
       const file = await this.getContent(c.path, this.cfg.baseBranch);
-      if (!file) return null;
+      if (!file) {
+        return null;
+      }
       // A per-file key subset (requester narrowed which keys this specific file gets) wins
       // over the full proposed set.
-      const res = editForFile(c.path, file.content, c.manifestRef, c.keys ?? proposedKeys);
+      const res = editForFile(
+        c.path,
+        file.content,
+        c.manifestRef,
+        c.keys ?? proposedKeys,
+      );
       return { path: c.path, file, res };
     });
-    const edits: { path: string; content: string; sha: string; added: string[] }[] = [];
+    const edits: {
+      path: string;
+      content: string;
+      sha: string;
+      added: string[];
+    }[] = [];
     const unmatchedPaths: string[] = [];
     for (const r of editResults) {
-      if (!r) continue;
+      if (!r) {
+        continue;
+      }
       if (r.res.status === 'edited') {
-        edits.push({ path: r.path, content: r.res.content, sha: r.file.sha, added: r.res.added });
+        edits.push({
+          path: r.path,
+          content: r.res.content,
+          sha: r.file.sha,
+          added: r.res.added,
+        });
       } else if (r.res.status === 'unmatched') {
         unmatchedPaths.push(r.path);
         logger.warn(
@@ -1119,13 +1350,17 @@ export class InfraRepoSyncService {
           note: `could not automatically register keys — ${unmatchedPaths.length} manifest(s) had an unrecognized structure and were left unchanged: ${unmatchedPaths.join(', ')}. Register the key there manually.`,
         };
       }
-      return { state: 'SKIPPED', branch: null, note: 'all proposed keys already present in every consumer' };
+      return {
+        state: 'SKIPPED',
+        branch: null,
+        note: 'all proposed keys already present in every consumer',
+      };
     }
 
     const allAdded = [...new Set(edits.flatMap(e => e.added))];
     let pr: { number: number; url: string; nodeId: string };
     try {
-      await this.createBranch(branch, baseSha);
+      await this.createOrResetBranch(branch, baseSha);
       for (const e of edits) {
         await this.putContent(
           e.path,
@@ -1151,12 +1386,13 @@ export class InfraRepoSyncService {
       );
     } catch (err: any) {
       // A concurrent caller (the submit/review race, above) may have won between our
-      // findPullByBranch check and this write — a 409 (stale content SHA) or 422 (PR already
+      // findOpenPullByBranch check and this write — a 409 (stale content SHA) or 422 (PR already
       // exists for this head) both mean "someone else already did this". Adopt their PR
-      // instead of failing the whole listener.
+      // instead of failing the whole listener. GitHub only rejects a create-PR with 422 when an
+      // OPEN PR already holds the head, so the open-only lookup is the right one here too.
       const status = err.response?.status;
       if (status === 409 || status === 422) {
-        const racedPr = await this.findPullByBranch(branch);
+        const racedPr = await this.findOpenPullByBranch(branch);
         if (racedPr) {
           logger.warn(
             { requestId, secretName, pr: racedPr.number, status },
@@ -1177,7 +1413,10 @@ export class InfraRepoSyncService {
       throw err;
     }
 
-    logger.info({ requestId, secretName, pr: pr.number, files: edits.length }, 'Opened infra-deployment draft PR');
+    logger.info(
+      { requestId, secretName, pr: pr.number, files: edits.length },
+      'Opened infra-deployment draft PR',
+    );
     return {
       state: 'OPEN',
       prNumber: pr.number,
@@ -1194,53 +1433,63 @@ export class InfraRepoSyncService {
   }
 
   /**
-   * Recomputes the branch to hold ONLY the approved keys (from the latest base — so
-   * rejected keys are dropped and concurrent merges can't conflict), marks the draft
-   * ready, and squash-merges. If, after recompute, nothing differs from base (the keys
-   * already landed some other way), the PR is closed as obsolete instead.
+   * Shared pre-finalize phase of mergePrForRequest / readyPrForRequest: rewrites `infraBranch`
+   * so its ONLY diff from the live base is the approved keys. Returns `{ done: <result> }` when
+   * the caller should stop and persist that result (no PR, nothing approved, nothing left to
+   * land); otherwise the branch is correct and committed and the caller finalizes it.
+   *
+   * Resetting to base rather than surgically un-editing rejected keys also fixes a second
+   * problem: the branch was cut from base at open time, so if another request's PR landed keys
+   * in the same manifest region since, the stale merge-base makes GitHub flag this PR as
+   * conflicting and refuse to auto-merge — recomputing the file bytes alone does NOT clear that
+   * (git conflicts on the overlapping insertion, not on the final content). Force-resetting the
+   * head to the live base commit makes the approved keys its only diff. The per-consumer reads
+   * below then see branch == base, and re-apply the keys on top.
    */
-  async mergePrForRequest(opts: {
-    request: { id: string; secretName: string; infraPrNumber: number | null; infraPrNodeId: string | null; infraBranch: string | null };
+  private async prepareApprovedBranch(opts: {
+    request: {
+      id: string;
+      secretName: string;
+      infraPrNumber: number | null;
+      infraBranch: string | null;
+    };
     approvedKeys: string[];
     targets?: SelectedTarget[];
-    // The subset of approvedKeys that are genuinely NEW (the ones the PR exists for) —
-    // an UPDATE key's value changes in AWS but needs no manifest edit. Live mode ignores
-    // this and recomputes from the real file instead (more reliable); simulation has no
-    // file to diff against, so it relies on this to decide merge vs. close.
-    newApprovedKeys?: string[];
-  }): Promise<InfraSyncResult> {
-    const { request } = opts;
-    const approvedKeys = [...new Set(opts.approvedKeys.map(k => k.trim()).filter(Boolean))];
-
-    if (this.isSimulation) {
-      const newKeys = [...new Set((opts.newApprovedKeys ?? approvedKeys).map(k => k.trim()).filter(Boolean))];
-      if (newKeys.length === 0) {
-        // Every genuinely-new key was rejected (or there were none) — nothing for this PR
-        // to merge, so it must close instead of merging an update-only change.
-        return { state: 'CLOSED', prNumber: request.infraPrNumber, note: 'no new keys were approved — closing (simulation)' };
-      }
-      return { state: 'MERGED', prNumber: request.infraPrNumber, keysAdded: newKeys, note: 'simulation (no GitHub calls)' };
-    }
+    // Supplied by the ingestion review paths, which know what the reviewer decided: rewrites the
+    // PR title/body to describe what the branch now actually registers (see reviewedPrBody).
+    // Omitted by the drift path — a drift PR was never reviewed, so its body is already accurate
+    // and must be left alone.
+    review?: {
+      rejectedKeys: string[];
+      requesterName?: string;
+      requesterEmail?: string;
+    };
+  }): Promise<
+    | { done: InfraSyncResult }
+    | { done: null; prNumber: number; unmatchedPaths: string[] }
+  > {
+    const { request, approvedKeys } = opts;
     if (!request.infraPrNumber || !request.infraBranch) {
-      return { state: 'SKIPPED', note: 'no open infra PR for this request' };
+      return {
+        done: { state: 'SKIPPED', note: 'no open infra PR for this request' },
+      };
     }
+    const prNumber = request.infraPrNumber;
     if (approvedKeys.length === 0) {
       // Nothing approved — treat as a close (caller normally routes REJECTED to closePr).
-      await this.closePull(request.infraPrNumber);
-      return { state: 'CLOSED', prNumber: request.infraPrNumber, note: 'no approved keys' };
+      await this.closePull(prNumber);
+      return {
+        done: { state: 'CLOSED', prNumber, note: 'no approved keys' },
+      };
     }
 
     const branch = request.infraBranch;
-    // Rebase the branch onto the CURRENT base before recomputing content. The branch was cut
-    // from base at open time; if another request's PR landed keys in the same manifest region
-    // since then, the stale merge-base makes GitHub flag this PR as conflicting and refuse to
-    // auto-merge — recomputing the file bytes alone does NOT clear that (git conflicts on the
-    // overlapping insertion, not on the final content). Force-resetting the branch head to the
-    // live base commit makes its only diff the approved keys, so the merge is clean. The
-    // per-consumer reads below then see the branch == base, and re-apply the keys on top.
     const currentBaseSha = await this.getBaseCommitSha();
     await this.resetBranchToSha(branch, currentBaseSha);
-    const consumers = await this.targetConsumers(request.secretName, opts.targets);
+    const consumers = await this.targetConsumers(
+      request.secretName,
+      opts.targets,
+    );
     // Each consumer is an independent file: its own base+branch reads and (if needed) its own
     // write, none of which depend on another consumer's outcome — parallelize across them.
     // Within one consumer, the base and branch reads are two different refs and independent
@@ -1250,16 +1499,24 @@ export class InfraRepoSyncService {
         this.getContent(c.path, this.cfg.baseBranch),
         this.getContent(c.path, branch),
       ]);
-      if (!base) return { changed: false, unmatched: false, path: c.path };
+      if (!base) {
+        return { changed: false, unmatched: false, path: c.path };
+      }
       // A per-file key subset further narrows the (already-approved) keys applied here —
       // e.g. the requester chose this file for key A only, even though B was also approved.
-      const keysForFile = c.keys ? c.keys.filter(k => approvedKeys.includes(k)) : approvedKeys;
+      const keysForFile = c.keys
+        ? c.keys.filter(k => approvedKeys.includes(k))
+        : approvedKeys;
       const res = editForFile(c.path, base.content, c.manifestRef, keysForFile);
       const desired = res.status === 'edited' ? res.content : base.content;
       if (res.status === 'unmatched') {
         logger.warn(
-          { requestId: request.id, secretName: request.secretName, path: c.path },
-          'infra-repo-sync: manifest structure not found during merge — key not registered in this file',
+          {
+            requestId: request.id,
+            secretName: request.secretName,
+            path: c.path,
+          },
+          'infra-repo-sync: manifest structure not found during recompute — key not registered in this file',
         );
       }
       if (onBranch && onBranch.content !== desired) {
@@ -1271,10 +1528,16 @@ export class InfraRepoSyncService {
           onBranch.sha,
         );
       }
-      return { changed: res.status === 'edited', unmatched: res.status === 'unmatched', path: c.path };
+      return {
+        changed: res.status === 'edited',
+        unmatched: res.status === 'unmatched',
+        path: c.path,
+      };
     });
     const changedAny = perConsumer.some(r => r.changed);
-    const unmatchedPaths = perConsumer.filter(r => r.unmatched).map(r => r.path);
+    const unmatchedPaths = perConsumer
+      .filter(r => r.unmatched)
+      .map(r => r.path);
 
     if (!changedAny) {
       // Same distinction as openPrForRequest: don't tell the reviewer/PR "already present"
@@ -1283,17 +1546,116 @@ export class InfraRepoSyncService {
         unmatchedPaths.length > 0
           ? `Hermes: could not automatically register the approved key(s) — ${unmatchedPaths.length} manifest(s) had an unrecognized structure: ${unmatchedPaths.join(', ')}. Register them manually; closing this PR.`
           : 'Hermes: approved keys are already present on the base branch — closing as obsolete.';
-      await this.comment(request.infraPrNumber, closeNote);
-      await this.closePull(request.infraPrNumber);
+      await this.comment(prNumber, closeNote);
+      await this.closePull(prNumber);
       return {
-        state: 'CLOSED',
-        prNumber: request.infraPrNumber,
-        note:
-          unmatchedPaths.length > 0
-            ? `approved keys could not be auto-registered (unrecognized structure): ${unmatchedPaths.join(', ')}`
-            : 'approved keys already on base',
+        done: {
+          state: 'CLOSED',
+          prNumber,
+          note:
+            unmatchedPaths.length > 0
+              ? `approved keys could not be auto-registered (unrecognized structure): ${unmatchedPaths.join(', ')}`
+              : 'approved keys already on base',
+        },
       };
     }
+    // The branch now holds exactly the approved keys — so this is the moment the submit-time
+    // title/body ("register 4 key(s)", "Keys: A, B, C, D") becomes a lie. Correct it here, the
+    // one place both the merge and manual paths pass through. Best-effort: the diff is already
+    // right without it, so a GitHub hiccup here must not fail the review.
+    if (opts.review) {
+      const changedPaths = perConsumer.filter(r => r.changed).map(r => r.path);
+      await this.updatePull(prNumber, {
+        title: `[Hermes] chore(secrets): register ${approvedKeys.length} key(s) in ${request.secretName}`,
+        body: reviewedPrBody({
+          secretName: request.secretName,
+          requestId: request.id,
+          approvedKeys,
+          rejectedKeys: opts.review.rejectedKeys,
+          files: changedPaths,
+          requesterName: opts.review.requesterName,
+          requesterEmail: opts.review.requesterEmail,
+        }),
+      }).catch((err: any) => {
+        logger.warn(
+          { requestId: request.id, pr: prNumber, err: err.message },
+          'infra-repo-sync: could not rewrite reviewed PR title/body — the diff is still correct, but the description may still list rejected keys',
+        );
+      });
+    }
+
+    return { done: null, prNumber, unmatchedPaths };
+  }
+
+  /**
+   * Recomputes the branch to hold ONLY the approved keys (from the latest base — so
+   * rejected keys are dropped and concurrent merges can't conflict), marks the draft
+   * ready, and squash-merges. If, after recompute, nothing differs from base (the keys
+   * already landed some other way), the PR is closed as obsolete instead.
+   */
+  async mergePrForRequest(opts: {
+    request: {
+      id: string;
+      secretName: string;
+      infraPrNumber: number | null;
+      infraPrNodeId: string | null;
+      infraBranch: string | null;
+    };
+    approvedKeys: string[];
+    targets?: SelectedTarget[];
+    // The subset of approvedKeys that are genuinely NEW (the ones the PR exists for) —
+    // an UPDATE key's value changes in AWS but needs no manifest edit. Live mode ignores
+    // this and recomputes from the real file instead (more reliable); simulation has no
+    // file to diff against, so it relies on this to decide merge vs. close.
+    newApprovedKeys?: string[];
+    // See prepareApprovedBranch: rewrites the stale submit-time title/body. Matters here too —
+    // when a protected branch blocks the auto-merge, this PR is handed to a human exactly like
+    // the manual path, stale description and all.
+    review?: {
+      rejectedKeys: string[];
+      requesterName?: string;
+      requesterEmail?: string;
+    };
+  }): Promise<InfraSyncResult> {
+    const { request } = opts;
+    const approvedKeys = [
+      ...new Set(opts.approvedKeys.map(k => k.trim()).filter(Boolean)),
+    ];
+
+    if (this.isSimulation) {
+      const newKeys = [
+        ...new Set(
+          (opts.newApprovedKeys ?? approvedKeys)
+            .map(k => k.trim())
+            .filter(Boolean),
+        ),
+      ];
+      if (newKeys.length === 0) {
+        // Every genuinely-new key was rejected (or there were none) — nothing for this PR
+        // to merge, so it must close instead of merging an update-only change.
+        return {
+          state: 'CLOSED',
+          prNumber: request.infraPrNumber,
+          note: 'no new keys were approved — closing (simulation)',
+        };
+      }
+      return {
+        state: 'MERGED',
+        prNumber: request.infraPrNumber,
+        keysAdded: newKeys,
+        note: 'simulation (no GitHub calls)',
+      };
+    }
+    const prep = await this.prepareApprovedBranch({
+      request,
+      approvedKeys,
+      targets: opts.targets,
+      review: opts.review,
+    });
+    if (prep.done) {
+      return prep.done;
+    }
+    const { prNumber, unmatchedPaths } = prep;
 
     // The content is now correct and committed on the branch — everything past this point
     // is "finalize" (ready-for-review + merge). A failure here (e.g. branch protection
@@ -1304,35 +1666,157 @@ export class InfraRepoSyncService {
     // always has something to persist, and leave a breadcrumb on the PR for a human.
     try {
       try {
-        await this.reopenPull(request.infraPrNumber);
+        await this.reopenPull(prNumber);
       } catch (reopenErr: any) {
         logger.info(
-          { pr: request.infraPrNumber, err: reopenErr.message },
+          { pr: prNumber, err: reopenErr.message },
           'Failed to reopen PR (already open, merged, or permission issue) — proceeding to merge anyway',
         );
       }
       if (request.infraPrNodeId) {
         await this.markReady(request.infraPrNodeId);
       }
-      await this.mergePull(request.infraPrNumber, `[Hermes] chore(secrets): register keys in ${request.secretName}`);
+      await this.mergePull(
+        prNumber,
+        `[Hermes] chore(secrets): register keys in ${request.secretName}`,
+      );
     } catch (err: any) {
       const note = err.message || 'merge failed';
-      logger.error({ requestId: request.id, pr: request.infraPrNumber, err: note }, 'Failed to finalize infra-deployment PR');
+      logger.error(
+        { requestId: request.id, pr: prNumber, err: note },
+        'Failed to finalize infra-deployment PR',
+      );
       await this.comment(
-        request.infraPrNumber,
+        prNumber,
         `Hermes: automatic merge failed — \`${note}\`. The branch is up to date with the approved keys; merge manually or re-run review once the blocker is resolved.`,
       ).catch(() => {});
-      return { state: 'FAILED', prNumber: request.infraPrNumber, note };
+      return { state: 'FAILED', prNumber, note };
     }
-    logger.info({ requestId: request.id, pr: request.infraPrNumber }, 'Merged infra-deployment PR');
+    logger.info(
+      { requestId: request.id, pr: prNumber },
+      'Merged infra-deployment PR',
+    );
     return {
       state: 'MERGED',
-      prNumber: request.infraPrNumber,
+      prNumber,
       keysAdded: approvedKeys,
       note:
         unmatchedPaths.length > 0
           ? `${unmatchedPaths.length} manifest(s) could not be auto-edited (unrecognized structure): ${unmatchedPaths.join(', ')}`
           : undefined,
+    };
+  }
+
+  /**
+   * Manual-review counterpart to mergePrForRequest, used when auto-merge is OFF (the default):
+   * recomputes the branch to hold ONLY the approved keys, marks the draft ready for review, and
+   * leaves the merge to a human on GitHub.
+   *
+   * The recompute is the whole point. The branch was opened at SUBMIT time and holds every key
+   * the requester proposed; by review time some of those may have been rejected. Only the
+   * approved ones are written to AWS, so without this pass the PR a reviewer sees (and merges)
+   * would still register the rejected keys in the manifests — keys that exist in no secret
+   * store. Marking the PR ready without recomputing is exactly that bug.
+   */
+  async readyPrForRequest(opts: {
+    request: {
+      id: string;
+      secretName: string;
+      infraPrNumber: number | null;
+      infraPrNodeId: string | null;
+      infraBranch: string | null;
+    };
+    approvedKeys: string[];
+    targets?: SelectedTarget[];
+    // See mergePrForRequest: only simulation needs this — live mode recomputes from the file.
+    newApprovedKeys?: string[];
+    // See prepareApprovedBranch. Most load-bearing on this path: the human who merges this PR
+    // reads its description, and if they hit a conflict they hand-type keys out of it.
+    review?: {
+      rejectedKeys: string[];
+      requesterName?: string;
+      requesterEmail?: string;
+    };
+  }): Promise<InfraSyncResult> {
+    const { request } = opts;
+    const approvedKeys = [
+      ...new Set(opts.approvedKeys.map(k => k.trim()).filter(Boolean)),
+    ];
+
+    if (this.isSimulation) {
+      const newKeys = [
+        ...new Set(
+          (opts.newApprovedKeys ?? approvedKeys)
+            .map(k => k.trim())
+            .filter(Boolean),
+        ),
+      ];
+      if (newKeys.length === 0) {
+        return {
+          state: 'CLOSED',
+          prNumber: request.infraPrNumber,
+          note: 'no new keys were approved — closing (simulation)',
+        };
+      }
+      return {
+        state: 'OPEN',
+        prNumber: request.infraPrNumber,
+        keysAdded: newKeys,
+        note: 'ready for review — merge manually (simulation)',
+      };
+    }
+
+    const prep = await this.prepareApprovedBranch({
+      request,
+      approvedKeys,
+      targets: opts.targets,
+      review: opts.review,
+    });
+    if (prep.done) {
+      return prep.done;
+    }
+    const { prNumber, unmatchedPaths } = prep;
+
+    // prepareApprovedBranch has rewritten the title/body to match the approved keys; this marks
+    // the review in the PR's timeline (and notifies watchers), which a body edit does not.
+    // Deliberately does not claim the description was updated — that rewrite is best-effort, so
+    // this line has to stay true even if it failed. Best-effort itself: the diff is correct
+    // regardless, so a failed comment must not block the ready flip.
+    const approvedList = approvedKeys.map(k => `\`${k}\``).join(', ');
+    await this.comment(
+      prNumber,
+      `Hermes: request reviewed — this PR now registers **only the approved key(s)**: ${approvedList}. Any rejected key has been dropped from the branch. Ready for review.`,
+    ).catch(() => {});
+
+    // Content is correct on the branch; only the draft → ready flip is left. Same rule as
+    // mergePrForRequest's finalize: never throw, because the caller persists whatever we
+    // return — a throw would strand the row on its stale pre-review state. FAILED surfaces
+    // it in the review queue with a Retry action instead.
+    try {
+      if (request.infraPrNodeId) {
+        await this.markReady(request.infraPrNodeId);
+      }
+    } catch (err: any) {
+      const note = err.message || 'failed to mark PR ready for review';
+      logger.error(
+        { requestId: request.id, pr: prNumber, err: note },
+        'Failed to mark infra-deployment PR ready for review',
+      );
+      return { state: 'FAILED', prNumber, note };
+    }
+
+    logger.info(
+      { requestId: request.id, pr: prNumber, keys: approvedKeys.length },
+      'infra-deployment PR recomputed to approved keys and marked ready for review',
+    );
+    return {
+      state: 'OPEN',
+      prNumber,
+      keysAdded: approvedKeys,
+      note:
+        unmatchedPaths.length > 0
+          ? `ready for review — merge manually. ${unmatchedPaths.length} manifest(s) could not be auto-edited (unrecognized structure): ${unmatchedPaths.join(', ')}`
+          : 'ready for review — merge the PR to register the approved key(s)',
     };
   }
 
@@ -1343,11 +1827,18 @@ export class InfraRepoSyncService {
    * branch name first. `missingKeys` should be freshly recomputed (not cached from the original
    * scan) so a merge some time after "Solve drift" still applies whatever is *currently* missing.
    */
-  async mergeDriftPr(secretName: string, missingKeys: string[]): Promise<InfraSyncResult> {
+  async mergeDriftPr(
+    secretName: string,
+    missingKeys: string[],
+  ): Promise<InfraSyncResult> {
     const branch = this.branchName(secretName, 'drift');
     if (this.isSimulation) {
       if (missingKeys.length === 0) {
-        return { state: 'SKIPPED', branch, note: 'no missing keys to merge (simulation)' };
+        return {
+          state: 'SKIPPED',
+          branch,
+          note: 'no missing keys to merge (simulation)',
+        };
       }
       return {
         state: 'MERGED',
@@ -1358,12 +1849,22 @@ export class InfraRepoSyncService {
         note: 'simulation (no GitHub calls)',
       };
     }
-    const pr = await this.findPullByBranch(branch);
+    const pr = await this.findOpenPullByBranch(branch);
     if (!pr) {
-      return { state: 'SKIPPED', branch, note: 'No open drift PR found for this secret — click "Solve drift" first.' };
+      return {
+        state: 'SKIPPED',
+        branch,
+        note: 'No open drift PR found for this secret — click "Solve drift" first.',
+      };
     }
     const result = await this.mergePrForRequest({
-      request: { id: 'drift', secretName, infraPrNumber: pr.number, infraPrNodeId: pr.nodeId, infraBranch: branch },
+      request: {
+        id: 'drift',
+        secretName,
+        infraPrNumber: pr.number,
+        infraPrNodeId: pr.nodeId,
+        infraBranch: branch,
+      },
       approvedKeys: missingKeys,
       newApprovedKeys: missingKeys,
     });
@@ -1376,10 +1877,19 @@ export class InfraRepoSyncService {
   }): Promise<InfraSyncResult> {
     const { request, reason } = opts;
     if (this.isSimulation) {
-      return { state: 'CLOSED', prNumber: request.infraPrNumber, note: 'simulation (no GitHub calls)' };
+      return {
+        state: 'CLOSED',
+        prNumber: request.infraPrNumber,
+        note: 'simulation (no GitHub calls)',
+      };
     }
-    if (!request.infraPrNumber) return { state: 'SKIPPED', note: 'no infra PR to close' };
-    await this.comment(request.infraPrNumber, `Hermes: request rejected — ${reason}. Closing this PR.`);
+    if (!request.infraPrNumber) {
+      return { state: 'SKIPPED', note: 'no infra PR to close' };
+    }
+    await this.comment(
+      request.infraPrNumber,
+      `Hermes: request rejected — ${reason}. Closing this PR.`,
+    );
     await this.closePull(request.infraPrNumber);
     return { state: 'CLOSED', prNumber: request.infraPrNumber };
   }
@@ -1391,14 +1901,24 @@ export class InfraRepoSyncService {
   }): Promise<InfraSyncResult> {
     const { request, error } = opts;
     if (this.isSimulation) {
-      return { state: 'OPEN', prNumber: request.infraPrNumber, note: 'simulation (no GitHub calls)' };
+      return {
+        state: 'OPEN',
+        prNumber: request.infraPrNumber,
+        note: 'simulation (no GitHub calls)',
+      };
     }
-    if (!request.infraPrNumber) return { state: 'SKIPPED', note: 'no infra PR' };
+    if (!request.infraPrNumber) {
+      return { state: 'SKIPPED', note: 'no infra PR' };
+    }
     await this.comment(
       request.infraPrNumber,
       `Hermes: applying to AWS failed (\`${error}\`). This PR stays open for retry — it will merge once a re-review succeeds.`,
     );
-    return { state: 'OPEN', prNumber: request.infraPrNumber, note: 'apply failed; PR kept open for retry' };
+    return {
+      state: 'OPEN',
+      prNumber: request.infraPrNumber,
+      note: 'apply failed; PR kept open for retry',
+    };
   }
 
   /**
@@ -1413,9 +1933,9 @@ export class InfraRepoSyncService {
     try {
       const res = await this.gh().get(this.repoPath(`/pulls/${prNumber}`));
       const pr = res.data;
-      if (!pr) return null;
-      if (pr.merged) return 'MERGED';
-      if (pr.state === 'closed') return 'CLOSED';
+      if (!pr) {return null;}
+      if (pr.merged) {return 'MERGED';}
+      if (pr.state === 'closed') {return 'CLOSED';}
       return 'OPEN';
     } catch (err: any) {
       logger.warn({ prNumber, err: err.message }, 'infra-repo-sync: failed to fetch PR status');
@@ -1428,7 +1948,10 @@ export class InfraRepoSyncService {
 // (unlike referencedEnumeratedSecrets, which projects this onto {path, mech} for the
 // Consumer[] shape the consumer index uses). Used by buildIndex() and, via the wrapper
 // above, by referencedEnumeratedSecrets — kept as the single implementation.
-function namedSecretsInFile(path: string, content: string): { name: string; mech: Mechanism }[] {
+function namedSecretsInFile(
+  path: string,
+  content: string,
+): { name: string; mech: Mechanism }[] {
   const lines = content.split(/\r?\n/);
   const out: { name: string; mech: Mechanism }[] = [];
   const seen = new Set<string>();
@@ -1449,13 +1972,19 @@ function namedSecretsInFile(path: string, content: string): { name: string; mech
 
   for (let i = 0; i < lines.length; i++) {
     const m = lines[i].match(/^(\s*)-?\s*objectName:\s*(.+?)\s*$/);
-    if (!m) continue;
+    if (!m) {
+      continue;
+    }
     const base = indentOf(lines[i]);
     let hasJmes = false;
     for (let j = i + 1; j < lines.length; j++) {
       const ln = lines[j];
-      if (/^\s*$/.test(ln) || /^\s*#/.test(ln)) continue;
-      if (indentOf(ln) <= base) break;
+      if (/^\s*$/.test(ln) || /^\s*#/.test(ln)) {
+        continue;
+      }
+      if (indentOf(ln) <= base) {
+        break;
+      }
       if (/^\s*jmesPath:/.test(ln)) {
         hasJmes = true;
         break;
@@ -1478,7 +2007,15 @@ function simPrNumber(requestId: string): number {
   return (h % 9000) + 1000;
 }
 
-function prBody(o: { secretName: string; requestId: string; keys: string[]; files: string[]; slug: string; requesterName?: string; requesterEmail?: string }): string {
+function prBody(o: {
+  secretName: string;
+  requestId: string;
+  keys: string[];
+  files: string[];
+  slug: string;
+  requesterName?: string;
+  requesterEmail?: string;
+}): string {
   const lines = [
     `Registers new key name(s) for the AWS secret \`${o.secretName}\` so the Secrets CSI driver syncs them into the workloads.`,
     '',
@@ -1499,6 +2036,56 @@ function prBody(o: { secretName: string; requestId: string; keys: string[]; file
   return lines.join('\n');
 }
 
+/**
+ * Body for a PR whose request has been REVIEWED, replacing the submit-time body built by
+ * prBody(). That original body lists every key the requester PROPOSED, because it is written
+ * before anyone reviews anything — but by now the branch has been recomputed down to the
+ * approved subset, so the two disagree.
+ *
+ * Normally harmless (merging takes the diff, not the description), but it turns dangerous in
+ * the one case where a human types keys out by hand: resolving a merge conflict. Their source
+ * of truth for "what belongs in this file" is this body, so a stale list is exactly how a
+ * rejected key gets manually re-added — the bug the approved-key recompute exists to prevent.
+ * Naming the rejected keys explicitly turns that trap into a guard rail.
+ */
+function reviewedPrBody(o: {
+  secretName: string;
+  requestId: string;
+  approvedKeys: string[];
+  rejectedKeys: string[];
+  files: string[];
+  requesterName?: string;
+  requesterEmail?: string;
+}): string {
+  const fmt = (keys: string[]) => keys.map(k => `\`${k}\``).join(', ');
+  const lines = [
+    `Registers the **approved** key name(s) for the AWS secret \`${o.secretName}\` so the Secrets CSI driver syncs them into the workloads.`,
+    '',
+    `**Approved — registered by this PR:** ${fmt(o.approvedKeys)}`,
+  ];
+  if (o.rejectedKeys.length > 0) {
+    lines.push(
+      '',
+      `**Rejected at review — deliberately NOT registered:** ${fmt(o.rejectedKeys)}`,
+      '',
+      '⚠ The rejected keys above were never written to AWS. Do not add them back while resolving a merge conflict — registering a key that has no value in AWS breaks the secret sync for this workload.',
+    );
+  }
+  if (o.requesterName) {
+    const emailStr = o.requesterEmail ? ` (${o.requesterEmail})` : '';
+    lines.push('', `**Requested by:** ${o.requesterName}${emailStr}`);
+  }
+  lines.push(
+    '',
+    '**Files updated:**',
+    ...o.files.map(f => `- \`${f}\``),
+    '',
+    '---',
+    `Opened by Hermes Secret Ingestion (request \`${o.requestId}\`) and rewritten after review to match what this branch actually registers.`,
+  );
+  return lines.join('\n');
+}
+
 // Back-compat singleton: the prod ("secrets") infra-deployment repo (config.infraRepo).
 export const infraRepoSyncService = new InfraRepoSyncService();
 export default infraRepoSyncService;
@@ -1509,13 +2096,19 @@ export default infraRepoSyncService;
  * own {@link InfraRepoSyncService} (own GitHub client / consumer index). The prod instance is the
  * singleton above, so callers resolve to the same object.
  */
-const infraServices = new Map<string, InfraRepoSyncService>([['secrets', infraRepoSyncService]]);
+const infraServices = new Map<string, InfraRepoSyncService>([
+  ['secrets', infraRepoSyncService],
+]);
 
-export function getInfraRepoSyncService(platform: string): InfraRepoSyncService {
+export function getInfraRepoSyncService(
+  platform: string,
+): InfraRepoSyncService {
   const key = (platform || 'secrets').toLowerCase();
   const cached = infraServices.get(key);
-  if (cached) return cached;
-  const instance = config.secretsInstances.find((i) => i.key === key);
+  if (cached) {
+    return cached;
+  }
+  const instance = config.secretsInstances.find(i => i.key === key);
   // Mirrors getSecretsManagerService's guard: an unrecognized platform must fail loudly, not
   // silently build a service pointed at PROD's own infra-deployment repo/credentials. Current
   // callers already gate on isInfraRepoEnabled(key) first, but this function must not rely on
@@ -1537,7 +2130,9 @@ export function getInfraRepoSyncService(platform: string): InfraRepoSyncService 
  * config.secretsInstances[*].infraEnabled. A disabled instance writes to AWS only, opening no PR.
  */
 export function isInfraRepoEnabled(platform: string): boolean {
-  const instance = config.secretsInstances.find((i) => i.key === (platform || '').toLowerCase());
+  const instance = config.secretsInstances.find(
+    i => i.key === (platform || '').toLowerCase(),
+  );
   return !!instance?.infraEnabled;
 }
 
@@ -1548,6 +2143,8 @@ export function isInfraRepoEnabled(platform: string): boolean {
  * merge manually on GitHub. Controlled by INFRA_REPO_AUTO_MERGE / SECRETS_SANDBOX_INFRA_REPO_AUTO_MERGE.
  */
 export function isInfraAutoMergeEnabled(platform: string): boolean {
-  const instance = config.secretsInstances.find((i) => i.key === (platform || '').toLowerCase());
+  const instance = config.secretsInstances.find(
+    i => i.key === (platform || '').toLowerCase(),
+  );
   return !!instance?.infraRepo?.autoMergeEnabled;
 }

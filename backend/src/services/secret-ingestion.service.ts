@@ -1,5 +1,8 @@
 import prisma from '../config/prisma';
-import { SecretScopePattern, getSecretsManagerService } from './secrets-manager.service';
+import {
+  SecretScopePattern,
+  getSecretsManagerService,
+} from './secrets-manager.service';
 import {
   InfraSyncResult,
   SelectedTarget,
@@ -24,7 +27,7 @@ const PLATFORM = 'secrets';
 
 /** Enabled Secret Ingestion instance keys (prod + any configured sandbox), from config. */
 export function secretsFamilyPlatforms(): string[] {
-  return config.secretsInstances.filter((i) => i.enabled).map((i) => i.key);
+  return config.secretsInstances.filter(i => i.enabled).map(i => i.key);
 }
 
 /**
@@ -37,14 +40,18 @@ export function secretsFamilyPlatforms(): string[] {
  */
 export function isSecretsFamilyPlatform(platform: string): boolean {
   const key = (platform || '').toLowerCase();
-  return config.secretsInstances.some((i) => i.family === 'secrets' && i.key === key);
+  return config.secretsInstances.some(
+    i => i.family === 'secrets' && i.key === key,
+  );
 }
 
 /** Guard: reject a platform that isn't a configured Secret Ingestion instance. */
 export function assertSecretsPlatform(platform: string): string {
   const key = (platform || '').toLowerCase();
   if (!secretsFamilyPlatforms().includes(key)) {
-    throw new ValidationError(`"${platform}" is not a configured Secret Ingestion instance.`);
+    throw new ValidationError(
+      `"${platform}" is not a configured Secret Ingestion instance.`,
+    );
   }
   return key;
 }
@@ -54,7 +61,10 @@ export function assertSecretsPlatform(platform: string): string {
  * by the async review-time listener (event-listeners.ts) and the manual retry path below, so
  * the field-presence nuance below has one home instead of drifting between two copies.
  */
-export async function persistInfraResult(requestId: string, r: InfraSyncResult): Promise<void> {
+export async function persistInfraResult(
+  requestId: string,
+  r: InfraSyncResult,
+): Promise<void> {
   await prisma.secretIngestionRequest.update({
     where: { id: requestId },
     data: {
@@ -107,7 +117,10 @@ export class SecretIngestionService {
    * Resolves the raw scope patterns (exact names and/or wildcards) from a user's active
    * secrets-platform grants. No AWS call — wildcards are expanded lazily by the callers below.
    */
-  async resolveUserScopePatterns(userId: string, platform: string = PLATFORM): Promise<ScopedPattern[]> {
+  async resolveUserScopePatterns(
+    userId: string,
+    platform: string = PLATFORM,
+  ): Promise<ScopedPattern[]> {
     const svc = getSecretsManagerService(platform);
     const grants = await prisma.userAccess.findMany({
       where: { userId, isActive: true, group: { platform } },
@@ -118,7 +131,8 @@ export class SecretIngestionService {
     const out: ScopedPattern[] = [];
     const seenGroupIds = new Set<string>();
     for (const g of grants) {
-      const externalGroupId = g.level?.externalGroupId ?? g.group.externalGroupId;
+      const externalGroupId =
+        g.level?.externalGroupId ?? g.group.externalGroupId;
       if (!externalGroupId) {
         continue;
       }
@@ -171,7 +185,10 @@ export class SecretIngestionService {
    * grants map to themselves; wildcard/prefix grants are expanded LIVE against AWS ListSecrets,
    * so newly-added secrets that match automatically appear without editing the group.
    */
-  async resolveUserSecretTargets(userId: string, platform: string = PLATFORM): Promise<SecretTarget[]> {
+  async resolveUserSecretTargets(
+    userId: string,
+    platform: string = PLATFORM,
+  ): Promise<SecretTarget[]> {
     const svc = getSecretsManagerService(platform);
     const scoped = await this.resolveUserScopePatterns(userId, platform);
     const needsLive = scoped.some(s => s.pattern.kind !== 'exact');
@@ -180,12 +197,20 @@ export class SecretIngestionService {
     const out: SecretTarget[] = [];
     for (const s of scoped) {
       if (s.pattern.kind === 'exact') {
-        out.push({ groupId: s.groupId, groupName: s.groupName, secretName: s.pattern.name });
+        out.push({
+          groupId: s.groupId,
+          groupName: s.groupName,
+          secretName: s.pattern.name,
+        });
         continue;
       }
       for (const name of allNames) {
         if (svc.matchesPattern(s.pattern, name)) {
-          out.push({ groupId: s.groupId, groupName: s.groupName, secretName: name });
+          out.push({
+            groupId: s.groupId,
+            groupName: s.groupName,
+            secretName: name,
+          });
         }
       }
     }
@@ -201,7 +226,11 @@ export class SecretIngestionService {
    * taken from the live AWS list when the secret already exists, else the caller's input — a
    * prefix scope may legitimately create a brand-new secret in its namespace.
    */
-  async resolveSecretForUser(userId: string, secretName: string, platform: string = PLATFORM): Promise<SecretTarget | null> {
+  async resolveSecretForUser(
+    userId: string,
+    secretName: string,
+    platform: string = PLATFORM,
+  ): Promise<SecretTarget | null> {
     const svc = getSecretsManagerService(platform);
     const wanted = secretName.trim();
     if (!wanted) {
@@ -210,7 +239,11 @@ export class SecretIngestionService {
     const scoped = await this.resolveUserScopePatterns(userId, platform);
 
     const exact = scoped
-      .filter(s => s.pattern.kind === 'exact' && s.pattern.name.toLowerCase() === wanted.toLowerCase())
+      .filter(
+        s =>
+          s.pattern.kind === 'exact' &&
+          s.pattern.name.toLowerCase() === wanted.toLowerCase(),
+      )
       .sort((a, b) => a.groupId.localeCompare(b.groupId));
     if (exact.length > 0) {
       const m = exact[0];
@@ -222,7 +255,10 @@ export class SecretIngestionService {
     }
 
     const wildcard = scoped
-      .filter(s => s.pattern.kind !== 'exact' && svc.matchesPattern(s.pattern, wanted))
+      .filter(
+        s =>
+          s.pattern.kind !== 'exact' && svc.matchesPattern(s.pattern, wanted),
+      )
       .sort((a, b) => a.groupId.localeCompare(b.groupId));
     if (wildcard.length === 0) {
       return null;
@@ -237,7 +273,11 @@ export class SecretIngestionService {
       canonical = existing;
     }
     const m = wildcard[0];
-    return { groupId: m.groupId, groupName: m.groupName, secretName: canonical };
+    return {
+      groupId: m.groupId,
+      groupName: m.groupName,
+      secretName: canonical,
+    };
   }
 
   /**
@@ -245,12 +285,19 @@ export class SecretIngestionService {
    */
   async getUserScope(userId: string, platform: string = PLATFORM) {
     const targets = await this.resolveUserSecretTargets(userId, platform);
-    const groups = new Map<string, { groupId: string; groupName: string; secretNames: Set<string> }>();
-    
+    const groups = new Map<
+      string,
+      { groupId: string; groupName: string; secretNames: Set<string> }
+    >();
+
     for (const t of targets) {
       let group = groups.get(t.groupId);
       if (!group) {
-        group = { groupId: t.groupId, groupName: t.groupName, secretNames: new Set() };
+        group = {
+          groupId: t.groupId,
+          groupName: t.groupName,
+          secretNames: new Set(),
+        };
         groups.set(t.groupId, group);
       }
       group.secretNames.add(t.secretName);
@@ -268,10 +315,16 @@ export class SecretIngestionService {
    * the group's grant list — AWS secret names are case-sensitive, so looking up the
    * client-supplied casing directly could silently miss the real secret.
    */
-  async listSecretKeys(userId: string, secretName: string, platform: string = PLATFORM): Promise<{ exists: boolean; keys: string[] }> {
+  async listSecretKeys(
+    userId: string,
+    secretName: string,
+    platform: string = PLATFORM,
+  ): Promise<{ exists: boolean; keys: string[] }> {
     const match = await this.resolveSecretForUser(userId, secretName, platform);
     if (!match) {
-      throw new AuthorizationError(`You do not have access to secret "${secretName}".`);
+      throw new AuthorizationError(
+        `You do not have access to secret "${secretName}".`,
+      );
     }
     return getSecretsManagerService(platform).listSecretKeys(match.secretName);
   }
@@ -281,10 +334,17 @@ export class SecretIngestionService {
    * shows this so the requester can review/adjust before submitting. Scope-checked exactly
    * like a submit (you can only preview a secret you're allowed to write to).
    */
-  async previewInfraTargets(userId: string, secretName: string, keys: string[], platform: string = PLATFORM) {
+  async previewInfraTargets(
+    userId: string,
+    secretName: string,
+    keys: string[],
+    platform: string = PLATFORM,
+  ) {
     const owner = await this.resolveSecretForUser(userId, secretName, platform);
     if (!owner) {
-      throw new AuthorizationError(`You don't have permission to write to secret "${secretName}".`);
+      throw new AuthorizationError(
+        `You don't have permission to write to secret "${secretName}".`,
+      );
     }
     // An instance whose infra-deployment repo isn't wired (the sandbox, until its repo is added)
     // mirrors nothing — no manifest targets to preview.
@@ -295,11 +355,19 @@ export class SecretIngestionService {
     // "no change". In live mode the resolver diffs the real manifest and ignores this.
     let existingKeys: string[] = [];
     try {
-      existingKeys = (await getSecretsManagerService(platform).listSecretKeys(owner.secretName)).keys;
+      existingKeys = (
+        await getSecretsManagerService(platform).listSecretKeys(
+          owner.secretName,
+        )
+      ).keys;
     } catch {
       existingKeys = [];
     }
-    const targets = await getInfraRepoSyncService(platform).resolveTargets(owner.secretName, keys, existingKeys);
+    const targets = await getInfraRepoSyncService(platform).resolveTargets(
+      owner.secretName,
+      keys,
+      existingKeys,
+    );
     return { secretName: owner.secretName, targets };
   }
 
@@ -319,9 +387,15 @@ export class SecretIngestionService {
     const { requester, entries, justification } = opts;
     const platform = assertSecretsPlatform(opts.platform ?? PLATFORM);
 
-    const owner = await this.resolveSecretForUser(requester.id, opts.secretName, platform);
+    const owner = await this.resolveSecretForUser(
+      requester.id,
+      opts.secretName,
+      platform,
+    );
     if (!owner) {
-      throw new AuthorizationError(`You don't have permission to write to secret "${opts.secretName}".`);
+      throw new AuthorizationError(
+        `You don't have permission to write to secret "${opts.secretName}".`,
+      );
     }
     // Canonicalize to the exact casing stored in the group's grant list — AWS secret
     // names are case-sensitive, so writing the client-supplied casing could create a
@@ -339,7 +413,10 @@ export class SecretIngestionService {
             path: t.path.trim(),
             manifestRef: t.manifestRef?.trim() || secretName,
             format: t.format,
-            keys: t.keys && t.keys.length > 0 ? [...new Set(t.keys.map(k => k.trim()).filter(Boolean))] : undefined,
+            keys:
+              t.keys && t.keys.length > 0
+                ? [...new Set(t.keys.map(k => k.trim()).filter(Boolean))]
+                : undefined,
             env: t.env?.trim() || undefined,
           }))
         : null;
@@ -401,7 +478,10 @@ export class SecretIngestionService {
   /**
    * Groups a platform admin/super admin/group admin has review rights over.
    */
-  async reviewableGroupIds(user: AuthenticatedUser, platform: string = PLATFORM): Promise<{ all: boolean; groupIds: string[] }> {
+  async reviewableGroupIds(
+    user: AuthenticatedUser,
+    platform: string = PLATFORM,
+  ): Promise<{ all: boolean; groupIds: string[] }> {
     return getManageableGroupIds(user, platform);
   }
 
@@ -415,7 +495,11 @@ export class SecretIngestionService {
    * carrying its own `platform` so the UI can badge it and the apply path hits the
    * right AWS account.
    */
-  async listIngestionRequests(user: AuthenticatedUser, scope: 'mine' | 'review', platform?: string) {
+  async listIngestionRequests(
+    user: AuthenticatedUser,
+    scope: 'mine' | 'review',
+    platform?: string,
+  ) {
     if (scope === 'mine') {
       // Unlike 'review' below, this is not scoped to what's currently actionable — it's a
       // read of the caller's OWN history. If an instance is later disabled after having been
@@ -430,11 +514,13 @@ export class SecretIngestionService {
       let platforms: string[];
       if (platform) {
         if (!isSecretsFamilyPlatform(platform)) {
-          throw new ValidationError(`"${platform}" is not a configured Secret Ingestion instance.`);
+          throw new ValidationError(
+            `"${platform}" is not a configured Secret Ingestion instance.`,
+          );
         }
         platforms = [platform.toLowerCase()];
       } else {
-        platforms = config.secretsInstances.map((i) => i.key);
+        platforms = config.secretsInstances.map(i => i.key);
       }
       return prisma.secretIngestionRequest.findMany({
         where: { requesterId: user.id, platform: { in: platforms } },
@@ -446,17 +532,26 @@ export class SecretIngestionService {
     // Review queue: only currently-enabled instances are actionable, so this intentionally
     // stays scoped to secretsFamilyPlatforms() (enabled-only) — reviewing a disabled instance's
     // requests wouldn't be able to apply anything against it anyway.
-    const platforms = platform ? [assertSecretsPlatform(platform)] : secretsFamilyPlatforms();
+    const platforms = platform
+      ? [assertSecretsPlatform(platform)]
+      : secretsFamilyPlatforms();
     // Review queue: a request from instance P is visible when the reviewer is a super/platform
     // admin for P (all) or a group admin of the request's group on P. Build a per-instance OR
     // so a `secrets` platform admin never sees `secrets-sandbox` requests (and vice versa).
     const perPlatform = await Promise.all(
-      platforms.map(async (p) => ({ platform: p, ...(await this.reviewableGroupIds(user, p)) })),
+      platforms.map(async p => ({
+        platform: p,
+        ...(await this.reviewableGroupIds(user, p)),
+      })),
     );
     const orClauses = perPlatform
-      .map((m) => {
-        if (m.all) return { platform: m.platform };
-        if (m.groupIds.length > 0) return { platform: m.platform, groupId: { in: m.groupIds } };
+      .map(m => {
+        if (m.all) {
+          return { platform: m.platform };
+        }
+        if (m.groupIds.length > 0) {
+          return { platform: m.platform, groupId: { in: m.groupIds } };
+        }
         return null;
       })
       .filter((c): c is NonNullable<typeof c> => c !== null);
@@ -473,7 +568,17 @@ export class SecretIngestionService {
             // re-reviewed) can still have infraSyncState FAILED (e.g. GitHub branch protection
             // blocked the auto-merge, 405) — that's a stuck deployment PR with no other way back
             // into an admin's queue, so surface it here too so "Retry merge" has somewhere to live.
-            OR: [{ status: { in: ['PENDING', 'APPLY_FAILED'] } }, { infraSyncState: 'FAILED' }],
+            OR: [
+              {
+                status: {
+                  in: ['PENDING', 'APPLY_FAILED'] as (
+                    | 'PENDING'
+                    | 'APPLY_FAILED'
+                  )[],
+                },
+              },
+              { infraSyncState: 'FAILED' },
+            ],
           },
         ],
       },
@@ -493,16 +598,26 @@ export class SecretIngestionService {
   >(rows: T[]): Promise<T[]> {
     // Key by (platform, secretName): two instances may hold a secret of the same name in
     // different AWS accounts, so each must be read from its own SecretsManagerService.
-    const keyOf = (r: { platform: string; secretName: string }) => `${r.platform} ${r.secretName}`;
+    const keyOf = (r: { platform: string; secretName: string }) =>
+      `${r.platform} ${r.secretName}`;
     const mapByKey = new Map<string, Record<string, string> | null>();
     const distinct = [...new Map(rows.map(r => [keyOf(r), r])).values()];
     await Promise.all(
       distinct.map(async r => {
         try {
-          mapByKey.set(keyOf(r), await getSecretsManagerService(r.platform).getSecretMap(r.secretName));
+          mapByKey.set(
+            keyOf(r),
+            await getSecretsManagerService(r.platform).getSecretMap(
+              r.secretName,
+            ),
+          );
         } catch (err: any) {
           logger.warn(
-            { platform: r.platform, secretName: r.secretName, error: err.message },
+            {
+              platform: r.platform,
+              secretName: r.secretName,
+              error: err.message,
+            },
             'Could not resolve current value for secret ingestion diff',
           );
           mapByKey.set(keyOf(r), null);
@@ -515,7 +630,7 @@ export class SecretIngestionService {
       const entries = ((row.entries as unknown as IngestionEntry[]) ?? []).map(
         e => ({
           ...e,
-          previousValue: currentMap ? currentMap[e.key] ?? null : undefined,
+          previousValue: currentMap ? (currentMap[e.key] ?? null) : undefined,
         }),
       );
       return { ...row, entries } as T;
@@ -529,8 +644,14 @@ export class SecretIngestionService {
   /**
    * Can a user review this request.
    */
-  async canReview(user: AuthenticatedUser, request: { groupId: string | null; platform?: string | null }): Promise<boolean> {
-    const { all, groupIds } = await this.reviewableGroupIds(user, request.platform ?? PLATFORM);
+  async canReview(
+    user: AuthenticatedUser,
+    request: { groupId: string | null; platform?: string | null },
+  ): Promise<boolean> {
+    const { all, groupIds } = await this.reviewableGroupIds(
+      user,
+      request.platform ?? PLATFORM,
+    );
     if (all) {
       return true;
     }
@@ -560,7 +681,9 @@ export class SecretIngestionService {
       throw new NotFoundError('Secret Ingestion Request not found');
     }
     if (row.status !== 'PENDING' && row.status !== 'APPLY_FAILED') {
-      throw new ValidationError(`Request is not pending or retryable (status: ${row.status}).`);
+      throw new ValidationError(
+        `Request is not pending or retryable (status: ${row.status}).`,
+      );
     }
 
     // Resolve the AWS account this request targets from the row itself, so the read/apply
@@ -578,13 +701,17 @@ export class SecretIngestionService {
       },
     });
     if (claim.count === 0) {
-      throw new ConflictError('This request is already being reviewed or applied by another admin.');
+      throw new ConflictError(
+        'This request is already being reviewed or applied by another admin.',
+      );
     }
 
     const decisionByKey = new Map(decisions.map(d => [d.key, d.decision]));
-    const entries = ((row.entries as unknown as IngestionEntry[]) ?? []).map(e => ({
-      ...e,
-    }));
+    const entries = ((row.entries as unknown as IngestionEntry[]) ?? []).map(
+      e => ({
+        ...e,
+      }),
+    );
 
     // Snapshot which keys already exist in AWS BEFORE the write below — this is the only
     // point that can distinguish a genuinely NEW key (needs an infra-deployment PR) from a
@@ -603,7 +730,8 @@ export class SecretIngestionService {
     let rejectedCount = 0;
 
     for (const e of entries) {
-      e.decision = decisionByKey.get(e.key) === 'APPROVED' ? 'APPROVED' : 'REJECTED';
+      e.decision =
+        decisionByKey.get(e.key) === 'APPROVED' ? 'APPROVED' : 'REJECTED';
       if (e.decision === 'APPROVED') {
         approvedCount++;
         approvedKv[e.key] = e.value || '';
@@ -616,7 +744,11 @@ export class SecretIngestionService {
     // actually for. Unknown (currentMap null, e.g. a non-JSON secret) errs toward "new" so
     // a needed PR is never silently skipped.
     const newApprovedKeys = entries
-      .filter(e => e.decision === 'APPROVED' && (!currentMap || currentMap[e.key] === undefined))
+      .filter(
+        e =>
+          e.decision === 'APPROVED' &&
+          (!currentMap || currentMap[e.key] === undefined),
+      )
       .map(e => e.key);
 
     let failedCount = 0;
@@ -664,7 +796,9 @@ export class SecretIngestionService {
     // retryable, so keep the values around for the next review attempt — redacting here
     // would strand the request with no way to recover the entered values.
     const finalEntries =
-      status === 'APPLY_FAILED' ? entries : entries.map(e => ({ ...e, value: null }));
+      status === 'APPLY_FAILED'
+        ? entries
+        : entries.map(e => ({ ...e, value: null }));
 
     const updated = await prisma.secretIngestionRequest.update({
       where: { id: row.id },
@@ -680,8 +814,12 @@ export class SecretIngestionService {
     // Record the actual key names touched, not just counts, so the audit trail shows
     // *which* keys changed. `appliedKeys` are the ones genuinely written to AWS
     // (empty on APPLY_FAILED, where they were approved but the write threw).
-    const approvedKeys = entries.filter(e => e.decision === 'APPROVED').map(e => e.key);
-    const rejectedKeys = entries.filter(e => e.decision === 'REJECTED').map(e => e.key);
+    const approvedKeys = entries
+      .filter(e => e.decision === 'APPROVED')
+      .map(e => e.key);
+    const rejectedKeys = entries
+      .filter(e => e.decision === 'REJECTED')
+      .map(e => e.key);
     const appliedKeys = entries.filter(e => e.applied).map(e => e.key);
 
     await prisma.auditEntry.create({
@@ -726,15 +864,17 @@ export class SecretIngestionService {
   }
 
   /**
-   * Retries the infra-deployment PR merge for a request whose AWS write already succeeded
-   * (status APPLIED/PARTIALLY_APPLIED — terminal, no longer re-reviewable) but whose PR merge
-   * failed, e.g. GitHub branch protection blocking a bot-authored merge (405). The branch
-   * already holds the approved keys at that point, so this just re-invokes the same merge —
-   * useful once a human has unblocked the underlying cause (bypassed/adjusted the protection
-   * rule, satisfied a required check, etc.). Only meaningful when infraSyncState is FAILED.
+   * Retries the infra-deployment PR sync for a request whose AWS write already succeeded
+   * (status APPLIED/PARTIALLY_APPLIED — terminal, no longer re-reviewable) but whose PR sync
+   * failed, e.g. GitHub branch protection blocking a bot-authored merge (405). Re-invokes the
+   * same merge (or, with auto-merge off, the same recompute + ready-for-review) — useful once a
+   * human has unblocked the underlying cause (bypassed/adjusted the protection rule, satisfied
+   * a required check, etc.). Only meaningful when infraSyncState is FAILED.
    */
   async retryInfraMerge(requestId: string) {
-    const row = await prisma.secretIngestionRequest.findUnique({ where: { id: requestId } });
+    const row = await prisma.secretIngestionRequest.findUnique({
+      where: { id: requestId },
+    });
     if (!row) {
       throw new NotFoundError('Secret Ingestion Request not found');
     }
@@ -744,11 +884,24 @@ export class SecretIngestionService {
       );
     }
     if (!isInfraRepoEnabled(row.platform)) {
-      throw new ValidationError(`Deployment PR sync is not enabled for platform "${row.platform}".`);
+      throw new ValidationError(
+        `Deployment PR sync is not enabled for platform "${row.platform}".`,
+      );
     }
 
-    const entries = ((row.entries as unknown as IngestionEntry[]) ?? []);
-    const approvedKeys = entries.filter(e => e.decision === 'APPROVED').map(e => e.key).filter(Boolean);
+    const entries = (row.entries as unknown as IngestionEntry[]) ?? [];
+    const approvedKeys = entries
+      .filter(e => e.decision === 'APPROVED')
+      .map(e => e.key)
+      .filter(Boolean);
+    const review = {
+      rejectedKeys: entries
+        .filter(e => e.decision === 'REJECTED')
+        .map(e => e.key)
+        .filter(Boolean),
+      requesterName: row.requesterName ?? undefined,
+      requesterEmail: row.requesterEmail ?? undefined,
+    };
     const targets = (row.infraTargets as SelectedTarget[] | null) || undefined;
 
     const infra = getInfraRepoSyncService(row.platform);
@@ -772,7 +925,9 @@ export class SecretIngestionService {
       // Nothing to merge (no consumers, keys already present, or open failed again) — the
       // persisted state above already reflects the outcome, so stop here.
       if (opened.state !== 'OPEN') {
-        return prisma.secretIngestionRequest.findUnique({ where: { id: requestId } });
+        return prisma.secretIngestionRequest.findUnique({
+          where: { id: requestId },
+        });
       }
       req = {
         ...row,
@@ -782,26 +937,26 @@ export class SecretIngestionService {
       };
     }
 
-    if (isInfraAutoMergeEnabled(row.platform)) {
-      const merged = await infra.mergePrForRequest({
-        request: req,
-        approvedKeys,
-        targets,
-      });
-      await persistInfraResult(requestId, merged);
-    } else {
-      if (req.infraPrNodeId) {
-        await infra.markPrReady(req.infraPrNodeId);
-      }
-      await prisma.secretIngestionRequest.update({
-        where: { id: requestId },
-        data: {
-          infraSyncState: 'OPEN',
-          infraSyncNote: 'PR marked ready for review (manual merge required)',
-        },
-      });
-    }
-    return prisma.secretIngestionRequest.findUnique({ where: { id: requestId } });
+    // Same split as the reviewed-event listener: auto-merge ON merges, OFF recomputes the
+    // branch to the approved keys and marks it ready for a human to merge. The recompute is
+    // not optional on the manual path — the branch still holds every key from submit time.
+    const synced = isInfraAutoMergeEnabled(row.platform)
+      ? await infra.mergePrForRequest({
+          request: req,
+          approvedKeys,
+          targets,
+          review,
+        })
+      : await infra.readyPrForRequest({
+          request: req,
+          approvedKeys,
+          targets,
+          review,
+        });
+    await persistInfraResult(requestId, synced);
+    return prisma.secretIngestionRequest.findUnique({
+      where: { id: requestId },
+    });
   }
 
   /**
@@ -810,7 +965,9 @@ export class SecretIngestionService {
    * to close the corresponding Pull Request on GitHub.
    */
   async dismissInfraMerge(requestId: string) {
-    const row = await prisma.secretIngestionRequest.findUnique({ where: { id: requestId } });
+    const row = await prisma.secretIngestionRequest.findUnique({
+      where: { id: requestId },
+    });
     if (!row) {
       throw new NotFoundError('Secret Ingestion Request not found');
     }
@@ -824,10 +981,14 @@ export class SecretIngestionService {
       try {
         await getInfraRepoSyncService(row.platform).closePrForRequest({
           request: { infraPrNumber: row.infraPrNumber },
-          reason: 'Hermes: deployment PR dismissed by admin (marked resolved manually or obsolete).',
+          reason:
+            'Hermes: deployment PR dismissed by admin (marked resolved manually or obsolete).',
         });
       } catch (err: any) {
-        logger.warn({ requestId, err: err.message }, 'Failed to close PR on GitHub during dismiss');
+        logger.warn(
+          { requestId, err: err.message },
+          'Failed to close PR on GitHub during dismiss',
+        );
       }
     }
 
@@ -835,7 +996,8 @@ export class SecretIngestionService {
       where: { id: requestId },
       data: {
         infraSyncState: 'CLOSED',
-        infraSyncNote: 'Dismissed by admin (marked resolved manually or obsolete)',
+        infraSyncNote:
+          'Dismissed by admin (marked resolved manually or obsolete)',
       },
     });
 
@@ -880,9 +1042,9 @@ export class SecretIngestionService {
 
     let updatedCount = 0;
     for (const row of openRequests) {
-      if (!isInfraRepoEnabled(row.platform)) continue;
+      if (!isInfraRepoEnabled(row.platform)) {continue;}
       const infra = getInfraRepoSyncService(row.platform);
-      if (!row.infraPrNumber) continue;
+      if (!row.infraPrNumber) {continue;}
 
       const state = await infra.getPrState(row.infraPrNumber);
       if (state && state !== 'OPEN') {
