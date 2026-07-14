@@ -164,6 +164,54 @@ describe('editSpc', () => {
 `;
     expect(editSpc(noStructure, 'shape-mismatch-secret', ['X'])).toEqual({ status: 'unmatched' });
   });
+
+  it('adds the key to the CORRECT secretObject data block when multiple secretObjects exist', () => {
+    const multiSpc = `apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: auth-secrets-provider-prod
+spec:
+  provider: aws
+  parameters:
+    objects: |
+      - objectName: Auth-Service-Secrets-Prod
+        objectType: secretsmanager
+        jmesPath:
+          - path: "spring_datasource_url"
+            objectAlias: spring_datasource_url
+          - path: redis_host
+            objectAlias: redis_host
+    syncSecret: "true"
+  secretObjects:
+    - secretName: other-secrets-prod
+      type: Opaque
+      data:
+        - objectName: other_key
+          key: other_key
+    - secretName: auth-secrets-prod
+      type: Opaque
+      data:
+        - objectName: spring_datasource_url
+          key: spring_datasource_url
+        - objectName: redis_host
+          key: redis_host
+`;
+    const res = editSpc(multiSpc, 'Auth-Service-Secrets-Prod', ['FAST2SMS_API_KEY']);
+    expect(res.status).toBe('edited');
+    if (res.status !== 'edited') throw new Error('unreachable');
+    expect(res.added).toContain('FAST2SMS_API_KEY');
+    
+    // Check that FAST2SMS_API_KEY was added under auth-secrets-prod, NOT other-secrets-prod
+    const lines = res.content.split('\n');
+    const authSecretsIdx = lines.findIndex(l => l.includes('secretName: auth-secrets-prod'));
+    const otherSecretsIdx = lines.findIndex(l => l.includes('secretName: other-secrets-prod'));
+    const keyIdx = lines.findIndex(l => l.includes('objectName: FAST2SMS_API_KEY'));
+    
+    expect(keyIdx).toBeGreaterThan(authSecretsIdx);
+    if (otherSecretsIdx < authSecretsIdx) {
+      expect(keyIdx).toBeGreaterThan(authSecretsIdx);
+    }
+  });
 });
 
 describe('referencedEnumeratedSecrets', () => {
@@ -569,5 +617,40 @@ describe('live-mode GitHub calls (axios mocked)', () => {
     expect(result.note).not.toMatch(/already present/);
     // No branch/PR should have been created for an unmatched-only result.
     expect(mockPost).not.toHaveBeenCalledWith(expect.stringContaining('/git/refs'), expect.anything());
+  });
+
+  it('openPrForRequest includes requesterName and email in body and [Hermes] in title', async () => {
+    const svc = new InfraRepoSyncService();
+    mockGet.mockImplementation((url: string) => {
+      if (url.includes('/git/ref/heads/')) return Promise.resolve({ data: { object: { sha: 'base-commit-sha' } } });
+      if (url.includes('/pulls')) return Promise.resolve({ data: [] });
+      if (url.includes('/contents/')) {
+        return Promise.resolve({ data: { sha: 'base-sha', content: Buffer.from(VALUES, 'utf8').toString('base64') } });
+      }
+      return Promise.reject(new Error(`unexpected GET ${url}`));
+    });
+    let prPayload: any = null;
+    mockPost.mockImplementation((url: string, body: any) => {
+      if (url.includes('/git/refs')) return Promise.resolve({ data: {} });
+      if (url.includes('/pulls')) {
+        prPayload = body;
+        return Promise.resolve({ data: { number: 10, html_url: 'https://x', node_id: 'N10' } });
+      }
+      return Promise.resolve({ data: {} });
+    });
+    mockPut.mockResolvedValue({ data: {} });
+
+    await svc.openPrForRequest({
+      requestId: 'req-username-test',
+      secretName: 'Investment-Middleware-Secrets-Prod',
+      proposedKeys: ['NEW_KEY'],
+      targets: [{ path: 'svc/prod/values-prod.yaml', manifestRef: 'Investment-Middleware-Secrets-Prod', format: 'helm-values' }],
+      requesterName: 'admin-alice',
+      requesterEmail: 'alice@bachatt.com',
+    });
+
+    expect(prPayload).toBeDefined();
+    expect(prPayload.title).toBe('[Hermes] chore(secrets): register 1 key(s) in Investment-Middleware-Secrets-Prod');
+    expect(prPayload.body).toContain('**Requested by:** admin-alice (alice@bachatt.com)');
   });
 });

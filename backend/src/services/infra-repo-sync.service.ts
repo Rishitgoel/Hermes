@@ -260,6 +260,7 @@ export function editSpc(
 
   let jpIdx = -1;
   let jpIndent = 0;
+  const matchingAliases = new Set<string>();
   for (let j = objIdx + 1; j < lines.length; j++) {
     const ln = lines[j];
     if (/^\s*$/.test(ln) || /^\s*#/.test(ln)) continue;
@@ -277,17 +278,29 @@ export function editSpc(
     let lastIdx = jpIdx;
     let pathIndent = jpIndent + 2;
     let aliasIndent = jpIndent + 4;
+    let currentPath = '';
     for (let j = jpIdx + 1; j < lines.length; j++) {
       const ln = lines[j];
       if (/^\s*$/.test(ln) || /^\s*#/.test(ln)) continue;
       if (indentOf(ln) <= jpIndent) break;
       const pm = ln.match(/^(\s*)-\s*path:\s*(.+?)\s*$/);
       if (pm) {
-        existing.add(stripQuotes(pm[2]));
+        currentPath = stripQuotes(pm[2]);
+        existing.add(currentPath);
+        matchingAliases.add(currentPath);
         pathIndent = pm[1].length;
       }
-      const am = ln.match(/^(\s*)objectAlias:/);
-      if (am) aliasIndent = am[1].length;
+      const am = ln.match(/^(\s*)objectAlias:\s*(.+?)\s*$/);
+      if (am) {
+        const aliasVal = stripQuotes(am[2]);
+        matchingAliases.add(aliasVal);
+        aliasIndent = am[1].length;
+      } else {
+        const amSimple = ln.match(/^(\s*)objectAlias:/);
+        if (amSimple) {
+          aliasIndent = amSimple[1].length;
+        }
+      }
       lastIdx = j;
     }
     const missing = keys.filter(k => !existing.has(k));
@@ -313,43 +326,108 @@ export function editSpc(
     }
   }
   if (soIdx !== -1) {
-    let dataIdx = -1;
-    let dataIndent = 0;
+    const soIndent = indentOf(lines[soIdx]);
+    interface SecretObjectBlock {
+      secretNameLine?: string;
+      dataIdx: number;
+      dataIndent: number;
+      existingObjectNames: string[];
+      lastIdx: number;
+      onIndent: number;
+      keyIndent: number;
+      dataFinished?: boolean;
+    }
+    const blocks: SecretObjectBlock[] = [];
+    let currentBlock: Partial<SecretObjectBlock> | null = null;
+    let itemIndent = -1;
+
     for (let j = soIdx + 1; j < lines.length; j++) {
-      if (/^\s*data:\s*$/.test(lines[j])) {
-        dataIdx = j;
-        dataIndent = indentOf(lines[j]);
-        break;
+      const ln = lines[j];
+      if (/^\s*$/.test(ln) || /^\s*#/.test(ln)) continue;
+      const ind = indentOf(ln);
+      if (ind <= soIndent) break;
+
+      const isArrayItem = /^\s*-\s+/.test(ln);
+      if (isArrayItem) {
+        if (itemIndent === -1) {
+          itemIndent = ind;
+        }
+        if (ind === itemIndent) {
+          if (currentBlock && currentBlock.dataIdx !== undefined) {
+            blocks.push(currentBlock as SecretObjectBlock);
+          }
+          currentBlock = { existingObjectNames: [] };
+        }
+      }
+
+      if (currentBlock) {
+        const sn = ln.match(/^\s*-?\s*secretName:\s*(.+?)\s*$/);
+        if (sn) {
+          currentBlock.secretNameLine = stripQuotes(sn[1]);
+        }
+
+        if (/^\s*data:\s*$/.test(ln)) {
+          currentBlock.dataIdx = j;
+          currentBlock.dataIndent = ind;
+          currentBlock.lastIdx = j;
+          currentBlock.onIndent = ind + 2;
+          currentBlock.keyIndent = ind + 4;
+        } else if (currentBlock.dataIdx !== undefined && j > currentBlock.dataIdx) {
+          if (currentBlock.dataIndent !== undefined && ind <= currentBlock.dataIndent) {
+            currentBlock.dataFinished = true;
+          } else if (!currentBlock.dataFinished) {
+            const om = ln.match(/^(\s*)-\s*objectName:\s*(.+?)\s*$/);
+            if (om) {
+              currentBlock.existingObjectNames!.push(stripQuotes(om[2]));
+              currentBlock.onIndent = om[1].length;
+              currentBlock.lastIdx = j;
+            }
+            const km = ln.match(/^(\s*)key:/);
+            if (km) {
+              currentBlock.keyIndent = km[1].length;
+              currentBlock.lastIdx = j;
+            }
+          }
+        }
       }
     }
-    if (dataIdx !== -1) {
-      structureFound = true;
-      const existing = new Set<string>();
-      let lastIdx = dataIdx;
-      let onIndent = dataIndent + 2;
-      let keyIndent = dataIndent + 4;
-      for (let j = dataIdx + 1; j < lines.length; j++) {
-        const ln = lines[j];
-        if (/^\s*$/.test(ln) || /^\s*#/.test(ln)) continue;
-        if (indentOf(ln) <= dataIndent) break;
-        const om = ln.match(/^(\s*)-\s*objectName:\s*(.+?)\s*$/);
-        if (om) {
-          existing.add(stripQuotes(om[2]));
-          onIndent = om[1].length;
-        }
-        const km = ln.match(/^(\s*)key:/);
-        if (km) keyIndent = km[1].length;
-        lastIdx = j;
+    if (currentBlock && currentBlock.dataIdx !== undefined) {
+      blocks.push(currentBlock as SecretObjectBlock);
+    }
+
+    let selectedBlock: SecretObjectBlock | null = null;
+    if (blocks.length > 0) {
+      selectedBlock = blocks.find(b =>
+        b.existingObjectNames.some(name => matchingAliases.has(name))
+      ) || null;
+
+      if (!selectedBlock && target) {
+        selectedBlock = blocks.find(b =>
+          b.secretNameLine && (
+            b.secretNameLine.toLowerCase() === target.toLowerCase() ||
+            target.toLowerCase().includes(b.secretNameLine.toLowerCase()) ||
+            b.secretNameLine.toLowerCase().includes(target.toLowerCase())
+          )
+        ) || null;
       }
+
+      if (!selectedBlock) {
+        selectedBlock = blocks[0];
+      }
+    }
+
+    if (selectedBlock) {
+      structureFound = true;
+      const existing = new Set(selectedBlock.existingObjectNames);
       const missing = keys.filter(k => !existing.has(k));
       if (missing.length) {
         const insert: string[] = [];
         for (const k of missing) {
-          insert.push(' '.repeat(onIndent) + '- objectName: ' + k);
-          insert.push(' '.repeat(keyIndent) + 'key: ' + k);
+          insert.push(' '.repeat(selectedBlock.onIndent) + '- objectName: ' + k);
+          insert.push(' '.repeat(selectedBlock.keyIndent) + 'key: ' + k);
           added.add(k);
         }
-        lines = [...lines.slice(0, lastIdx + 1), ...insert, ...lines.slice(lastIdx + 1)];
+        lines = [...lines.slice(0, selectedBlock.lastIdx + 1), ...insert, ...lines.slice(selectedBlock.lastIdx + 1)];
       }
     }
   }
@@ -678,6 +756,14 @@ export class InfraRepoSyncService {
     });
   }
 
+  async markPrReady(nodeId: string): Promise<void> {
+    if (this.isSimulation) {
+      logger.info({ nodeId }, 'infra-repo-sync: simulated marking PR as ready');
+      return;
+    }
+    await this.markReady(nodeId);
+  }
+
   private async mergePull(number: number, title: string): Promise<void> {
     const maxAttempts = 4;
     let lastError: any;
@@ -941,6 +1027,8 @@ export class InfraRepoSyncService {
     secretName: string;
     proposedKeys: string[];
     targets?: SelectedTarget[];
+    requesterName?: string;
+    requesterEmail?: string;
   }): Promise<InfraSyncResult> {
     const { requestId, secretName } = opts;
     const proposedKeys = [...new Set(opts.proposedKeys.map(k => k.trim()).filter(Boolean))];
@@ -1053,10 +1141,12 @@ export class InfraRepoSyncService {
         keys: allAdded,
         files: edits.map(e => e.path),
         slug: this.slug,
+        requesterName: opts.requesterName,
+        requesterEmail: opts.requesterEmail,
       });
       pr = await this.createDraftPull(
         branch,
-        `chore(secrets): register ${allAdded.length} key(s) in ${secretName}`,
+        `[Hermes] chore(secrets): register ${allAdded.length} key(s) in ${secretName}`,
         body,
       );
     } catch (err: any) {
@@ -1224,7 +1314,7 @@ export class InfraRepoSyncService {
       if (request.infraPrNodeId) {
         await this.markReady(request.infraPrNodeId);
       }
-      await this.mergePull(request.infraPrNumber, `chore(secrets): register keys in ${request.secretName}`);
+      await this.mergePull(request.infraPrNumber, `[Hermes] chore(secrets): register keys in ${request.secretName}`);
     } catch (err: any) {
       const note = err.message || 'merge failed';
       logger.error({ requestId: request.id, pr: request.infraPrNumber, err: note }, 'Failed to finalize infra-deployment PR');
@@ -1388,18 +1478,25 @@ function simPrNumber(requestId: string): number {
   return (h % 9000) + 1000;
 }
 
-function prBody(o: { secretName: string; requestId: string; keys: string[]; files: string[]; slug: string }): string {
-  return [
+function prBody(o: { secretName: string; requestId: string; keys: string[]; files: string[]; slug: string; requesterName?: string; requesterEmail?: string }): string {
+  const lines = [
     `Registers new key name(s) for the AWS secret \`${o.secretName}\` so the Secrets CSI driver syncs them into the workloads.`,
     '',
     `**Keys:** ${o.keys.map(k => `\`${k}\``).join(', ')}`,
+  ];
+  if (o.requesterName) {
+    const emailStr = o.requesterEmail ? ` (${o.requesterEmail})` : '';
+    lines.push('', `**Requested by:** ${o.requesterName}${emailStr}`);
+  }
+  lines.push(
     '',
     '**Files updated:**',
     ...o.files.map(f => `- \`${f}\``),
     '',
     '---',
-    `Opened by Hermes Secret Ingestion (request \`${o.requestId}\`). Managed automatically — this draft is marked ready and merged when the request is approved, and closed if it is rejected. Please do not merge manually.`,
-  ].join('\n');
+    `Opened by Hermes Secret Ingestion (request \`${o.requestId}\`). Managed automatically — this draft is marked ready when the request is approved, and closed if it is rejected. It can be merged manually.`,
+  );
+  return lines.join('\n');
 }
 
 // Back-compat singleton: the prod ("secrets") infra-deployment repo (config.infraRepo).

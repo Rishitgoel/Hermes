@@ -5,6 +5,7 @@ import {
   SelectedTarget,
   getInfraRepoSyncService,
   isInfraRepoEnabled,
+  isInfraAutoMergeEnabled,
 } from './infra-repo-sync.service';
 import eventBus from './event-bus';
 import config from '../config/config';
@@ -764,6 +765,8 @@ export class SecretIngestionService {
         secretName: row.secretName,
         proposedKeys: approvedKeys,
         targets,
+        requesterName: row.requesterName,
+        requesterEmail: row.requesterEmail,
       });
       await persistInfraResult(requestId, opened);
       // Nothing to merge (no consumers, keys already present, or open failed again) — the
@@ -779,12 +782,25 @@ export class SecretIngestionService {
       };
     }
 
-    const merged = await infra.mergePrForRequest({
-      request: req,
-      approvedKeys,
-      targets,
-    });
-    await persistInfraResult(requestId, merged);
+    if (isInfraAutoMergeEnabled(row.platform)) {
+      const merged = await infra.mergePrForRequest({
+        request: req,
+        approvedKeys,
+        targets,
+      });
+      await persistInfraResult(requestId, merged);
+    } else {
+      if (req.infraPrNodeId) {
+        await infra.markPrReady(req.infraPrNodeId);
+      }
+      await prisma.secretIngestionRequest.update({
+        where: { id: requestId },
+        data: {
+          infraSyncState: 'OPEN',
+          infraSyncNote: 'PR marked ready for review (manual merge required)',
+        },
+      });
+    }
     return prisma.secretIngestionRequest.findUnique({ where: { id: requestId } });
   }
 

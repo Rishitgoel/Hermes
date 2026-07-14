@@ -205,7 +205,14 @@ export function registerEventListeners(): void {
       if (!row) return;
       const proposedKeys = ((row.entries as any[]) || []).map(e => e.key).filter(Boolean);
       const targets = (row.infraTargets as SelectedTarget[] | null) || undefined;
-      const result = await getInfraRepoSyncService(instance).openPrForRequest({ requestId, secretName, proposedKeys, targets });
+      const result = await getInfraRepoSyncService(instance).openPrForRequest({
+        requestId,
+        secretName,
+        proposedKeys,
+        targets,
+        requesterName: row.requesterName,
+        requesterEmail: row.requesterEmail,
+      });
       await persistInfraResult(requestId, result);
     } catch (err: any) {
       logger.error('Failed to open infra-deployment PR for secret ingestion:', err.message);
@@ -242,6 +249,8 @@ export function registerEventListeners(): void {
             secretName: row.secretName,
             proposedKeys: newApprovedKeys,
             targets,
+            requesterName: row.requesterName,
+            requesterEmail: row.requesterEmail,
           });
           await persistInfraResult(requestId, opened);
           if (opened.state !== 'OPEN') return;
@@ -253,6 +262,14 @@ export function registerEventListeners(): void {
         if (isInfraAutoMergeEnabled(instance)) {
           const merged = await infra.mergePrForRequest({ request: req, approvedKeys, targets, newApprovedKeys });
           await persistInfraResult(requestId, merged);
+        } else {
+          if (req.infraPrNodeId) {
+            try {
+              await infra.markPrReady(req.infraPrNodeId);
+            } catch (err: any) {
+              logger.error(`Failed to mark PR #${req.infraPrNumber} ready:`, err.message);
+            }
+          }
         }
       } else if (status === 'REJECTED') {
         const closed = await infra.closePrForRequest({ request: row, reason: row.reviewNote || 'all keys rejected' });
