@@ -71,8 +71,16 @@ export class AwsProvisioner implements PlatformAdapter {
     }
     const userId = await this.ensureUser(ctx.email, ctx.name);
     if (ctx.externalGroupId) {
-      await awsIdentityCenterService.addUserToGroup(ctx.externalGroupId, userId);
-      await this.cacheAddGroup(userId, ctx.email, ctx.name, ctx.externalGroupId);
+      await awsIdentityCenterService.addUserToGroup(
+        ctx.externalGroupId,
+        userId,
+      );
+      await this.cacheAddGroup(
+        userId,
+        ctx.email,
+        ctx.name,
+        ctx.externalGroupId,
+      );
     }
     return { externalUserId: userId };
   }
@@ -83,18 +91,26 @@ export class AwsProvisioner implements PlatformAdapter {
       throw new Error('AWS integration is currently disabled');
     }
     if (ctx.externalGroupId) {
-      await awsIdentityCenterService.removeUserFromGroup(ctx.externalGroupId, ctx.externalUserId);
+      await awsIdentityCenterService.removeUserFromGroup(
+        ctx.externalGroupId,
+        ctx.externalUserId,
+      );
       await this.cacheRemoveGroup(ctx.externalUserId, ctx.externalGroupId);
     }
   }
 
   /** Look up whether a user exists, cache-first with a live fallback. */
-  async checkUserStatus(email: string, _userId?: string): Promise<PlatformUserStatus> {
+  async checkUserStatus(
+    email: string,
+    _userId?: string,
+  ): Promise<PlatformUserStatus> {
     if (!config.aws.isEnabled) {
       return { exists: false, email };
     }
     const cached = await prisma.platformExternalUser.findUnique({
-      where: { platform_email: { platform: PLATFORM, email: email.toLowerCase() } },
+      where: {
+        platform_email: { platform: PLATFORM, email: email.toLowerCase() },
+      },
     });
     if (cached) {
       return { exists: true, externalUserId: cached.externalId, email };
@@ -122,7 +138,9 @@ export class AwsProvisioner implements PlatformAdapter {
   // once in the console — analogous to configuring Redash data-source perms.
 
   /** Create a backing Identity Center group; returns its GroupId. */
-  async createExternalGroup(name: string): Promise<{ externalGroupId: string; name?: string }> {
+  async createExternalGroup(
+    name: string,
+  ): Promise<{ externalGroupId: string; name?: string }> {
     if (!config.aws.isEnabled) {
       throw new Error('AWS integration is currently disabled');
     }
@@ -165,8 +183,14 @@ export class AwsProvisioner implements PlatformAdapter {
   }
 
   /** Hide the service user's own permission group from the request flow. */
-  isReservedExternalGroup(group: { externalId: string; name: string; type?: string | null }): boolean {
-    return RESERVED_GROUP_NAMES.some(n => n.toLowerCase() === group.name.toLowerCase());
+  isReservedExternalGroup(group: {
+    externalId: string;
+    name: string;
+    type?: string | null;
+  }): boolean {
+    return RESERVED_GROUP_NAMES.some(
+      n => n.toLowerCase() === group.name.toLowerCase(),
+    );
   }
 
   /** The AWS SSO access portal users sign in through (null when unconfigured). */
@@ -184,12 +208,13 @@ export class AwsProvisioner implements PlatformAdapter {
     return {
       notification: {
         title: 'AWS account created',
-        message: 'Your AWS access is set up. Check your email for sign-in instructions — open the AWS access portal and use "Forgot password" to set your password.',
+        message:
+          'Your AWS access is set up. Check your email for sign-in instructions — open the AWS access portal and use "Forgot password" to set your password.',
         link: '/my-requests',
       },
       email: templates.userAwsAccountReady({ portalUrl }),
       dm:
-        `🎉 Your AWS access is set up! On first sign-in, open the AWS access portal and use "Forgot password" to set your password` +
+        '🎉 Your AWS access is set up! On first sign-in, open the AWS access portal and use "Forgot password" to set your password' +
         (portalUrl ? `:\n👉 ${portalUrl}` : '.'),
     };
   }
@@ -198,21 +223,36 @@ export class AwsProvisioner implements PlatformAdapter {
 
   /** Pull all Identity Center groups into the cache, pruning vanished ones. */
   async syncGroups(): Promise<{ count: number }> {
-    if (!config.aws.isEnabled) return { count: 0 };
+    if (!config.aws.isEnabled) {
+      return { count: 0 };
+    }
     const now = new Date();
     const groups = await awsIdentityCenterService.listGroups();
-    logger.info(`🔄 AwsProvisioner: Fetched ${groups.length} groups from Identity Center.`);
+    logger.info(
+      `🔄 AwsProvisioner: Fetched ${groups.length} groups from Identity Center.`,
+    );
 
     for (const group of groups) {
       await prisma.platformExternalGroup.upsert({
-        where: { platform_externalId: { platform: PLATFORM, externalId: group.groupId } },
-        update: { name: group.displayName, type: 'identity-center', lastSyncedAt: now },
+        where: {
+          platform_externalId: {
+            platform: PLATFORM,
+            externalId: group.groupId,
+          },
+        },
+        update: {
+          name: group.displayName,
+          type: 'identity-center',
+          lastSyncedAt: now,
+        },
         create: {
           platform: PLATFORM,
           externalId: group.groupId,
           name: group.displayName,
           type: 'identity-center',
-          metadata: group.description ? { description: group.description } : undefined,
+          metadata: group.description
+            ? { description: group.description }
+            : undefined,
           lastSyncedAt: now,
         },
       });
@@ -238,16 +278,22 @@ export class AwsProvisioner implements PlatformAdapter {
 
   /** Pull all Identity Center users into the cache, pruning vanished ones. */
   async syncUsers(): Promise<{ count: number }> {
-    if (!config.aws.isEnabled) return { count: 0 };
+    if (!config.aws.isEnabled) {
+      return { count: 0 };
+    }
     const now = new Date();
     const users = await awsIdentityCenterService.listUsers();
-    logger.info(`🔄 AwsProvisioner: Fetched ${users.length} users from Identity Center.`);
+    logger.info(
+      `🔄 AwsProvisioner: Fetched ${users.length} users from Identity Center.`,
+    );
 
     // Batch the upserts into chunked transactions instead of awaiting one per user
     // sequentially (O(users) serial DB round-trips on every sync cycle).
-    const upserts = users.map((user) =>
+    const upserts = users.map(user =>
       prisma.platformExternalUser.upsert({
-        where: { platform_externalId: { platform: PLATFORM, externalId: user.userId } },
+        where: {
+          platform_externalId: { platform: PLATFORM, externalId: user.userId },
+        },
         update: {
           name: user.displayName,
           email: user.email.toLowerCase(),
@@ -293,7 +339,7 @@ export class AwsProvisioner implements PlatformAdapter {
     await recomputeGroupMemberCounts(PLATFORM);
     await notifyUserCreationWorkflow(
       PLATFORM,
-      users.map((u) => ({
+      users.map(u => ({
         externalId: u.userId,
         email: u.email,
         name: u.displayName,
@@ -309,14 +355,21 @@ export class AwsProvisioner implements PlatformAdapter {
    * by email and advance any pending account-creation request for them.
    */
   async syncSingleUser(email: string): Promise<boolean> {
-    if (!config.aws.isEnabled) return false;
+    if (!config.aws.isEnabled) {
+      return false;
+    }
     const userId = await awsIdentityCenterService.getUserIdByEmail(email);
     if (!userId) {
-      logger.warn({ email }, '🔄 AwsProvisioner: user not found in Identity Center during single sync.');
+      logger.warn(
+        { email },
+        '🔄 AwsProvisioner: user not found in Identity Center during single sync.',
+      );
       return false;
     }
     const user = await awsIdentityCenterService.getUserById(userId);
-    if (!user) return false;
+    if (!user) {
+      return false;
+    }
     await this.upsertUserRow({
       userId: user.userId,
       email: user.email,
@@ -324,29 +377,29 @@ export class AwsProvisioner implements PlatformAdapter {
       isPending: user.isPending,
       groupIds: user.groupIds,
     });
-    await notifyUserCreationWorkflow(PLATFORM, [{
-      externalId: user.userId,
-      email: user.email,
-      name: user.displayName,
-      isPending: user.isPending,
-    }]);
+    await notifyUserCreationWorkflow(PLATFORM, [
+      {
+        externalId: user.userId,
+        email: user.email,
+        name: user.displayName,
+        isPending: user.isPending,
+      },
+    ]);
     return true;
   }
 
   // ── Internal helpers ──────────────────────────────────────────────────────
 
-  /**
-   * Notify the user-creation workflow about each synced user so any
-   * AWAITING_SETUP/APPROVED account-creation request can advance to COMPLETED.
-   * Loaded lazily to avoid a static import cycle; per-user try/catch.
-   */
-
-
   /** Resolve the user's immutable id, creating the Identity Store user if absent. */
   private async ensureUser(email: string, name: string): Promise<string> {
     const existing = await awsIdentityCenterService.getUserIdByEmail(email);
-    if (existing) return existing;
-    logger.info({ email }, '🔄 AwsProvisioner: user absent in Identity Center — creating on provision');
+    if (existing) {
+      return existing;
+    }
+    logger.info(
+      { email },
+      '🔄 AwsProvisioner: user absent in Identity Center — creating on provision',
+    );
     const { userId } = await awsIdentityCenterService.createUser(email, name);
     return userId;
   }
@@ -370,9 +423,13 @@ export class AwsProvisioner implements PlatformAdapter {
     };
     // Only overwrite externalGroupIds when we actually know the memberships
     // (sync paths). On invite we don't, so we preserve whatever's cached.
-    const update = u.groupIds ? { ...base, externalGroupIds: u.groupIds } : base;
+    const update = u.groupIds
+      ? { ...base, externalGroupIds: u.groupIds }
+      : base;
     await prisma.platformExternalUser.upsert({
-      where: { platform_externalId: { platform: PLATFORM, externalId: u.userId } },
+      where: {
+        platform_externalId: { platform: PLATFORM, externalId: u.userId },
+      },
       update,
       create: {
         platform: PLATFORM,
@@ -384,15 +441,30 @@ export class AwsProvisioner implements PlatformAdapter {
   }
 
   /** Add a groupId to a user's cached membership list (idempotent). */
-  private async cacheAddGroup(userId: string, email: string, name: string, groupId: string): Promise<void> {
+  private async cacheAddGroup(
+    userId: string,
+    email: string,
+    name: string,
+    groupId: string,
+  ): Promise<void> {
     const existing = await prisma.platformExternalUser.findUnique({
-      where: { platform_externalId: { platform: PLATFORM, externalId: userId } },
+      where: {
+        platform_externalId: { platform: PLATFORM, externalId: userId },
+      },
     });
     if (!existing) {
-      await this.upsertUserRow({ userId, email, name, isPending: false, groupIds: [groupId] });
+      await this.upsertUserRow({
+        userId,
+        email,
+        name,
+        isPending: false,
+        groupIds: [groupId],
+      });
       return;
     }
-    if (existing.externalGroupIds.includes(groupId)) return;
+    if (existing.externalGroupIds.includes(groupId)) {
+      return;
+    }
     // Atomic append (array_append) rather than read-modify-write of the whole array,
     // so a concurrent cache write for a different group isn't clobbered.
     await prisma.platformExternalUser.update({
@@ -402,7 +474,10 @@ export class AwsProvisioner implements PlatformAdapter {
   }
 
   /** Remove a groupId from a user's cached membership list (best-effort). */
-  private async cacheRemoveGroup(userId: string, groupId: string): Promise<void> {
+  private async cacheRemoveGroup(
+    userId: string,
+    groupId: string,
+  ): Promise<void> {
     // Atomic array_remove rather than read-filter-write, so a concurrent cache write
     // for a different group isn't clobbered. No-op if the row/group isn't present.
     await prisma.$executeRaw`
@@ -412,8 +487,6 @@ export class AwsProvisioner implements PlatformAdapter {
       WHERE platform = ${PLATFORM} AND external_id = ${userId}
     `;
   }
-
-  /** Recompute and persist member counts for every cached AWS group. */
 
 }
 

@@ -84,39 +84,19 @@ router.get(
   authenticateToken,
   adminMgmt('listManageablePlatforms'),
 );
-router.get(
-  '/aws-secrets',
-  authenticateToken,
-  adminMgmt('listAwsSecrets'),
-);
+router.get('/aws-secrets', authenticateToken, adminMgmt('listAwsSecrets'));
 router.get('/users', authenticateToken, adminMgmt('searchUsers'));
 router.get('/groups', authenticateToken, adminMgmt('listManageableGroups'));
 
 // User access (cross-platform view + bulk revoke) — super or platform admin
 // (enforced in controller via getManageablePlatforms scoping).
-router.get(
-  '/user-access',
-  authenticateToken,
-  adminMgmt('listUserAccess'),
-);
-router.post(
-  '/user-access/revoke',
-  authenticateToken,
-  adminMgmt('revokeUserAccess'),
-);
+router.get('/user-access', authenticateToken, adminMgmt('listUserAccess'));
+router.post('/user-access/revoke', authenticateToken, adminMgmt('revokeUserAccess'));
 
 // Platform accounts (offboarding: disable/delete the account itself, not just
 // group membership) — same tool, same scoping.
-router.get(
-  '/user-platform-accounts',
-  authenticateToken,
-  adminMgmt('listUserPlatformAccounts'),
-);
-router.post(
-  '/user-access/disable-accounts',
-  authenticateToken,
-  adminMgmt('disableUserAccounts'),
-);
+router.get('/user-platform-accounts', authenticateToken, adminMgmt('listUserPlatformAccounts'));
+router.post('/user-access/disable-accounts', authenticateToken, adminMgmt('disableUserAccounts'));
 
 // Platform admins (super admin only — enforced in controller)
 router.get(
@@ -151,11 +131,7 @@ router.delete('/groups/:groupId', authenticateToken, adminMgmt('deleteGroup'));
 
 // Maintenance: idempotently create the "All Secrets" group (super-admin only, enforced in
 // controller). The no-terminal path for standing up the wildcard-all secrets group in prod.
-router.post(
-  '/maintenance/ensure-secrets-group',
-  authenticateToken,
-  adminMgmt('ensureAllSecretsGroup'),
-);
+router.post('/maintenance/ensure-secrets-group', authenticateToken, adminMgmt('ensureAllSecretsGroup'));
 
 // Members
 router.get(

@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
-import { useNotifications, Notification } from '../../contexts/NotificationContext';
+import { useNotifications, type Notification } from '../../contexts/NotificationContext';
 import { getPageTitle } from '../../lib/routeTitles';
 import { Bell, Moon, Sun, X } from 'lucide-react';
 

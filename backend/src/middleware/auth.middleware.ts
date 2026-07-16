@@ -40,7 +40,11 @@ const checkJwtLive = expressjwt({
 });
 
 // Middleware for Live mapping
-const mapLiveKeycloakUser = (req: Request, res: Response, next: NextFunction) => {
+const mapLiveKeycloakUser = (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
   if (req.auth) {
     const roles = req.auth.realm_access?.roles || [];
     req.user = {
@@ -63,7 +67,8 @@ const checkJwtSimulated = (req: Request, res: Response, next: NextFunction) => {
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     res.status(401).json({
       success: false,
-      error: 'Authentication required (Simulation mode active. Use Bearer super_admin, Bearer platform_admin, Bearer group_admin, or Bearer user)',
+      error:
+        'Authentication required (Simulation mode active. Use Bearer super_admin, Bearer platform_admin, Bearer group_admin, or Bearer user)',
       metadata: {
         timestamp: new Date().toISOString(),
         errorCode: 'AUTHENTICATION_ERROR',
@@ -85,14 +90,22 @@ const checkJwtSimulated = (req: Request, res: Response, next: NextFunction) => {
       id: 'group-admin-uuid-2222',
       username: 'Yogesh_Verma',
       email: 'yogesh.verma@bachatt.app',
-      roles: ['hermes_group_admin', `hermes_group_admin_${config.platform.default}_growth`, 'hermes_user'],
+      roles: [
+        'hermes_group_admin',
+        `hermes_group_admin_${config.platform.default}_growth`,
+        'hermes_user',
+      ],
     };
   } else if (token === 'platform_admin') {
     req.user = {
       id: 'platform-admin-uuid-4444',
       username: 'Neha_Sharma',
       email: 'neha.sharma@bachatt.app',
-      roles: ['hermes_platform_admin', `hermes_platform_admin_${config.platform.default}`, 'hermes_user'],
+      roles: [
+        'hermes_platform_admin',
+        `hermes_platform_admin_${config.platform.default}`,
+        'hermes_user',
+      ],
     };
   } else if (token === 'user') {
     req.user = {
@@ -106,7 +119,8 @@ const checkJwtSimulated = (req: Request, res: Response, next: NextFunction) => {
     // identity, which silently authenticated any garbage bearer string.
     res.status(401).json({
       success: false,
-      error: 'Invalid simulation token. Use Bearer super_admin, Bearer platform_admin, Bearer group_admin, or Bearer user.',
+      error:
+        'Invalid simulation token. Use Bearer super_admin, Bearer platform_admin, Bearer group_admin, or Bearer user.',
       metadata: {
         timestamp: new Date().toISOString(),
         errorCode: 'AUTHENTICATION_ERROR',
@@ -122,7 +136,12 @@ const checkJwtSimulated = (req: Request, res: Response, next: NextFunction) => {
   next();
 };
 
-const handleJwtError = (err: any, req: Request, res: Response, next: NextFunction) => {
+const handleJwtError = (
+  err: any,
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
   if (err.name === 'UnauthorizedError') {
     logger.warn(
       { path: req.path, method: req.method, error: err.message },
@@ -130,7 +149,9 @@ const handleJwtError = (err: any, req: Request, res: Response, next: NextFunctio
     );
     // Distinguish expired vs malformed/invalid so the client can react
     // (e.g. the apiClient's 401 interceptor only retries after refresh).
-    const isExpired = err.inner?.name === 'TokenExpiredError' || /expired/i.test(err.message || '');
+    const isExpired =
+      err.inner?.name === 'TokenExpiredError' ||
+      /expired/i.test(err.message || '');
     res.status(401).json({
       success: false,
       error: err.message,
@@ -157,8 +178,16 @@ export const authenticateToken = useSimulation
 // paths validate it exactly as a header-borne Bearer token — no duplicated auth logic.
 // NOTE: this means the token appears in the request URL (and thus access logs) for the
 // stream endpoint; acceptable for SSE, which has no header alternative.
-export const injectQueryTokenAsHeader = (req: Request, res: Response, next: NextFunction): void => {
-  if (!req.headers.authorization && typeof req.query.token === 'string' && req.query.token) {
+export const injectQueryTokenAsHeader = (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void => {
+  if (
+    !req.headers.authorization &&
+    typeof req.query.token === 'string' &&
+    req.query.token
+  ) {
     req.headers.authorization = `Bearer ${req.query.token}`;
   }
   next();
@@ -185,7 +214,11 @@ export const requireRole = (requiredRoles: string[]) => {
 
     if (!hasRole) {
       logger.warn(
-        { user: req.user.username, required: requiredRoles, actual: req.user.roles },
+        {
+          user: req.user.username,
+          required: requiredRoles,
+          actual: req.user.roles,
+        },
         'Insufficient permissions',
       );
       res.status(403).json({

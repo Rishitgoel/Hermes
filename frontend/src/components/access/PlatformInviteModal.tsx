@@ -50,7 +50,7 @@ export const PlatformInviteModal: React.FC<PlatformInviteModalProps> = ({
 
   const goToStatus = () => {
     onClose();
-    navigate('/my-requests');
+    navigate('/hermes/my-requests');
   };
 
   let icon: React.ReactNode = <UserPlus size={20} style={{ color: 'var(--primary)' }} />;

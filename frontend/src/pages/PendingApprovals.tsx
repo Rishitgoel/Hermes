@@ -9,7 +9,7 @@ import { listIngestionRequests } from '../services/api/secretsApi';
 import { useAuth } from '../contexts/AuthContext';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../lib/queryKeys';
-import { fetchPlatforms, LivePlatform } from '../services/api/platforms';
+import { fetchPlatforms, type LivePlatform } from '../services/api/platforms';
 import { platformDisplayName } from '../lib/platforms';
 import SectionHeader from '../components/common/SectionHeader';
 import ZkChangeApprovals from '../components/zookeeper/ZkChangeApprovals';

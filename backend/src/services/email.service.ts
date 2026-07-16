@@ -24,8 +24,8 @@ export class EmailService {
   private client: SESv2Client | null = null;
 
   private getClient(): SESv2Client | null {
-    if (config.email.isSimulation) return null;
-    if (this.client) return this.client;
+    if (config.email.isSimulation) {return null;}
+    if (this.client) {return this.client;}
 
     const { region } = config.email;
     if (!region) {

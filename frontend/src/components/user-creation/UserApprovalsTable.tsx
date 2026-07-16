@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { listPendingUserCreations, reviewUserCreation, PendingUserCreationRequest } from '../../services/api/userCreation';
+import { listPendingUserCreations, reviewUserCreation, type PendingUserCreationRequest } from '../../services/api/userCreation';
 import { queryKeys } from '../../lib/queryKeys';
 import { useToast } from '../../contexts/ToastContext';
 import SectionHeader from '../common/SectionHeader';

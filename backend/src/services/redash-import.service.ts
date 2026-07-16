@@ -121,7 +121,9 @@ export async function importRedashMemberships(opts: {
   );
 
   // ── 3. Walk the cached Redash users (populated by syncUsers above).
-  const users = await prisma.platformExternalUser.findMany({ where: { platform: lowerPlatform } });
+  const users = await prisma.platformExternalUser.findMany({
+    where: { platform: lowerPlatform },
+  });
   logger.info(`Found ${users.length} cached ${displayName} user(s).`);
 
   const report: RedashImportReport = {
@@ -250,8 +252,12 @@ export async function importRedashMemberships(opts: {
         continue;
       }
       report.grantsCreated++;
-      const label = t.levelName ? `${t.groupName} — ${t.levelName}` : t.groupName;
-      logger.info(`  ${apply ? '＋' : 'would add'} grant: ${u.email} → ${label}`);
+      const label = t.levelName
+        ? `${t.groupName} — ${t.levelName}`
+        : t.groupName;
+      logger.info(
+        `  ${apply ? '＋' : 'would add'} grant: ${u.email} → ${label}`,
+      );
       if (apply) {
         await prisma.userAccess.create({
           data: {

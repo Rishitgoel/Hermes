@@ -22,10 +22,10 @@ export class UserCreationController extends BaseController {
   async submit(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const validated = this.validateWithZod(submitUserCreationSchema, this.req.body);
-      if (!validated.success) return;
+      if (!validated.success) {return;}
 
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {return;}
 
       const platform = (validated.data.platform || config.platform.default).toLowerCase();
       const requester = { id: userId, username: this.user!.username, email: this.user!.email };
@@ -40,7 +40,7 @@ export class UserCreationController extends BaseController {
   async getMine(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {return;}
 
       const row = await userCreationService.getMyRequest(userId, this.platformParam());
       this.sendResponse(row, 'User-creation request retrieved');
@@ -53,7 +53,7 @@ export class UserCreationController extends BaseController {
   async getMineAll(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {return;}
 
       const rows = await userCreationService.getMyRequests(userId);
       this.sendResponse(rows, 'User-creation requests retrieved');
@@ -66,7 +66,7 @@ export class UserCreationController extends BaseController {
   async resendMine(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {return;}
 
       const updated = await userCreationService.resendInvite(userId, this.platformParam());
       this.sendResponse(updated, 'Invite resent');
@@ -79,7 +79,7 @@ export class UserCreationController extends BaseController {
   async syncMine(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {return;}
 
       const updated = await userCreationService.forceSync(userId, this.platformParam());
       this.sendResponse(updated, 'Sync completed');
@@ -119,10 +119,10 @@ export class UserCreationController extends BaseController {
   async review(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const validated = this.validateWithZod(reviewUserCreationSchema, this.req.body);
-      if (!validated.success) return;
+      if (!validated.success) {return;}
 
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {return;}
 
       const id = this.req.params.id as string;
 
@@ -132,7 +132,7 @@ export class UserCreationController extends BaseController {
         where: { id },
         select: { platform: true },
       });
-      if (!row) throw new NotFoundError('User-creation request not found');
+      if (!row) {throw new NotFoundError('User-creation request not found');}
       if (!(await isPlatformAdminOf(this.user!, row.platform))) {
         throw new AuthorizationError(
           'You do not have permission to review account requests for this platform',

@@ -16,8 +16,8 @@ export class SlackService {
   private getWebhookClient(): any | null {
     const url = config.slack.webhookUrl;
     const valid = url && url.startsWith('http') ? url : null;
-    if (!valid) return null;
-    if (this.webhookClient && this.webhookClientUrl === valid) return this.webhookClient;
+    if (!valid) {return null;}
+    if (this.webhookClient && this.webhookClientUrl === valid) {return this.webhookClient;}
     this.webhookClient = createHttpClient({ baseURL: valid });
     this.webhookClientUrl = valid;
     return this.webhookClient;
@@ -29,9 +29,9 @@ export class SlackService {
    * import (or rotated at runtime) is always honoured.
    */
   private getApiClient(): any | null {
-    if (config.slack.dmSimulation) return null;
+    if (config.slack.dmSimulation) {return null;}
     const token = config.slack.botToken as string;
-    if (this.apiClient && this.apiClientToken === token) return this.apiClient;
+    if (this.apiClient && this.apiClientToken === token) {return this.apiClient;}
     this.apiClient = createHttpClient({
       baseURL: 'https://slack.com/api',
       headers: {

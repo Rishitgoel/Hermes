@@ -41,7 +41,7 @@ export class KeycloakSetupService {
     }
 
     const accessToken = await this.getAdminAccessToken();
-    if (!accessToken) return [];
+    if (!accessToken) {return [];}
 
     try {
       const url = `${config.keycloak.adminUrl}/admin/realms/${config.keycloak.realm}/roles/${SUPER_ADMIN_ROLE}/users`;
@@ -86,7 +86,7 @@ export class KeycloakSetupService {
         }).toString(),
         {
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        }
+        },
       );
 
       const accessToken = tokenRes.data.access_token;
@@ -100,11 +100,11 @@ export class KeycloakSetupService {
         params: { clientId: targetClientId },
       });
 
-      let clientDbId = '';
+      let _clientDbId = '';
       const existingClient = clientsRes.data.find((c: any) => c.clientId === targetClientId);
 
       if (existingClient) {
-        clientDbId = existingClient.id;
+        _clientDbId = existingClient.id;
         logger.info(`🔑 Keycloak setup: Client '${targetClientId}' already exists.`);
       } else {
         // Create Client
@@ -121,7 +121,7 @@ export class KeycloakSetupService {
               'http://localhost:5173/*',
               'http://localhost:5174/*',
             ];
-        const createRes = await axios.post(
+        await axios.post(
           clientsUrl,
           {
             clientId: targetClientId,
@@ -134,7 +134,7 @@ export class KeycloakSetupService {
           },
           {
             headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-          }
+          },
         );
         logger.info(`🔑 Keycloak setup: Client '${targetClientId}' created successfully.`);
         
@@ -143,7 +143,7 @@ export class KeycloakSetupService {
           headers: { Authorization: `Bearer ${accessToken}` },
           params: { clientId: targetClientId },
         });
-        clientDbId = recheckRes.data.find((c: any) => c.clientId === targetClientId)?.id || '';
+        _clientDbId = recheckRes.data.find((c: any) => c.clientId === targetClientId)?.id || '';
       }
 
       // 3. Ensure Roles Exist (idempotent: create if missing, else keep the
@@ -174,7 +174,7 @@ export class KeycloakSetupService {
             await axios.put(
               `${rolesUrl}/${encodeURIComponent(roleName)}`,
               { ...existing.data, description },
-              { headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' } }
+              { headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' } },
             );
             logger.info(`🔑 Keycloak setup: Updated description for role '${roleName}'.`);
           } else {
@@ -186,7 +186,7 @@ export class KeycloakSetupService {
             await axios.post(
               rolesUrl,
               { name: roleName, description },
-              { headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' } }
+              { headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' } },
             );
             logger.info(`🔑 Keycloak setup: Role '${roleName}' created.`);
           } else {

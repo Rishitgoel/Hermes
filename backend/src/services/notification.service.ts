@@ -16,7 +16,9 @@ import type { EmailContent } from '../utils/email-templates';
  * with HTML entities Slack renders as plain text.
  */
 function escapeSlackText(text: string | null | undefined): string {
-  if (!text) return '';
+  if (!text) {
+    return '';
+  }
   return text
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -46,7 +48,7 @@ export class NotificationService {
     userId: string,
     title: string,
     message: string,
-    linkUrl?: string
+    linkUrl?: string,
   ): Promise<void> {
     try {
       const created = await prisma.notification.create({
@@ -57,7 +59,9 @@ export class NotificationService {
           linkUrl,
         },
       });
-      logger.info(`🔔 In-app notification created for user ${userId}: "${title}"`);
+      logger.info(
+        `🔔 In-app notification created for user ${userId}: "${title}"`,
+      );
 
       // Push it to any open SSE stream for this user (P2-6, replaces 60s polling).
       // Best-effort: a stream-delivery problem must never fail the DB write above.
@@ -74,7 +78,10 @@ export class NotificationService {
         },
       });
     } catch (error: any) {
-      logger.error(`Failed to create in-app notification for ${userId}:`, error.message);
+      logger.error(
+        `Failed to create in-app notification for ${userId}:`,
+        error.message,
+      );
     }
   }
 
@@ -88,7 +95,9 @@ export class NotificationService {
     content: EmailContent,
     slackText: string,
   ): Promise<void> {
-    if (!email) return;
+    if (!email) {
+      return;
+    }
     // Run both channels concurrently and independently — each already fails
     // silently inside its own service, and allSettled guarantees one channel's
     // failure can never skip the other.
@@ -117,8 +126,10 @@ export class NotificationService {
     dm: string,
   ): Promise<number> {
     const seen = new Set<string>();
-    const unique = recipients.filter((r) => {
-      if (seen.has(r.userId)) return false;
+    const unique = recipients.filter(r => {
+      if (seen.has(r.userId)) {
+        return false;
+      }
       seen.add(r.userId);
       return true;
     });
@@ -126,8 +137,13 @@ export class NotificationService {
     // its own service, and allSettled guarantees one admin's failure can never
     // skip another's notification (serial delivery made many-admin fan-outs drag).
     await Promise.allSettled(
-      unique.map(async (r) => {
-        await this.createNotification(r.userId, inApp.title, inApp.message, inApp.link);
+      unique.map(async r => {
+        await this.createNotification(
+          r.userId,
+          inApp.title,
+          inApp.message,
+          inApp.link,
+        );
         await this.emailAndDm(r.email, email, dm);
       }),
     );
@@ -141,7 +157,7 @@ export class NotificationService {
     groupName: string,
     requesterName: string,
     justification: string,
-    duration: string
+    duration: string,
   ): Promise<void> {
     // 1. Team channel ping (optional shared feed)
     const slackMsg = `📋 *Hermes Access Request*\n--------------------------\n*${escapeSlackText(requesterName)}* requested access to the *${escapeSlackText(groupName)}* group.\nReason: "${escapeSlackText(justification)}"\nDuration: ${formatDuration(duration)}\n\n👉 Review in Hermes: ${config.frontend.url}/pending-approvals`;
@@ -161,20 +177,27 @@ export class NotificationService {
       const [groupAdmins, platformAdmins] = await Promise.all([
         prisma.groupAdmin.findMany({ where: { groupId } }),
         group?.platform
-          ? prisma.platformAdmin.findMany({ where: { platform: group.platform } })
+          ? prisma.platformAdmin.findMany({
+              where: { platform: group.platform },
+            })
           : Promise.resolve([] as { userId: string; userEmail: string }[]),
       ]);
 
       let recipients: AdminRecipient[] = [
-        ...groupAdmins.map((a) => ({ userId: a.userId, email: a.userEmail })),
-        ...platformAdmins.map((a) => ({ userId: a.userId, email: a.userEmail })),
+        ...groupAdmins.map(a => ({ userId: a.userId, email: a.userEmail })),
+        ...platformAdmins.map(a => ({ userId: a.userId, email: a.userEmail })),
       ];
       if (recipients.length === 0) {
         const supers = await keycloakSetupService.getSuperAdmins();
-        recipients = supers.map((s) => ({ userId: s.id, email: s.email }));
+        recipients = supers.map(s => ({ userId: s.id, email: s.email }));
       }
 
-      const email = templates.adminNewGroupRequest({ requesterName, groupName, justification, duration });
+      const email = templates.adminNewGroupRequest({
+        requesterName,
+        groupName,
+        justification,
+        duration,
+      });
       const dm = `📋 *${escapeSlackText(requesterName)}* requested access to *${escapeSlackText(groupName)}* (${formatDuration(duration)}).\nReason: "${escapeSlackText(justification)}"\n👉 ${config.frontend.url}/pending-approvals`;
 
       const notified = await this.fanOutToAdmins(
@@ -188,7 +211,10 @@ export class NotificationService {
         dm,
       );
       if (notified === 0) {
-        logger.warn({ groupId }, 'notifyRequestCreated: no admins resolved to notify');
+        logger.warn(
+          { groupId },
+          'notifyRequestCreated: no admins resolved to notify',
+        );
       }
     } catch (error: any) {
       logger.error('Failed to notify group/platform admins:', error.message);
@@ -204,9 +230,16 @@ export class NotificationService {
   async notifyRequestsCreatedBulk(
     requesterName: string,
     duration: string,
-    items: { requestId: string; groupId: string; groupName: string; levelName: string | null }[],
+    items: {
+      requestId: string;
+      groupId: string;
+      groupName: string;
+      levelName: string | null;
+    }[],
   ): Promise<void> {
-    if (!items || items.length === 0) return;
+    if (!items || items.length === 0) {
+      return;
+    }
 
     const labelFor = (i: { groupName: string; levelName: string | null }) =>
       i.levelName ? `${i.groupName} — ${i.levelName}` : i.groupName;
@@ -218,43 +251,67 @@ export class NotificationService {
 
     // 2. Fan out to the admins who can action these groups — one summary per admin.
     try {
-      const groupIds = [...new Set(items.map((i) => i.groupId))];
+      const groupIds = [...new Set(items.map(i => i.groupId))];
       const groups = await prisma.group.findMany({
         where: { id: { in: groupIds } },
         select: { id: true, platform: true },
       });
-      const platformByGroup = new Map(groups.map((g) => [g.id, g.platform]));
-      const platforms = [...new Set(groups.map((g) => g.platform).filter(Boolean))] as string[];
+      const platformByGroup = new Map(groups.map(g => [g.id, g.platform]));
+      const platforms = [
+        ...new Set(groups.map(g => g.platform).filter(Boolean)),
+      ] as string[];
 
       const [groupAdmins, platformAdmins] = await Promise.all([
         prisma.groupAdmin.findMany({ where: { groupId: { in: groupIds } } }),
         platforms.length > 0
-          ? prisma.platformAdmin.findMany({ where: { platform: { in: platforms } } })
-          : Promise.resolve([] as { userId: string; userEmail: string; platform: string }[]),
+          ? prisma.platformAdmin.findMany({
+              where: { platform: { in: platforms } },
+            })
+          : Promise.resolve(
+              [] as { userId: string; userEmail: string; platform: string }[],
+            ),
       ]);
 
       // adminUserId -> { email, set of group labels they can review in this batch }
-      const recipients = new Map<string, { email?: string | null; labels: Set<string> }>();
-      const addRecipient = (userId: string, email: string | null | undefined, label: string) => {
-        const entry = recipients.get(userId) ?? { email, labels: new Set<string>() };
-        if (!entry.email && email) entry.email = email;
+      const recipients = new Map<
+        string,
+        { email?: string | null; labels: Set<string> }
+      >();
+      const addRecipient = (
+        userId: string,
+        email: string | null | undefined,
+        label: string,
+      ) => {
+        const entry = recipients.get(userId) ?? {
+          email,
+          labels: new Set<string>(),
+        };
+        if (!entry.email && email) {
+          entry.email = email;
+        }
         entry.labels.add(label);
         recipients.set(userId, entry);
       };
 
-      let supers: Awaited<ReturnType<typeof keycloakSetupService.getSuperAdmins>> | null = null;
+      let supers: Awaited<
+        ReturnType<typeof keycloakSetupService.getSuperAdmins>
+      > | null = null;
       for (const item of items) {
         const label = labelFor(item);
         const platform = platformByGroup.get(item.groupId);
-        const ga = groupAdmins.filter((a) => a.groupId === item.groupId);
-        const pa = platform ? platformAdmins.filter((a) => a.platform === platform) : [];
+        const ga = groupAdmins.filter(a => a.groupId === item.groupId);
+        const pa = platform
+          ? platformAdmins.filter(a => a.platform === platform)
+          : [];
         if (ga.length === 0 && pa.length === 0) {
           // Nobody scoped to this group → fall back to super admins (fetched once).
-          if (!supers) supers = await keycloakSetupService.getSuperAdmins();
-          supers.forEach((s) => addRecipient(s.id, s.email, label));
+          if (!supers) {
+            supers = await keycloakSetupService.getSuperAdmins();
+          }
+          supers.forEach(s => addRecipient(s.id, s.email, label));
         } else {
-          ga.forEach((a) => addRecipient(a.userId, a.userEmail, label));
-          pa.forEach((a) => addRecipient(a.userId, a.userEmail, label));
+          ga.forEach(a => addRecipient(a.userId, a.userEmail, label));
+          pa.forEach(a => addRecipient(a.userId, a.userEmail, label));
         }
       }
 
@@ -267,7 +324,11 @@ export class NotificationService {
             `${requesterName} requested access to ${labels.length} group(s): ${labels.join(', ')}.`,
             '/pending-approvals',
           );
-          const email = templates.adminNewGroupRequestsBulk({ requesterName, groupLabels: labels, duration });
+          const email = templates.adminNewGroupRequestsBulk({
+            requesterName,
+            groupLabels: labels,
+            duration,
+          });
           const dm = `📋 *${escapeSlackText(requesterName)}* requested access to ${labels.length} group(s): ${labels.map(escapeSlackText).join(', ')} (${formatDuration(duration)}).\n👉 ${config.frontend.url}/pending-approvals`;
           await this.emailAndDm(info.email, email, dm);
         }),
@@ -277,7 +338,10 @@ export class NotificationService {
         logger.warn('notifyRequestsCreatedBulk: no admins resolved to notify');
       }
     } catch (error: any) {
-      logger.error('Failed to fan out bulk request notifications:', error.message);
+      logger.error(
+        'Failed to fan out bulk request notifications:',
+        error.message,
+      );
     }
   }
 
@@ -296,7 +360,12 @@ export class NotificationService {
       ? `Your access request to ${groupName} was approved by ${reviewerName}.${note ? ` Note: "${note}"` : ''}`
       : `Your access request to ${groupName} was rejected by ${reviewerName}.${note ? ` Reason: "${note}"` : ''}`;
 
-    await this.createNotification(requesterId, title, message, approved ? '/' : '/my-requests');
+    await this.createNotification(
+      requesterId,
+      title,
+      message,
+      approved ? '/' : '/my-requests',
+    );
 
     // Personal email + Slack DM to the requester.
     const email = approved
@@ -334,15 +403,20 @@ export class NotificationService {
       ]);
 
       let recipients: AdminRecipient[] = [
-        ...groupAdmins.map((a) => ({ userId: a.userId, email: a.userEmail })),
-        ...platformAdmins.map((a) => ({ userId: a.userId, email: a.userEmail })),
+        ...groupAdmins.map(a => ({ userId: a.userId, email: a.userEmail })),
+        ...platformAdmins.map(a => ({ userId: a.userId, email: a.userEmail })),
       ];
       if (recipients.length === 0) {
         const supers = await keycloakSetupService.getSuperAdmins();
-        recipients = supers.map((s) => ({ userId: s.id, email: s.email }));
+        recipients = supers.map(s => ({ userId: s.id, email: s.email }));
       }
 
-      const email = templates.adminZkChangeRequest({ requesterName, groupName: groupLabel, changeCount, justification });
+      const email = templates.adminZkChangeRequest({
+        requesterName,
+        groupName: groupLabel,
+        changeCount,
+        justification,
+      });
       const dm = `🔧 *${escapeSlackText(requesterName)}* proposed ${changeCount} ZooKeeper config change(s) for *${escapeSlackText(groupLabel)}*.${justification ? `\nReason: "${escapeSlackText(justification)}"` : ''}\n👉 ${config.frontend.url}/pending-approvals`;
 
       const notified = await this.fanOutToAdmins(
@@ -356,10 +430,16 @@ export class NotificationService {
         dm,
       );
       if (notified === 0) {
-        logger.warn({ requestId }, 'notifyZkChangeRequestCreated: no admins resolved to notify');
+        logger.warn(
+          { requestId },
+          'notifyZkChangeRequestCreated: no admins resolved to notify',
+        );
       }
     } catch (error: any) {
-      logger.error('Failed to notify ZooKeeper change-request admins:', error.message);
+      logger.error(
+        'Failed to notify ZooKeeper change-request admins:',
+        error.message,
+      );
     }
   }
 
@@ -380,10 +460,13 @@ export class NotificationService {
       APPLIED: `all ${approved} change(s) were approved and applied`,
       PARTIALLY_APPLIED: `${approved} change(s) approved & applied, ${rejected} rejected`,
       APPLY_FAILED: `${approved} change(s) approved but one or more failed to apply — an admin will follow up`,
-      REJECTED: `your change(s) were rejected`,
+      REJECTED: 'your change(s) were rejected',
     };
     const line = summary[status];
-    const title = status === 'REJECTED' ? 'ZooKeeper change rejected' : 'ZooKeeper change reviewed';
+    const title =
+      status === 'REJECTED'
+        ? 'ZooKeeper change rejected'
+        : 'ZooKeeper change reviewed';
 
     await this.createNotification(
       requesterId,
@@ -392,7 +475,14 @@ export class NotificationService {
       '/zookeeper',
     );
 
-    const email = templates.userZkChangeReviewed({ groupName: groupLabel, status, reviewerName, note, approved, rejected });
+    const email = templates.userZkChangeReviewed({
+      groupName: groupLabel,
+      status,
+      reviewerName,
+      note,
+      approved,
+      rejected,
+    });
     const dm = `🔧 Your ZooKeeper config request for *${escapeSlackText(groupLabel)}* was reviewed by ${escapeSlackText(reviewerName)}: ${escapeSlackText(line)}.${note ? `\nNote: "${escapeSlackText(note)}"` : ''}`;
     await this.emailAndDm(requesterEmail, email, dm);
   }
@@ -425,8 +515,8 @@ export class NotificationService {
         prisma.platformAdmin.findMany({ where: { platform } }),
       ]);
       recipients = [
-        ...groupAdmins.map((a) => ({ userId: a.userId, email: a.userEmail })),
-        ...platformAdmins.map((a) => ({ userId: a.userId, email: a.userEmail })),
+        ...groupAdmins.map(a => ({ userId: a.userId, email: a.userEmail })),
+        ...platformAdmins.map(a => ({ userId: a.userId, email: a.userEmail })),
       ];
     } catch (error: any) {
       logger.error(
@@ -438,7 +528,7 @@ export class NotificationService {
     if (recipients.length === 0) {
       try {
         const supers = await keycloakSetupService.getSuperAdmins();
-        recipients = supers.map((s) => ({ userId: s.id, email: s.email }));
+        recipients = supers.map(s => ({ userId: s.id, email: s.email }));
       } catch (error: any) {
         logger.error(
           { requestId, error: error.message },
@@ -448,7 +538,13 @@ export class NotificationService {
     }
 
     try {
-      const email = templates.adminSecretIngestionRequest({ requesterName, groupName, secretName, keyCount, justification });
+      const email = templates.adminSecretIngestionRequest({
+        requesterName,
+        groupName,
+        secretName,
+        keyCount,
+        justification,
+      });
       const dm = `🔑 *${escapeSlackText(requesterName)}* proposed ${keyCount} secret key(s) ingestion for *${escapeSlackText(secretName)}* (Group: *${escapeSlackText(groupName)}*).${justification ? `\nReason: "${escapeSlackText(justification)}"` : ''}\n👉 ${config.frontend.url}/pending-approvals`;
 
       const notified = await this.fanOutToAdmins(
@@ -462,7 +558,10 @@ export class NotificationService {
         dm,
       );
       if (notified === 0) {
-        logger.warn({ requestId }, 'notifySecretIngestionSubmitted: no admins resolved to notify');
+        logger.warn(
+          { requestId },
+          'notifySecretIngestionSubmitted: no admins resolved to notify',
+        );
       }
     } catch (error: any) {
       logger.error('Failed to notify Secret Ingestion admins:', error.message);
@@ -483,10 +582,13 @@ export class NotificationService {
   ): Promise<void> {
     const row = await prisma.secretIngestionRequest.findUnique({
       where: { id: requestId },
-      select: { requesterId: true, requesterEmail: true, reviewNote: true }
+      select: { requesterId: true, requesterEmail: true, reviewNote: true },
     });
     if (!row) {
-      logger.warn({ requestId }, 'notifySecretIngestionReviewed: request not found');
+      logger.warn(
+        { requestId },
+        'notifySecretIngestionReviewed: request not found',
+      );
       return;
     }
 
@@ -494,10 +596,13 @@ export class NotificationService {
       APPLIED: `all ${approvedCount} secret(s) were approved and ingested`,
       PARTIALLY_APPLIED: `${approvedCount} secret(s) approved & ingested, ${rejectedCount} rejected`,
       APPLY_FAILED: `${approvedCount} secret(s) approved but ${failedCount} failed to ingest — an admin will follow up`,
-      REJECTED: `your secret ingestion request was rejected`,
+      REJECTED: 'your secret ingestion request was rejected',
     };
     const line = summary[status];
-    const title = status === 'REJECTED' ? 'Secret Ingestion request rejected' : 'Secret Ingestion request reviewed';
+    const title =
+      status === 'REJECTED'
+        ? 'Secret Ingestion request rejected'
+        : 'Secret Ingestion request reviewed';
 
     await this.createNotification(
       row.requesterId,
@@ -506,7 +611,15 @@ export class NotificationService {
       '/secrets',
     );
 
-    const email = templates.userSecretIngestionReviewed({ secretName, status, reviewerName, note: row.reviewNote || undefined, approved: approvedCount, rejected: rejectedCount, failed: failedCount });
+    const email = templates.userSecretIngestionReviewed({
+      secretName,
+      status,
+      reviewerName,
+      note: row.reviewNote || undefined,
+      approved: approvedCount,
+      rejected: rejectedCount,
+      failed: failedCount,
+    });
     const dm = `🔑 Your Secret Ingestion request for *${escapeSlackText(secretName)}* was reviewed by ${escapeSlackText(reviewerName)}: ${escapeSlackText(line)}.${row.reviewNote ? `\nNote: "${escapeSlackText(row.reviewNote)}"` : ''}`;
     await this.emailAndDm(row.requesterEmail, email, dm);
   }
@@ -526,11 +639,15 @@ export class NotificationService {
       fixable: boolean;
     }[],
   ): Promise<void> {
-    if (drifts.length === 0) return;
+    if (drifts.length === 0) {
+      return;
+    }
 
-    const fixableCount = drifts.filter((d) => d.fixable).length;
-    const names = drifts.map((d) => d.secretName);
-    const preview = names.slice(0, 5).join(', ') + (names.length > 5 ? `, +${names.length - 5} more` : '');
+    const fixableCount = drifts.filter(d => d.fixable).length;
+    const names = drifts.map(d => d.secretName);
+    const preview =
+      names.slice(0, 5).join(', ') +
+      (names.length > 5 ? `, +${names.length - 5} more` : '');
 
     const slackMsg = `⚠️ *Hermes — Secret Drift Detected*\n--------------------------\n${drifts.length} secret(s) on *${escapeSlackText(platform)}* have drifted between AWS Secrets Manager and infra-deployment: ${escapeSlackText(preview)}.${fixableCount > 0 ? `\n${fixableCount} can be reconciled with one click.` : ''}\n\n👉 Review in Hermes: ${config.frontend.url}/pending-approvals`;
     await slackService.sendPing(slackMsg);
@@ -541,28 +658,51 @@ export class NotificationService {
         where: { platform },
         distinct: ['userId'],
       });
-      recipients = platformAdmins.map((a) => ({ userId: a.userId, email: a.userEmail }));
+      recipients = platformAdmins.map(a => ({
+        userId: a.userId,
+        email: a.userEmail,
+      }));
     } catch (error: any) {
-      logger.error({ platform, error: error.message }, 'Failed to resolve platform admins for drift notification');
+      logger.error(
+        { platform, error: error.message },
+        'Failed to resolve platform admins for drift notification',
+      );
     }
     // Super admins are always included — drift is an account-wide ops concern, and they're the
     // fallback when a platform has no dedicated platform admin.
     try {
       const supers = await keycloakSetupService.getSuperAdmins();
-      recipients = [...recipients, ...supers.map((s) => ({ userId: s.id, email: s.email }))];
+      recipients = [
+        ...recipients,
+        ...supers.map(s => ({ userId: s.id, email: s.email })),
+      ];
     } catch (error: any) {
-      logger.error({ platform, error: error.message }, 'Failed to resolve super admins for drift notification');
+      logger.error(
+        { platform, error: error.message },
+        'Failed to resolve super admins for drift notification',
+      );
     }
     if (recipients.length === 0) {
-      logger.warn({ platform }, 'notifySecretDriftDetected: no admins resolved to notify');
+      logger.warn(
+        { platform },
+        'notifySecretDriftDetected: no admins resolved to notify',
+      );
       return;
     }
 
     const listHtml = drifts
-      .map((d) => {
+      .map(d => {
         const bits: string[] = [];
-        if (d.missingInManifest.length > 0) bits.push(`${d.missingInManifest.length} key(s) not registered in manifests`);
-        if (d.missingInAws.length > 0) bits.push(`${d.missingInAws.length} manifest key(s) missing from AWS`);
+        if (d.missingInManifest.length > 0) {
+          bits.push(
+            `${d.missingInManifest.length} key(s) not registered in manifests`,
+          );
+        }
+        if (d.missingInAws.length > 0) {
+          bits.push(
+            `${d.missingInAws.length} manifest key(s) missing from AWS`,
+          );
+        }
         return `<li><code>${d.secretName}</code> — ${bits.join('; ') || 'drift'}</li>`;
       })
       .join('');
@@ -592,7 +732,10 @@ export class NotificationService {
         dm,
       );
     } catch (error: any) {
-      logger.error({ platform, error: error.message }, 'Failed to notify admins of secret drift');
+      logger.error(
+        { platform, error: error.message },
+        'Failed to notify admins of secret drift',
+      );
     }
   }
 
@@ -611,7 +754,11 @@ export class NotificationService {
     await slackService.sendPing(slackMsg);
 
     const dm = `⏳ Your access to *${escapeSlackText(groupName)}* has expired.\n👉 ${config.frontend.url}/groups`;
-    await this.emailAndDm(userEmail, templates.userAccessExpired({ groupName }), dm);
+    await this.emailAndDm(
+      userEmail,
+      templates.userAccessExpired({ groupName }),
+      dm,
+    );
   }
 
   // Pre-expiry heads-up — sent once per grant by the scheduler's warning sweep,
@@ -629,7 +776,11 @@ export class NotificationService {
     await this.createNotification(userId, title, message, '/groups');
 
     const dm = `⏳ Your access to *${escapeSlackText(groupName)}* expires on ${expiresAtDate.toLocaleDateString()}. Request a renewal if you still need it.\n👉 ${config.frontend.url}/groups`;
-    await this.emailAndDm(userEmail, templates.userAccessExpiringSoon({ groupName, expiresAt: expiresAtDate }), dm);
+    await this.emailAndDm(
+      userEmail,
+      templates.userAccessExpiringSoon({ groupName, expiresAt: expiresAtDate }),
+      dm,
+    );
   }
 
   // Auto-expiry permanently failed after retries — alert super admins + the platform
@@ -649,17 +800,22 @@ export class NotificationService {
     try {
       const [superAdmins, platformAdmins] = await Promise.all([
         keycloakSetupService.getSuperAdmins(),
-        prisma.platformAdmin.findMany({ where: { platform: platform.toLowerCase() }, distinct: ['userId'] }),
+        prisma.platformAdmin.findMany({
+          where: { platform: platform.toLowerCase() },
+          distinct: ['userId'],
+        }),
       ]);
 
       const recipients = [
-        ...superAdmins.map((a) => a.id),
-        ...platformAdmins.map((a) => a.userId),
+        ...superAdmins.map(a => a.id),
+        ...platformAdmins.map(a => a.userId),
       ];
 
       const seen = new Set<string>();
       for (const userId of recipients) {
-        if (seen.has(userId)) continue;
+        if (seen.has(userId)) {
+          continue;
+        }
         seen.add(userId);
         await this.createNotification(
           userId,
@@ -669,10 +825,16 @@ export class NotificationService {
         );
       }
       if (seen.size === 0) {
-        logger.warn({ userAccessId }, 'notifyExpiryFailed: no admins to notify');
+        logger.warn(
+          { userAccessId },
+          'notifyExpiryFailed: no admins to notify',
+        );
       }
     } catch (err: any) {
-      logger.error('Failed to fan out access.expiry-failed notifications:', err.message);
+      logger.error(
+        'Failed to fan out access.expiry-failed notifications:',
+        err.message,
+      );
     }
   }
 
@@ -693,7 +855,11 @@ export class NotificationService {
     await slackService.sendPing(slackMsg);
 
     const dm = `🚫 Your access to *${escapeSlackText(groupName)}* was revoked by ${escapeSlackText(revokerName)}.${reason ? `\nReason: "${escapeSlackText(reason)}"` : ''}\n👉 ${config.frontend.url}/groups`;
-    await this.emailAndDm(userEmail, templates.userAccessRevoked({ groupName, revokerName, reason }), dm);
+    await this.emailAndDm(
+      userEmail,
+      templates.userAccessRevoked({ groupName, revokerName, reason }),
+      dm,
+    );
   }
 
   /** Human-friendly platform name for user-facing copy. */
@@ -703,8 +869,10 @@ export class NotificationService {
     // branching here, so a new adapter's name flows through automatically. Fall back
     // to a title-cased key for an unregistered platform.
     const adapter = provisioningRegistry.tryGet(key);
-    if (adapter) return adapter.displayName;
-    return key.replace(/\b\w/g, (c) => c.toUpperCase());
+    if (adapter) {
+      return adapter.displayName;
+    }
+    return key.replace(/\b\w/g, c => c.toUpperCase());
   }
 
   // Group request approved but the requester hasn't finished platform setup yet — queued.
@@ -746,13 +914,18 @@ export class NotificationService {
         prisma.groupAdmin.findMany({ distinct: ['userId'] }),
       ]);
 
-      const emailContent = templates.adminNewAccountRequest({ userName, userEmail, justification, platformLabel: label });
+      const emailContent = templates.adminNewAccountRequest({
+        userName,
+        userEmail,
+        justification,
+        platformLabel: label,
+      });
       const dm = `🆕 *${escapeSlackText(userName)}* (${escapeSlackText(userEmail)}) requested a ${label} account.\n${justification ? `Reason: "${escapeSlackText(justification)}"\n` : ''}👉 ${config.frontend.url}/pending-approvals`;
 
       const recipients: AdminRecipient[] = [
-        ...superAdmins.map((a) => ({ userId: a.id, email: a.email })),
-        ...platformAdmins.map((a) => ({ userId: a.userId, email: a.userEmail })),
-        ...groupAdmins.map((a) => ({ userId: a.userId, email: a.userEmail })),
+        ...superAdmins.map(a => ({ userId: a.id, email: a.email })),
+        ...platformAdmins.map(a => ({ userId: a.userId, email: a.userEmail })),
+        ...groupAdmins.map(a => ({ userId: a.userId, email: a.userEmail })),
       ];
 
       const notified = await this.fanOutToAdmins(
@@ -766,10 +939,16 @@ export class NotificationService {
         dm,
       );
       if (notified === 0) {
-        logger.warn({ requestId }, 'notifyUserCreationSubmitted: no admins to notify');
+        logger.warn(
+          { requestId },
+          'notifyUserCreationSubmitted: no admins to notify',
+        );
       }
     } catch (err: any) {
-      logger.error('Failed to fan out user-creation.submitted notifications:', err.message);
+      logger.error(
+        'Failed to fan out user-creation.submitted notifications:',
+        err.message,
+      );
     }
   }
 
@@ -790,7 +969,11 @@ export class NotificationService {
     );
 
     const dm = `✅ Your Hermes account is approved by ${escapeSlackText(reviewerName)}! Check your inbox for the ${escapeSlackText(label)} setup email.\n👉 ${config.frontend.url}/my-requests`;
-    await this.emailAndDm(userEmail, templates.userAccountApproved({ reviewerName, platformLabel: label }), dm);
+    await this.emailAndDm(
+      userEmail,
+      templates.userAccountApproved({ reviewerName, platformLabel: label }),
+      dm,
+    );
   }
 
   async notifyUserCreationRejected(
@@ -807,7 +990,11 @@ export class NotificationService {
     );
 
     const dm = `❌ Your Hermes account request was declined by ${escapeSlackText(reviewerName)}.${note ? `\nReason: "${escapeSlackText(note)}"` : ''}`;
-    await this.emailAndDm(userEmail, templates.userAccountRejected({ reviewerName, note }), dm);
+    await this.emailAndDm(
+      userEmail,
+      templates.userAccountRejected({ reviewerName, note }),
+      dm,
+    );
   }
 
   async notifyUserCreationCompleted(

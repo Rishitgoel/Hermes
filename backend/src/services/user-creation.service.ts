@@ -5,7 +5,7 @@ import syncService from './sync.service';
 import accessWorkflowService from './access-workflow.service';
 import eventBus from './event-bus';
 import logger from '../utils/logger';
-import { UserCreationStatus } from '@prisma/client';
+import { UserCreationStatus } from '../../generated/hermes';
 import { ConflictError, NotFoundError, ValidationError } from '../utils/errors';
 import { normalizeRedashInviteLink } from '../utils/redash-url';
 
@@ -13,10 +13,13 @@ const RESEND_COOLDOWN_MS = 60 * 1000; // 60s rate-limit on Resend Invite
 
 /**
  * Row-shaped wrapper around `normalizeRedashInviteLink`. Returns the same row
- * with `inviteLink` rewritten to match REDASH_BASE_URL so historical rows
- * with stale links (e.g. wrong port from earlier bugs) come out clean.
+ * with `inviteLink` rewritten to match the row's own platform instance's base
+ * URL, so historical rows with stale links (e.g. wrong port from earlier bugs,
+ * or a QA invite link that would otherwise be rewritten to prod) come out clean.
  */
-function normalizeInviteLink<T extends { inviteLink?: string | null; platform: string }>(row: T): T {
+function normalizeInviteLink<
+  T extends { inviteLink?: string | null; platform: string },
+>(row: T): T {
   if (row.inviteLink) {
     const adapter = provisioningRegistry.tryGet(row.platform);
     const baseUrl = adapter?.getLaunchUrl?.() || config.redash.baseUrl;
@@ -46,11 +49,16 @@ export class UserCreationService {
    *   COMPLETED with externalUserId populated, so the banner never shows.
    * - If not on Redash, creates a DRAFT row that the user can submit later.
    */
-  async ensureDraftForUser(user: RequesterIdentity, platform: string = config.platform.default) {
+  async ensureDraftForUser(
+    user: RequesterIdentity,
+    platform: string = config.platform.default,
+  ) {
     const existing = await prisma.userCreationRequest.findUnique({
       where: { userId_platform: { userId: user.id, platform } },
     });
-    if (existing) return normalizeInviteLink(existing);
+    if (existing) {
+      return normalizeInviteLink(existing);
+    }
 
     const lowerEmail = user.email.toLowerCase();
 
@@ -87,31 +95,40 @@ export class UserCreationService {
 
     if (cachedUser && !cachedUser.isDisabled && !cachedUser.isPending) {
       logger.info(
-        { userId: user.id, email: lowerEmail, platform, externalId: cachedUser.externalId },
+        {
+          userId: user.id,
+          email: lowerEmail,
+          platform,
+          externalId: cachedUser.externalId,
+        },
         '🌱 Auto-completing user-creation request (user already exists on platform)',
       );
-      return prisma.userCreationRequest.create({
+      return prisma.userCreationRequest
+        .create({
+          data: {
+            userId: user.id,
+            userName: user.username,
+            userEmail: lowerEmail,
+            platform,
+            status: UserCreationStatus.COMPLETED,
+            externalUserId: cachedUser.externalId,
+            completedAt: new Date(),
+          },
+        })
+        .then(normalizeInviteLink);
+    }
+
+    return prisma.userCreationRequest
+      .create({
         data: {
           userId: user.id,
           userName: user.username,
           userEmail: lowerEmail,
           platform,
-          status: UserCreationStatus.COMPLETED,
-          externalUserId: cachedUser.externalId,
-          completedAt: new Date(),
+          status: UserCreationStatus.DRAFT,
         },
-      }).then(normalizeInviteLink);
-    }
-
-    return prisma.userCreationRequest.create({
-      data: {
-        userId: user.id,
-        userName: user.username,
-        userEmail: lowerEmail,
-        platform,
-        status: UserCreationStatus.DRAFT,
-      },
-    }).then(normalizeInviteLink);
+      })
+      .then(normalizeInviteLink);
   }
 
   /**
@@ -122,9 +139,15 @@ export class UserCreationService {
    * clear the previous review fields (reviewer, note, rejection reason) so admins
    * see a clean pending request rather than last round's decision.
    */
-  async submitRequest(requester: RequesterIdentity, justification: string, platform: string = config.platform.default) {
+  async submitRequest(
+    requester: RequesterIdentity,
+    justification: string,
+    platform: string = config.platform.default,
+  ) {
     if (!justification || justification.trim().length < 10) {
-      throw new ValidationError('Justification must be at least 10 characters long');
+      throw new ValidationError(
+        'Justification must be at least 10 characters long',
+      );
     }
     // Reject account requests for platforms Hermes can't actually provision: an
     // unregistered platform string would create a PENDING row that can never be
@@ -169,7 +192,9 @@ export class UserCreationService {
 
     const isResubmit = row.status === UserCreationStatus.REJECTED;
     if (row.status !== UserCreationStatus.DRAFT && !isResubmit) {
-      throw new ConflictError(`Cannot submit: request is already ${row.status}`);
+      throw new ConflictError(
+        `Cannot submit: request is already ${row.status}`,
+      );
     }
 
     const updated = await prisma.userCreationRequest.update({
@@ -221,7 +246,10 @@ export class UserCreationService {
     return normalizeInviteLink(updated);
   }
 
-  async getMyRequest(userId: string, platform: string = config.platform.default) {
+  async getMyRequest(
+    userId: string,
+    platform: string = config.platform.default,
+  ) {
     return prisma.userCreationRequest
       .findUnique({ where: { userId_platform: { userId, platform } } })
       .then(row => (row ? normalizeInviteLink(row) : null));
@@ -229,7 +257,9 @@ export class UserCreationService {
 
   /** All of a user's account-creation requests across platforms. */
   async getMyRequests(userId: string) {
-    const rows = await prisma.userCreationRequest.findMany({ where: { userId } });
+    const rows = await prisma.userCreationRequest.findMany({
+      where: { userId },
+    });
     return rows.map(normalizeInviteLink);
   }
 
@@ -271,13 +301,25 @@ export class UserCreationService {
     status: 'APPROVED' | 'REJECTED',
     note?: string,
   ) {
-    const row = await prisma.userCreationRequest.findUnique({ where: { id: requestId } });
-    if (!row) throw new NotFoundError('User-creation request not found');
-    
+    const row = await prisma.userCreationRequest.findUnique({
+      where: { id: requestId },
+    });
+    if (!row) {
+      throw new NotFoundError('User-creation request not found');
+    }
+
     if (row.status !== UserCreationStatus.PENDING) {
       // Allow re-approving (retrying) a request that failed during the platform invite step
-      if (!(row.status === UserCreationStatus.APPROVED && row.inviteError && status === 'APPROVED')) {
-        throw new ValidationError(`Request is not pending (current status: ${row.status})`);
+      if (
+        !(
+          row.status === UserCreationStatus.APPROVED &&
+          row.inviteError &&
+          status === 'APPROVED'
+        )
+      ) {
+        throw new ValidationError(
+          `Request is not pending (current status: ${row.status})`,
+        );
       }
     }
 
@@ -307,7 +349,11 @@ export class UserCreationService {
 
       // Cascade-reject any of this user's pending group requests.
       try {
-        await accessWorkflowService.cascadeRejectForUser(row.userId, 'User creation rejected', row.platform);
+        await accessWorkflowService.cascadeRejectForUser(
+          row.userId,
+          'User creation rejected',
+          row.platform,
+        );
       } catch (err: any) {
         logger.error(
           { userId: row.userId, error: err.message },
@@ -441,7 +487,13 @@ export class UserCreationService {
    * failure on any platform — including AWS — always has a recovery path.
    */
   private async _executeInvite(
-    row: { id: string; userId: string; userName: string; userEmail: string; platform: string },
+    row: {
+      id: string;
+      userId: string;
+      userName: string;
+      userEmail: string;
+      platform: string;
+    },
     reviewer: ReviewerIdentity,
     note?: string,
   ) {
@@ -451,9 +503,14 @@ export class UserCreationService {
       // link in metadata; if so the user must finish setup, otherwise the account
       // is ready immediately.
       const adapter = provisioningRegistry.get(row.platform);
-      const inviteResult = await adapter.inviteUser(row.userEmail, row.userName, row.userId);
+      const inviteResult = await adapter.inviteUser(
+        row.userEmail,
+        row.userName,
+        row.userId,
+      );
       const externalUserId = inviteResult.externalUserId;
-      const inviteLink = (inviteResult.metadata?.inviteLink as string | undefined) ?? null;
+      const inviteLink =
+        (inviteResult.metadata?.inviteLink as string | undefined) ?? null;
 
       // No setup link → account is ready now (an existing Redash user, or an AWS
       // Identity Center user we just created): complete immediately. A fresh Redash
@@ -480,7 +537,11 @@ export class UserCreationService {
             performerName: reviewer.username,
             targetUserId: row.userId,
             targetUserName: row.userName,
-            details: { externalUserId, platform: row.platform, shortCircuited: true },
+            details: {
+              externalUserId,
+              platform: row.platform,
+              shortCircuited: true,
+            },
           },
         });
 
@@ -502,12 +563,14 @@ export class UserCreationService {
 
         // Release any of this user's group requests for THIS platform that were
         // queued in WAITING_FOR_SETUP.
-        accessWorkflowService.provisionWaitingRequests(completed.userId, row.platform).catch((err) => {
-          logger.error(
-            { userId: completed.userId, error: err.message },
-            'provisionWaitingRequests failed after short-circuit completion',
-          );
-        });
+        accessWorkflowService
+          .provisionWaitingRequests(completed.userId, row.platform)
+          .catch(err => {
+            logger.error(
+              { userId: completed.userId, error: err.message },
+              'provisionWaitingRequests failed after short-circuit completion',
+            );
+          });
 
         return normalizeInviteLink(completed);
       }
@@ -572,11 +635,16 @@ export class UserCreationService {
    *   FAILED invite (APPROVED + inviteError) is still retried by re-running the
    *   adapter's account creation, so a transient failure isn't a dead end.
    */
-  async resendInvite(userId: string, platform: string = config.platform.default) {
+  async resendInvite(
+    userId: string,
+    platform: string = config.platform.default,
+  ) {
     const row = await prisma.userCreationRequest.findUnique({
       where: { userId_platform: { userId, platform } },
     });
-    if (!row) throw new NotFoundError('User-creation request not found');
+    if (!row) {
+      throw new NotFoundError('User-creation request not found');
+    }
 
     const adapter = provisioningRegistry.get(row.platform);
 
@@ -587,16 +655,24 @@ export class UserCreationService {
     // recovery path, so re-run the adapter's account creation in that case.
     if (!adapter.regenerateInvite) {
       if (row.status === UserCreationStatus.APPROVED && row.inviteError) {
-        if (row.inviteSentAt && Date.now() - row.inviteSentAt.getTime() < RESEND_COOLDOWN_MS) {
+        if (
+          row.inviteSentAt &&
+          Date.now() - row.inviteSentAt.getTime() < RESEND_COOLDOWN_MS
+        ) {
           throw new ConflictError('Please wait a minute before retrying.');
         }
         return this._executeInvite(
           row,
-          { id: row.reviewerId ?? 'system', username: row.reviewerName ?? 'System' },
+          {
+            id: row.reviewerId ?? 'system',
+            username: row.reviewerName ?? 'System',
+          },
           row.reviewNote ?? undefined,
         );
       }
-      throw new ValidationError(`Resend is not supported for ${row.platform} accounts`);
+      throw new ValidationError(
+        `Resend is not supported for ${row.platform} accounts`,
+      );
     }
 
     if (
@@ -606,15 +682,24 @@ export class UserCreationService {
       throw new ConflictError(`Cannot resend invite: status is ${row.status}`);
     }
 
-    if (row.inviteSentAt && Date.now() - row.inviteSentAt.getTime() < RESEND_COOLDOWN_MS) {
-      throw new ConflictError('Please wait a minute before requesting another invite');
+    if (
+      row.inviteSentAt &&
+      Date.now() - row.inviteSentAt.getTime() < RESEND_COOLDOWN_MS
+    ) {
+      throw new ConflictError(
+        'Please wait a minute before requesting another invite',
+      );
     }
 
     try {
       // Re-issue the one-time setup link through the adapter so the stored token
       // always points at one that still exists in the configured platform instance.
-      const result = await adapter.regenerateInvite(row.userEmail, row.userName);
-      const freshLink = (result.metadata?.inviteLink as string | undefined) ?? null;
+      const result = await adapter.regenerateInvite(
+        row.userEmail,
+        row.userName,
+      );
+      const freshLink =
+        (result.metadata?.inviteLink as string | undefined) ?? null;
 
       const updated = await prisma.userCreationRequest.update({
         where: { id: row.id },
@@ -627,7 +712,12 @@ export class UserCreationService {
         },
       });
       logger.info(
-        { userId, platform: row.platform, externalUserId: result.externalUserId, hadNewLink: !!freshLink },
+        {
+          userId,
+          platform: row.platform,
+          externalUserId: result.externalUserId,
+          hadNewLink: !!freshLink,
+        },
         '📨 Resent platform invite',
       );
       return normalizeInviteLink(updated);
@@ -664,13 +754,20 @@ export class UserCreationService {
    */
   async handlePlatformUserDetected(
     platform: string,
-    user: { externalId: string; email: string; name?: string; isPending?: boolean },
+    user: {
+      externalId: string;
+      email: string;
+      name?: string;
+      isPending?: boolean;
+    },
   ) {
     const lowerEmail = user.email.toLowerCase();
     const row = await prisma.userCreationRequest.findUnique({
       where: { userEmail_platform: { userEmail: lowerEmail, platform } },
     });
-    if (!row) return; // No tracked request for this email+platform — nothing to do.
+    if (!row) {
+      return;
+    } // No tracked request for this email+platform — nothing to do.
 
     // If the invite is still pending, they are not finished setting up.
     // Record externalUserId if needed, but do not advance to COMPLETED.
@@ -741,7 +838,10 @@ export class UserCreationService {
 
     // Provision any group requests for THIS platform that were waiting on this user.
     try {
-      await accessWorkflowService.provisionWaitingRequests(completed.userId, platform);
+      await accessWorkflowService.provisionWaitingRequests(
+        completed.userId,
+        platform,
+      );
     } catch (err: any) {
       logger.error(
         { userId: completed.userId, error: err.message },

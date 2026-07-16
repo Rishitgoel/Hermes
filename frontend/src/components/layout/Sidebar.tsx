@@ -100,8 +100,8 @@ export const Sidebar: React.FC = () => {
 
       {/* Navigation Links */}
       <nav className="nav-links">
-        <NavLink 
-          to="/" 
+        <NavLink
+          to="/hermes"
           className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
           end
         >
@@ -109,16 +109,16 @@ export const Sidebar: React.FC = () => {
           <span>Dashboard</span>
         </NavLink>
 
-        <NavLink 
-          to="/groups" 
+        <NavLink
+          to="/hermes/groups"
           className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
         >
           <Layers size={20} />
           <span>Platforms</span>
         </NavLink>
 
-        <NavLink 
-          to="/my-requests" 
+        <NavLink
+          to="/hermes/my-requests"
           className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
         >
           <FileClock size={20} />
@@ -126,8 +126,8 @@ export const Sidebar: React.FC = () => {
         </NavLink>
 
         {showApprovals && (
-          <NavLink 
-            to="/pending-approvals" 
+          <NavLink
+            to="/hermes/pending-approvals"
             className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
           >
             <CheckSquare size={20} />
@@ -138,7 +138,7 @@ export const Sidebar: React.FC = () => {
 
         {showAdminManagement && (
           <NavLink
-            to="/admin"
+            to="/hermes/admin"
             className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
           >
             <ShieldCheck size={20} />
@@ -148,7 +148,7 @@ export const Sidebar: React.FC = () => {
 
         {user?.hasZookeeperAccess && (
           <NavLink
-            to="/zookeeper"
+            to="/hermes/zookeeper"
             className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
           >
             <Network size={20} />
@@ -158,7 +158,7 @@ export const Sidebar: React.FC = () => {
 
         {user?.hasSecretsAccess && (
           <NavLink
-            to="/secrets"
+            to="/hermes/secrets"
             className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
           >
             <KeyRound size={20} />
@@ -168,7 +168,7 @@ export const Sidebar: React.FC = () => {
 
         {isSuperAdmin && (
           <NavLink
-            to="/audit-log"
+            to="/hermes/audit-log"
             className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
           >
             <History size={20} />

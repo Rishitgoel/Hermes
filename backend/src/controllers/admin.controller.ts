@@ -171,19 +171,15 @@ export class AdminController extends BaseController {
   // whose Redash membership is gone, and reconciles requests stuck in
   // WAITING_FOR_SETUP/PROVISIONING/PROVISION_FAILED. Dry-run unless apply === true.
   // Manually triggered — not a cron job. Surfaced as a prominent button in the UI.
-  async resyncRedashMemberships(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ): Promise<void> {
+  async resyncRedashMemberships(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const userId = this.getUserId();
-      if (!userId) {return;}
+      if (!userId) {
+        return;
+      }
 
       if (!isSuperAdmin(this.user!)) {
-        throw new AuthorizationError(
-          'Only super admins can resync memberships',
-        );
+        throw new AuthorizationError('Only super admins can resync memberships');
       }
 
       const apply = req.body?.apply === true;

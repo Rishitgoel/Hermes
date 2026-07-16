@@ -11,9 +11,13 @@ export class NotificationController extends BaseController {
   // authenticated user as it's created — replaces the 60s polling (P2-6). Auth is
   // handled by the route's middleware (token read from ?token= since EventSource
   // can't set an Authorization header).
-  async streamNotifications(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async streamNotifications(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     const userId = this.getUserId();
-    if (!userId) return;
+    if (!userId) {return;}
 
     // SSE headers. no-transform + X-Accel-Buffering:no stop any proxy/compression
     // from buffering the stream; we never gzip an event stream.
@@ -54,10 +58,14 @@ export class NotificationController extends BaseController {
   }
 
   // GET /api/notifications
-  async getNotifications(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async getNotifications(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {return;}
 
       // Cap the payload — the bell only ever shows the most recent slice, and an
       // unbounded list let heavy users accumulate hundreds of rows. The unread
@@ -75,14 +83,22 @@ export class NotificationController extends BaseController {
   }
 
   // PUT /api/notifications/:id/read
-  async markAsRead(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async markAsRead(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
-      const idResult = this.validateWithZod(notificationIdSchema, this.req.params.id, 'Invalid notification ID');
-      if (!idResult.success) return;
+      const idResult = this.validateWithZod(
+        notificationIdSchema,
+        this.req.params.id,
+        'Invalid notification ID',
+      );
+      if (!idResult.success) {return;}
       const id = idResult.data;
 
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {return;}
 
       const notification = await prisma.notification.findFirst({
         where: { id, userId },
@@ -104,35 +120,52 @@ export class NotificationController extends BaseController {
   }
 
   // PUT /api/notifications/read-all
-  async markAllRead(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async markAllRead(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {return;}
 
       const result = await prisma.notification.updateMany({
         where: { userId, isRead: false },
         data: { isRead: true },
       });
 
-      this.sendResponse(result, `All notifications marked as read (${result.count} updated)`);
+      this.sendResponse(
+        result,
+        `All notifications marked as read (${result.count} updated)`,
+      );
     } catch (error) {
       this.handleError(error, 'Failed to mark all notifications as read');
     }
   }
 
   // DELETE /api/notifications/:id — dismiss (permanently remove) a single notification.
-  async dismissNotification(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async dismissNotification(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
-      const idResult = this.validateWithZod(notificationIdSchema, this.req.params.id, 'Invalid notification ID');
-      if (!idResult.success) return;
+      const idResult = this.validateWithZod(
+        notificationIdSchema,
+        this.req.params.id,
+        'Invalid notification ID',
+      );
+      if (!idResult.success) {return;}
       const id = idResult.data;
 
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {return;}
 
       // deleteMany (not delete) so another user's id can never be removed and a
       // missing row is a no-op rather than a thrown P2025.
-      const result = await prisma.notification.deleteMany({ where: { id, userId } });
+      const result = await prisma.notification.deleteMany({
+        where: { id, userId },
+      });
       if (result.count === 0) {
         throw new NotFoundError('Notification not found');
       }
@@ -144,24 +177,37 @@ export class NotificationController extends BaseController {
   }
 
   // DELETE /api/notifications — clear every notification for the authenticated user.
-  async clearAll(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async clearAll(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {return;}
 
-      const result = await prisma.notification.deleteMany({ where: { userId } });
+      const result = await prisma.notification.deleteMany({
+        where: { userId },
+      });
 
-      this.sendResponse(result, `All notifications cleared (${result.count} removed)`);
+      this.sendResponse(
+        result,
+        `All notifications cleared (${result.count} removed)`,
+      );
     } catch (error) {
       this.handleError(error, 'Failed to clear notifications');
     }
   }
 
   // GET /api/notifications/unread-count
-  async getUnreadCount(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async getUnreadCount(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {return;}
 
       const count = await prisma.notification.count({
         where: { userId, isRead: false },

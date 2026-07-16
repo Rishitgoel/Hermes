@@ -53,10 +53,10 @@ function getSnapshot(user: AuthenticatedUser): AuthzSnapshot {
     snap = {
       platformAdminPlatforms: prisma.platformAdmin
         .findMany({ where: { userId: user.id }, select: { platform: true } })
-        .then((rows) => new Set(rows.map((r) => r.platform.toLowerCase()))),
+        .then(rows => new Set(rows.map(r => r.platform.toLowerCase()))),
       groupAdminGroupIds: prisma.groupAdmin
         .findMany({ where: { userId: user.id }, select: { groupId: true } })
-        .then((rows) => new Set(rows.map((r) => r.groupId))),
+        .then(rows => new Set(rows.map(r => r.groupId))),
     };
     snapshotCache.set(user, snap);
   }
@@ -71,7 +71,9 @@ export async function isPlatformAdminOf(
   user: AuthenticatedUser,
   platform: string,
 ): Promise<boolean> {
-  if (isSuperAdmin(user)) return true;
+  if (isSuperAdmin(user)) {
+    return true;
+  }
   const platforms = await getSnapshot(user).platformAdminPlatforms;
   return platforms.has(platform.toLowerCase());
 }
@@ -88,18 +90,24 @@ export async function isGroupAdminOf(
   groupId: string,
   _groupSlug?: string | null,
 ): Promise<boolean> {
-  if (isSuperAdmin(user)) return true;
+  if (isSuperAdmin(user)) {
+    return true;
+  }
 
   // Direct group-admin assignment.
   const groupIds = await getSnapshot(user).groupAdminGroupIds;
-  if (groupIds.has(groupId)) return true;
+  if (groupIds.has(groupId)) {
+    return true;
+  }
 
   // Platform admin of the group's platform manages all its groups.
   const group = await prisma.group.findUnique({
     where: { id: groupId },
     select: { platform: true },
   });
-  if (group?.platform && (await isPlatformAdminOf(user, group.platform))) return true;
+  if (group?.platform && (await isPlatformAdminOf(user, group.platform))) {
+    return true;
+  }
 
   return false;
 }
@@ -110,7 +118,9 @@ export async function isGroupAdminOf(
  * non-admin gets a uniform 403 instead of a 404-vs-403 existence oracle.
  */
 export async function isAnyAdmin(user: AuthenticatedUser): Promise<boolean> {
-  if (isSuperAdmin(user)) return true;
+  if (isSuperAdmin(user)) {
+    return true;
+  }
   const snap = getSnapshot(user);
   const [platforms, groupIds] = await Promise.all([
     snap.platformAdminPlatforms,
@@ -123,14 +133,16 @@ export async function isAnyAdmin(user: AuthenticatedUser): Promise<boolean> {
  * Platform keys the user may manage. Super admins manage every registered
  * platform; everyone else gets their PlatformAdmin mirror rows. Lower-cased + de-duped.
  */
-export async function getManageablePlatforms(user: AuthenticatedUser): Promise<string[]> {
+export async function getManageablePlatforms(
+  user: AuthenticatedUser,
+): Promise<string[]> {
   const platforms = isSuperAdmin(user)
     ? provisioningRegistry.listPlatforms()
     : Array.from(await getSnapshot(user).platformAdminPlatforms);
   // Honor each adapter's own enabled/disabled state (optional isEnabled() hook —
   // today only AWS implements it). Adapters without it (Redash, ZooKeeper) are
   // always treated as enabled.
-  return platforms.filter((key) => {
+  return platforms.filter(key => {
     const adapter = provisioningRegistry.tryGet(key);
     return !(adapter?.isEnabled && !adapter.isEnabled());
   });
@@ -150,14 +162,18 @@ export interface AdminScopes {
  * all groups on their platform, but they should not be physically enrolled into
  * every external platform group.
  */
-export async function getDirectGroupAdminSlugs(user: AuthenticatedUser): Promise<string[]> {
-  if (isSuperAdmin(user)) return [];
+export async function getDirectGroupAdminSlugs(
+  user: AuthenticatedUser,
+): Promise<string[]> {
+  if (isSuperAdmin(user)) {
+    return [];
+  }
 
   const dbGroups = await prisma.groupAdmin.findMany({
     where: { userId: user.id },
     select: { group: { select: { slug: true } } },
   });
-  return Array.from(new Set(dbGroups.map((g) => g.group.slug)));
+  return Array.from(new Set(dbGroups.map(g => g.group.slug)));
 }
 
 /**
@@ -181,7 +197,7 @@ export async function getManageableGroupIds(
   });
   return {
     all: false,
-    groupIds: rows.filter((r) => r.group.platform === platform).map((r) => r.groupId),
+    groupIds: rows.filter(r => r.group.platform === platform).map(r => r.groupId),
   };
 }
 
@@ -190,7 +206,9 @@ export async function getManageableGroupIds(
  * for server-side request scoping (e.g. pending-approvals). Returned on /auth/me.
  * Derived from the DB mirrors (mirror-authoritative model).
  */
-export async function computeAdminScopes(user: AuthenticatedUser): Promise<AdminScopes> {
+export async function computeAdminScopes(
+  user: AuthenticatedUser,
+): Promise<AdminScopes> {
   const superAdmin = isSuperAdmin(user);
   const platforms = await getManageablePlatforms(user);
 
@@ -209,7 +227,7 @@ export async function computeAdminScopes(user: AuthenticatedUser): Promise<Admin
       where: { platform: { in: platforms } },
       select: { slug: true },
     });
-    platformGroupSlugs = groups.map((g) => g.slug);
+    platformGroupSlugs = groups.map(g => g.slug);
   }
 
   const groups = Array.from(new Set([...dbSlugs, ...platformGroupSlugs]));

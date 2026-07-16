@@ -6,7 +6,7 @@ import { detectType, previewValue } from '../zookeeper/zkFormat';
 import { TypeChip } from '../zookeeper/TypeChip';
 import type { ZkChange } from '../../services/api/zookeeperApi';
 import {
-  AuditLogEntry,
+  type AuditLogEntry,
   actionBadgeStyle,
   auditLabel,
   describeAuditEntry,

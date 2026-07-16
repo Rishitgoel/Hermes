@@ -74,7 +74,10 @@ export class RedashService {
 
   /** Run `task` only after any in-flight membership mutation for the same Redash
    *  user has settled, serializing all of one user's mutations. */
-  private withUserLock<T>(redashUserId: number, task: () => Promise<T>): Promise<T> {
+  private withUserLock<T>(
+    redashUserId: number,
+    task: () => Promise<T>,
+  ): Promise<T> {
     const prev = this.userMutationChains.get(redashUserId) ?? Promise.resolve();
     // Run the task whether or not the previous one in the chain succeeded.
     const run = prev.then(task, task);
@@ -94,12 +97,42 @@ export class RedashService {
   // Sync Users: Fetches all active users from Redash
   async syncUsers(): Promise<RedashUserResponse[]> {
     if (this.isSimulation) {
-      logger.info(`📊 Redash[${this.key}] syncUsers (Simulation): Returning mock users.`);
+      logger.info(
+        `📊 Redash[${this.key}] syncUsers (Simulation): Returning mock users.`,
+      );
       return [
-        { id: 1, name: 'Mayank Aggarwal', email: 'mayank.aggarwal@bachatt.app', is_disabled: false, is_invitation_pending: false, groups: [1, 2] },
-        { id: 2, name: 'Yogesh Verma', email: 'yogesh.verma@bachatt.app', is_disabled: false, is_invitation_pending: false, groups: [1, 101] },
-        { id: 3, name: 'Rishit Goel', email: 'rishit.goel@bachatt.app', is_disabled: false, is_invitation_pending: false, groups: [1] },
-        { id: 4, name: 'Ankit Sharma', email: 'ankit.sharma@bachatt.app', is_disabled: false, is_invitation_pending: false, groups: [1, 2] },
+        {
+          id: 1,
+          name: 'Mayank Aggarwal',
+          email: 'mayank.aggarwal@bachatt.app',
+          is_disabled: false,
+          is_invitation_pending: false,
+          groups: [1, 2],
+        },
+        {
+          id: 2,
+          name: 'Yogesh Verma',
+          email: 'yogesh.verma@bachatt.app',
+          is_disabled: false,
+          is_invitation_pending: false,
+          groups: [1, 101],
+        },
+        {
+          id: 3,
+          name: 'Rishit Goel',
+          email: 'rishit.goel@bachatt.app',
+          is_disabled: false,
+          is_invitation_pending: false,
+          groups: [1],
+        },
+        {
+          id: 4,
+          name: 'Ankit Sharma',
+          email: 'ankit.sharma@bachatt.app',
+          is_disabled: false,
+          is_invitation_pending: false,
+          groups: [1, 2],
+        },
       ];
     }
 
@@ -120,7 +153,9 @@ export class RedashService {
         const pageResults = response.data.results ?? [];
         results.push(...pageResults);
         const count = typeof response.data.count === 'number' ? response.data.count : results.length;
-        if (pageResults.length === 0 || results.length >= count) break;
+        if (pageResults.length === 0 || results.length >= count) {
+          break;
+        }
       }
       if (page > MAX_PAGES) {
         logger.error(`Redash[${this.key}] syncUsers: hit the ${MAX_PAGES}-page safety cap — the user list may be truncated.`);
@@ -135,12 +170,19 @@ export class RedashService {
         // older builds (and the sim shim) return plain integer IDs. Normalize
         // to Int[] so the `RedashUser.groupIds Int[]` column accepts it.
         groups: Array.isArray(u.groups)
-          ? u.groups.map((g: any) => (typeof g === 'number' ? g : g?.id)).filter((g: any) => typeof g === 'number')
+          ? u.groups
+              .map((g: any) => (typeof g === 'number' ? g : g?.id))
+              .filter((g: any) => typeof g === 'number')
           : [],
       }));
     } catch (error: any) {
-      logger.error(`Failed to sync users from Redash[${this.key}] API:`, error.message);
-      throw new Error(`Redash[${this.key}] API syncUsers error: ${error.message}`);
+      logger.error(
+        `Failed to sync users from Redash[${this.key}] API:`,
+        error.message,
+      );
+      throw new Error(
+        `Redash[${this.key}] API syncUsers error: ${error.message}`,
+      );
     }
   }
 
@@ -149,19 +191,53 @@ export class RedashService {
     if (this.isSimulation) {
       const lower = email.toLowerCase();
       const mock = [
-        { id: 1, name: 'Mayank Aggarwal', email: 'mayank.aggarwal@bachatt.app', is_disabled: false, is_invitation_pending: false, groups: [1, 2] },
-        { id: 2, name: 'Yogesh Verma', email: 'yogesh.verma@bachatt.app', is_disabled: false, is_invitation_pending: false, groups: [1, 101] },
-        { id: 3, name: 'Rishit Goel', email: 'rishit.goel@bachatt.app', is_disabled: false, is_invitation_pending: false, groups: [1] },
-        { id: 4, name: 'Ankit Sharma', email: 'ankit.sharma@bachatt.app', is_disabled: false, is_invitation_pending: false, groups: [1, 2] },
+        {
+          id: 1,
+          name: 'Mayank Aggarwal',
+          email: 'mayank.aggarwal@bachatt.app',
+          is_disabled: false,
+          is_invitation_pending: false,
+          groups: [1, 2],
+        },
+        {
+          id: 2,
+          name: 'Yogesh Verma',
+          email: 'yogesh.verma@bachatt.app',
+          is_disabled: false,
+          is_invitation_pending: false,
+          groups: [1, 101],
+        },
+        {
+          id: 3,
+          name: 'Rishit Goel',
+          email: 'rishit.goel@bachatt.app',
+          is_disabled: false,
+          is_invitation_pending: false,
+          groups: [1],
+        },
+        {
+          id: 4,
+          name: 'Ankit Sharma',
+          email: 'ankit.sharma@bachatt.app',
+          is_disabled: false,
+          is_invitation_pending: false,
+          groups: [1, 2],
+        },
       ].find(u => u.email === lower);
       return mock || null;
     }
 
     try {
       const client = this.getClient();
-      const searchRes = await client.get(`/api/users?q=${encodeURIComponent(email)}`);
-      const u = searchRes.data.results.find((u: any) => u.email.toLowerCase() === email.toLowerCase());
-      if (!u) return null;
+      const searchRes = await client.get(
+        `/api/users?q=${encodeURIComponent(email)}`,
+      );
+      const u = searchRes.data.results.find(
+        (u: any) => u.email.toLowerCase() === email.toLowerCase(),
+      );
+      if (!u) {
+        return null;
+      }
       return {
         id: u.id,
         name: u.name,
@@ -169,11 +245,16 @@ export class RedashService {
         is_disabled: u.is_disabled,
         is_invitation_pending: !!u.is_invitation_pending,
         groups: Array.isArray(u.groups)
-          ? u.groups.map((g: any) => (typeof g === 'number' ? g : g?.id)).filter((g: any) => typeof g === 'number')
+          ? u.groups
+              .map((g: any) => (typeof g === 'number' ? g : g?.id))
+              .filter((g: any) => typeof g === 'number')
           : [],
       };
     } catch (error: any) {
-      logger.error(`Failed to fetch user ${email} from Redash[${this.key}] API:`, error.message);
+      logger.error(
+        `Failed to fetch user ${email} from Redash[${this.key}] API:`,
+        error.message,
+      );
       return null;
     }
   }
@@ -181,7 +262,9 @@ export class RedashService {
   // Sync Groups: Fetches all groups from Redash
   async syncGroups(): Promise<RedashGroupResponse[]> {
     if (this.isSimulation) {
-      logger.info(`📊 Redash[${this.key}] syncGroups (Simulation): Returning mock groups.`);
+      logger.info(
+        `📊 Redash[${this.key}] syncGroups (Simulation): Returning mock groups.`,
+      );
       return [
         { id: 1, name: 'default', type: 'builtin' },
         { id: 2, name: 'admin', type: 'builtin' },
@@ -207,8 +290,13 @@ export class RedashService {
         type: g.type,
       }));
     } catch (error: any) {
-      logger.error(`Failed to sync groups from Redash[${this.key}] API:`, error.message);
-      throw new Error(`Redash[${this.key}] API syncGroups error: ${error.message}`);
+      logger.error(
+        `Failed to sync groups from Redash[${this.key}] API:`,
+        error.message,
+      );
+      throw new Error(
+        `Redash[${this.key}] API syncGroups error: ${error.message}`,
+      );
     }
   }
 
@@ -219,19 +307,33 @@ export class RedashService {
    *    we just created a fresh invited user. Returns undefined when the user
    *    already existed (no setup needed).
    */
-  async findOrInviteUser(email: string, name: string): Promise<{ id: number; inviteLink?: string }> {
+  async findOrInviteUser(
+    email: string,
+    name: string,
+  ): Promise<{ id: number; inviteLink?: string }> {
     if (this.isSimulation) {
-      logger.info(`📊 Redash[${this.key}] findOrInviteUser (Simulation): Mocking lookup/invite for ${email}`);
+      logger.info(
+        `📊 Redash[${this.key}] findOrInviteUser (Simulation): Mocking lookup/invite for ${email}`,
+      );
       const lowerEmail = email.toLowerCase();
       // Stable mock IDs for seeded users — and no inviteLink because they already exist.
-      if (lowerEmail === 'mayank.aggarwal@bachatt.app') return { id: 1 };
-      if (lowerEmail === 'yogesh.verma@bachatt.app') return { id: 2 };
-      if (lowerEmail === 'rishit.goel@bachatt.app') return { id: 3 };
-      if (lowerEmail === 'ankit.sharma@bachatt.app') return { id: 4 };
+      if (lowerEmail === 'mayank.aggarwal@bachatt.app') {
+        return { id: 1 };
+      }
+      if (lowerEmail === 'yogesh.verma@bachatt.app') {
+        return { id: 2 };
+      }
+      if (lowerEmail === 'rishit.goel@bachatt.app') {
+        return { id: 3 };
+      }
+      if (lowerEmail === 'ankit.sharma@bachatt.app') {
+        return { id: 4 };
+      }
       // For any other email, simulate a fresh invite — return a fake inviteLink so
       // the rest of the workflow can be exercised end-to-end in sim mode.
       const fakeId = Math.floor(Math.random() * 9000) + 1000;
-      const baseUrl = this.baseUrl?.replace(/\/$/, '') || 'https://redash.bachatt.app';
+      const baseUrl =
+        this.baseUrl?.replace(/\/$/, '') || 'https://redash.bachatt.app';
       const fakeToken = Math.random().toString(36).slice(2, 18);
       return { id: fakeId, inviteLink: `${baseUrl}/invitations/${fakeToken}` };
     }
@@ -239,23 +341,38 @@ export class RedashService {
     try {
       const client = this.getClient();
       // Search user by email
-      const searchRes = await client.get(`/api/users?q=${encodeURIComponent(email)}`);
-      const existing = searchRes.data.results.find((u: any) => u.email.toLowerCase() === email.toLowerCase());
+      const searchRes = await client.get(
+        `/api/users?q=${encodeURIComponent(email)}`,
+      );
+      const existing = searchRes.data.results.find(
+        (u: any) => u.email.toLowerCase() === email.toLowerCase(),
+      );
 
       if (existing) {
-        logger.info(`📊 Redash[${this.key}] findOrInviteUser: Found existing user ${email} with ID ${existing.id}`);
-        
+        logger.info(
+          `📊 Redash[${this.key}] findOrInviteUser: Found existing user ${email} with ID ${existing.id}`,
+        );
+
         // If the user's invitation is pending, generate and return a new invite link
         if (existing.is_invitation_pending) {
-          logger.info(`📊 Redash[${this.key}] findOrInviteUser: Existing user ${email} invitation is pending. Generating new invite link...`);
+          logger.info(
+            `📊 Redash[${this.key}] findOrInviteUser: Existing user ${email} invitation is pending. Generating new invite link...`,
+          );
           try {
-            const inviteRes = await client.post(`/api/users/${existing.id}/invite`);
+            const inviteRes = await client.post(
+              `/api/users/${existing.id}/invite`,
+            );
             const rawLink: string | undefined =
-              typeof inviteRes.data?.invite_link === 'string' ? inviteRes.data.invite_link : undefined;
+              typeof inviteRes.data?.invite_link === 'string'
+                ? inviteRes.data.invite_link
+                : undefined;
             const inviteLink = normalizeRedashInviteLink(rawLink, this.baseUrl);
             return { id: existing.id, inviteLink };
           } catch (inviteErr: any) {
-            logger.warn({ email, error: inviteErr.message }, 'Failed to generate invite link for existing pending user; proceeding without it');
+            logger.warn(
+              { email, error: inviteErr.message },
+              'Failed to generate invite link for existing pending user; proceeding without it',
+            );
           }
         }
         return { id: existing.id };
@@ -263,13 +380,17 @@ export class RedashService {
 
       // Create new user (invite). Redash returns `invite_link` in the response body
       // when a fresh invite is created — we capture and surface it inside Hermes.
-      logger.info(`📊 Redash[${this.key}] findOrInviteUser: User ${email} not found. Sending invite...`);
+      logger.info(
+        `📊 Redash[${this.key}] findOrInviteUser: User ${email} not found. Sending invite...`,
+      );
       const inviteRes = await client.post('/api/users', {
         name,
         email,
       });
       const rawLink: string | undefined =
-        typeof inviteRes.data?.invite_link === 'string' ? inviteRes.data.invite_link : undefined;
+        typeof inviteRes.data?.invite_link === 'string'
+          ? inviteRes.data.invite_link
+          : undefined;
       const inviteLink = normalizeRedashInviteLink(rawLink, this.baseUrl);
 
       logger.info(
@@ -277,7 +398,10 @@ export class RedashService {
       );
       return { id: inviteRes.data.id, inviteLink };
     } catch (error: any) {
-      logger.error(`Failed to find/invite user ${email} in Redash[${this.key}]:`, error.message);
+      logger.error(
+        `Failed to find/invite user ${email} in Redash[${this.key}]:`,
+        error.message,
+      );
       throw new Error(`Redash[${this.key}] API invite error: ${error.message}`);
     }
   }
@@ -291,7 +415,8 @@ export class RedashService {
    */
   async regenerateInviteLink(redashUserId: number): Promise<string | null> {
     if (this.isSimulation) {
-      const baseUrl = this.baseUrl?.replace(/\/$/, '') || 'https://redash.bachatt.app';
+      const baseUrl =
+        this.baseUrl?.replace(/\/$/, '') || 'https://redash.bachatt.app';
       const fakeToken = Math.random().toString(36).slice(2, 18);
       return `${baseUrl}/invitations/${fakeToken}`;
     }
@@ -300,18 +425,29 @@ export class RedashService {
       const client = this.getClient();
       const res = await client.post(`/api/users/${redashUserId}/invite`);
       const rawLink: string | undefined =
-        typeof res.data?.invite_link === 'string' ? res.data.invite_link : undefined;
+        typeof res.data?.invite_link === 'string'
+          ? res.data.invite_link
+          : undefined;
       return normalizeRedashInviteLink(rawLink, this.baseUrl) ?? null;
     } catch (err: any) {
-      logger.error(`Failed to regenerate invite link for Redash[${this.key}] user ${redashUserId}: ${err.message}`);
-      throw new Error(`Redash[${this.key}] API regenerateInviteLink error: ${err.message}`);
+      logger.error(
+        `Failed to regenerate invite link for Redash[${this.key}] user ${redashUserId}: ${err.message}`,
+      );
+      throw new Error(
+        `Redash[${this.key}] API regenerateInviteLink error: ${err.message}`,
+      );
     }
   }
 
   // Add User to Group
-  async addUserToGroup(redashUserId: number, redashGroupId: number): Promise<void> {
+  async addUserToGroup(
+    redashUserId: number,
+    redashGroupId: number,
+  ): Promise<void> {
     if (this.isSimulation) {
-      logger.info(`📊 Redash[${this.key}] addUserToGroup (Simulation): Added Redash User ID ${redashUserId} to Group ID ${redashGroupId}`);
+      logger.info(
+        `📊 Redash[${this.key}] addUserToGroup (Simulation): Added Redash User ID ${redashUserId} to Group ID ${redashGroupId}`,
+      );
       return;
     }
 
@@ -323,23 +459,41 @@ export class RedashService {
         await client.post(`/api/groups/${redashGroupId}/members`, {
           user_id: redashUserId,
         });
-        logger.info(`📊 Redash[${this.key}]: Successfully added User ${redashUserId} to Group ${redashGroupId}`);
+        logger.info(
+          `📊 Redash[${this.key}]: Successfully added User ${redashUserId} to Group ${redashGroupId}`,
+        );
       } catch (error: any) {
         // Check if user is already a member
-        if (error.response && error.response.status === 400 && error.response.data?.message?.includes('already a member')) {
-          logger.info(`📊 Redash[${this.key}]: User ${redashUserId} is already a member of Group ${redashGroupId}`);
+        if (
+          error.response &&
+          error.response.status === 400 &&
+          error.response.data?.message?.includes('already a member')
+        ) {
+          logger.info(
+            `📊 Redash[${this.key}]: User ${redashUserId} is already a member of Group ${redashGroupId}`,
+          );
           return;
         }
-        logger.error(`Failed to add user ${redashUserId} to group ${redashGroupId} in Redash[${this.key}]:`, error.message);
-        throw new Error(`Redash[${this.key}] API addUserToGroup error: ${error.message}`);
+        logger.error(
+          `Failed to add user ${redashUserId} to group ${redashGroupId} in Redash[${this.key}]:`,
+          error.message,
+        );
+        throw new Error(
+          `Redash[${this.key}] API addUserToGroup error: ${error.message}`,
+        );
       }
     });
   }
 
   // Remove User from Group
-  async removeUserFromGroup(redashUserId: number, redashGroupId: number): Promise<void> {
+  async removeUserFromGroup(
+    redashUserId: number,
+    redashGroupId: number,
+  ): Promise<void> {
     if (this.isSimulation) {
-      logger.info(`📊 Redash[${this.key}] removeUserFromGroup (Simulation): Removed Redash User ID ${redashUserId} from Group ID ${redashGroupId}`);
+      logger.info(
+        `📊 Redash[${this.key}] removeUserFromGroup (Simulation): Removed Redash User ID ${redashUserId} from Group ID ${redashGroupId}`,
+      );
       return;
     }
 
@@ -348,8 +502,12 @@ export class RedashService {
     return this.withUserLock(redashUserId, async () => {
       try {
         const client = this.getClient();
-        await client.delete(`/api/groups/${redashGroupId}/members/${redashUserId}`);
-        logger.info(`📊 Redash[${this.key}]: Successfully removed User ${redashUserId} from Group ${redashGroupId}`);
+        await client.delete(
+          `/api/groups/${redashGroupId}/members/${redashUserId}`,
+        );
+        logger.info(
+          `📊 Redash[${this.key}]: Successfully removed User ${redashUserId} from Group ${redashGroupId}`,
+        );
       } catch (error: any) {
         // Tolerate a 404 (membership/user already gone) so removal is idempotent —
         // matches disableUser/deleteGroup here and AWS's removeUserFromGroup. This is
@@ -357,11 +515,18 @@ export class RedashService {
         // (or deleted) directly in Redash, without the caller having to guess from a
         // possibly-stale cache whether the membership was really absent.
         if (error.response && error.response.status === 404) {
-          logger.info(`📊 Redash[${this.key}]: User ${redashUserId} already absent from Group ${redashGroupId}; nothing to remove`);
+          logger.info(
+            `📊 Redash[${this.key}]: User ${redashUserId} already absent from Group ${redashGroupId}; nothing to remove`,
+          );
           return;
         }
-        logger.error(`Failed to remove user ${redashUserId} from group ${redashGroupId} in Redash[${this.key}]:`, error.message);
-        throw new Error(`Redash[${this.key}] API removeUserFromGroup error: ${error.message}`);
+        logger.error(
+          `Failed to remove user ${redashUserId} from group ${redashGroupId} in Redash[${this.key}]:`,
+          error.message,
+        );
+        throw new Error(
+          `Redash[${this.key}] API removeUserFromGroup error: ${error.message}`,
+        );
       }
     });
   }
@@ -372,18 +537,27 @@ export class RedashService {
   async createGroup(name: string): Promise<{ id: number; name: string }> {
     if (this.isSimulation) {
       const fakeId = Math.floor(Math.random() * 9000) + 1000;
-      logger.info(`📊 Redash[${this.key}] createGroup (Simulation): Created Group "${name}" with ID ${fakeId}`);
+      logger.info(
+        `📊 Redash[${this.key}] createGroup (Simulation): Created Group "${name}" with ID ${fakeId}`,
+      );
       return { id: fakeId, name };
     }
 
     try {
       const client = this.getClient();
       const res = await client.post('/api/groups', { name });
-      logger.info(`📊 Redash[${this.key}]: Created Group "${name}" with ID ${res.data.id}`);
+      logger.info(
+        `📊 Redash[${this.key}]: Created Group "${name}" with ID ${res.data.id}`,
+      );
       return { id: res.data.id, name: res.data.name ?? name };
     } catch (error: any) {
-      logger.error(`Failed to create group "${name}" in Redash[${this.key}]:`, error.message);
-      throw new Error(`Redash[${this.key}] API createGroup error: ${error.message}`);
+      logger.error(
+        `Failed to create group "${name}" in Redash[${this.key}]:`,
+        error.message,
+      );
+      throw new Error(
+        `Redash[${this.key}] API createGroup error: ${error.message}`,
+      );
     }
   }
 
@@ -417,7 +591,9 @@ export class RedashService {
   // Delete a Redash group by id. Tolerates a 404 (already gone) so cleanup is idempotent.
   async deleteGroup(redashGroupId: number): Promise<void> {
     if (this.isSimulation) {
-      logger.info(`📊 Redash[${this.key}] deleteGroup (Simulation): Deleted Group ID ${redashGroupId}`);
+      logger.info(
+        `📊 Redash[${this.key}] deleteGroup (Simulation): Deleted Group ID ${redashGroupId}`,
+      );
       return;
     }
 
@@ -427,11 +603,18 @@ export class RedashService {
       logger.info(`📊 Redash[${this.key}]: Deleted Group ID ${redashGroupId}`);
     } catch (error: any) {
       if (error.response && error.response.status === 404) {
-        logger.info(`📊 Redash[${this.key}]: Group ID ${redashGroupId} already absent; nothing to delete`);
+        logger.info(
+          `📊 Redash[${this.key}]: Group ID ${redashGroupId} already absent; nothing to delete`,
+        );
         return;
       }
-      logger.error(`Failed to delete group ${redashGroupId} in Redash[${this.key}]:`, error.message);
-      throw new Error(`Redash[${this.key}] API deleteGroup error: ${error.message}`);
+      logger.error(
+        `Failed to delete group ${redashGroupId} in Redash[${this.key}]:`,
+        error.message,
+      );
+      throw new Error(
+        `Redash[${this.key}] API deleteGroup error: ${error.message}`,
+      );
     }
   }
 }
@@ -441,7 +624,9 @@ const instanceCache = new Map<string, RedashService>();
 /** One RedashService per instance key (prod, qa, ...), cached so repeated
  *  registration/lookup for the same instance reuses its axios client and
  *  per-user mutation locks instead of creating a fresh one each time. */
-export function getRedashService(instance: RedashInstanceConfig): RedashService {
+export function getRedashService(
+  instance: RedashInstanceConfig,
+): RedashService {
   let svc = instanceCache.get(instance.key);
   if (!svc) {
     svc = new RedashService(instance);

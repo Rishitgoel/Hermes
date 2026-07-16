@@ -1,10 +1,23 @@
 import { Request, Response, NextFunction } from 'express';
 import BaseController from './base.controller';
 import prisma from '../config/prisma';
-import secretIngestionService, { assertSecretsPlatform, isSecretsFamilyPlatform } from '../services/secret-ingestion.service';
+import secretIngestionService, {
+  assertSecretsPlatform,
+  isSecretsFamilyPlatform,
+} from '../services/secret-ingestion.service';
 import secretDriftService from '../services/secret-drift.service';
-import { AuthorizationError, NotFoundError, ValidationError } from '../utils/errors';
-import { submitIngestionSchema, reviewIngestionSchema, infraPreviewSchema, resolveDriftSchema, driftKeySchema } from '../validations/secret-ingestion.validation';
+import {
+  AuthorizationError,
+  NotFoundError,
+  ValidationError,
+} from '../utils/errors';
+import {
+  submitIngestionSchema,
+  reviewIngestionSchema,
+  infraPreviewSchema,
+  resolveDriftSchema,
+  driftKeySchema,
+} from '../validations/secret-ingestion.validation';
 
 /**
  * Controller for approval-gated Secret Ingestion workflows.
@@ -29,20 +42,33 @@ export class SecretIngestionController extends BaseController {
    */
   private resolveMinePlatform(): string | undefined {
     const raw = (this.req.query.platform as string) || undefined;
-    if (!raw) return undefined;
+    if (!raw) {
+      return undefined;
+    }
     const key = raw.toLowerCase();
     if (!isSecretsFamilyPlatform(key)) {
-      throw new ValidationError(`"${raw}" is not a configured Secret Ingestion instance.`);
+      throw new ValidationError(
+        `"${raw}" is not a configured Secret Ingestion instance.`,
+      );
     }
     return key;
   }
 
   // GET /api/secrets/scope[?platform=secrets-sandbox]
-  async getScope(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async getScope(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       const userId = this.getUserId();
-      if (!userId) return;
-      const scope = await secretIngestionService.getUserScope(userId, this.resolvePlatform());
+      if (!userId) {
+        return;
+      }
+      const scope = await secretIngestionService.getUserScope(
+        userId,
+        this.resolvePlatform(),
+      );
       this.sendResponse(scope, 'Secret scope retrieved');
     } catch (error) {
       this.handleError(error, 'Failed to retrieve secret scope');
@@ -50,12 +76,22 @@ export class SecretIngestionController extends BaseController {
   }
 
   // GET /api/secrets/keys?name=payment/gateway[&platform=secrets-sandbox]
-  async listKeys(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async listKeys(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {
+        return;
+      }
       const secretName = ((this.req.query.name as string) || '').trim();
-      const result = await secretIngestionService.listSecretKeys(userId, secretName, this.resolvePlatform());
+      const result = await secretIngestionService.listSecretKeys(
+        userId,
+        secretName,
+        this.resolvePlatform(),
+      );
       this.sendResponse(result, 'Secret keys retrieved');
     } catch (error) {
       this.handleError(error, 'Failed to retrieve secret keys');
@@ -63,13 +99,23 @@ export class SecretIngestionController extends BaseController {
   }
 
   // POST /api/secrets/requests/infra-preview — which manifests would change (compose screen)
-  async previewInfra(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async previewInfra(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       const validated = this.validateWithZod(infraPreviewSchema, this.req.body);
-      if (!validated.success) return;
+      if (!validated.success) {
+        return;
+      }
       const userId = this.getUserId();
-      if (!userId) return;
-      const platform = validated.data.platform ? assertSecretsPlatform(validated.data.platform) : undefined;
+      if (!userId) {
+        return;
+      }
+      const platform = validated.data.platform
+        ? assertSecretsPlatform(validated.data.platform)
+        : undefined;
       const result = await secretIngestionService.previewInfraTargets(
         userId,
         validated.data.secretName,
@@ -83,12 +129,23 @@ export class SecretIngestionController extends BaseController {
   }
 
   // POST /api/secrets/requests
-  async submitRequest(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async submitRequest(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
-      const validated = this.validateWithZod(submitIngestionSchema, this.req.body);
-      if (!validated.success) return;
+      const validated = this.validateWithZod(
+        submitIngestionSchema,
+        this.req.body,
+      );
+      if (!validated.success) {
+        return;
+      }
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {
+        return;
+      }
       const row = await secretIngestionService.createIngestionRequest({
         requester: this.user!,
         secretName: validated.data.secretName,
@@ -104,13 +161,24 @@ export class SecretIngestionController extends BaseController {
   }
 
   // GET /api/secrets/requests?scope=mine|review
-  async listRequests(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async listRequests(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {
+        return;
+      }
       const scope = this.req.query.scope === 'review' ? 'review' : 'mine';
-      const platform = scope === 'mine' ? this.resolveMinePlatform() : this.resolvePlatform();
-      const rows = await secretIngestionService.listIngestionRequests(this.user!, scope, platform);
+      const platform =
+        scope === 'mine' ? this.resolveMinePlatform() : this.resolvePlatform();
+      const rows = await secretIngestionService.listIngestionRequests(
+        this.user!,
+        scope,
+        platform,
+      );
       this.sendResponse(rows, 'Secret ingestion requests retrieved');
     } catch (error) {
       this.handleError(error, 'Failed to list secret ingestion requests');
@@ -118,9 +186,16 @@ export class SecretIngestionController extends BaseController {
   }
 
   // GET /api/secrets/drift[?platform=secrets] — admin drift report (AWS keys vs infra manifests)
-  async getDrift(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async getDrift(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
-      const report = await secretDriftService.detectDrift(this.user!, this.resolvePlatform() ?? 'secrets');
+      const report = await secretDriftService.detectDrift(
+        this.user!,
+        this.resolvePlatform() ?? 'secrets',
+      );
       this.sendResponse(report, 'Secret drift report generated');
     } catch (error) {
       this.handleError(error, 'Failed to generate secret drift report');
@@ -128,25 +203,44 @@ export class SecretIngestionController extends BaseController {
   }
 
   // POST /api/secrets/drift/resolve — open a draft PR registering the missing keys for one secret
-  async resolveDrift(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async resolveDrift(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       const validated = this.validateWithZod(resolveDriftSchema, this.req.body);
-      if (!validated.success) return;
-      const platform = validated.data.platform ? assertSecretsPlatform(validated.data.platform) : undefined;
-      const result = await secretDriftService.resolveDrift(this.user!, validated.data.secretName, platform ?? 'secrets');
+      if (!validated.success) {
+        return;
+      }
+      const platform = validated.data.platform
+        ? assertSecretsPlatform(validated.data.platform)
+        : undefined;
+      const result = await secretDriftService.resolveDrift(
+        this.user!,
+        validated.data.secretName,
+        platform ?? 'secrets',
+      );
       this.sendResponse(result, 'Drift reconciliation PR opened');
     } catch (error) {
       this.handleError(error, 'Failed to reconcile secret drift');
     }
   }
 
-
   // POST /api/secrets/drift/ignore — stop notifying about one missingInAws (dangling) key
-  async ignoreDriftKey(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async ignoreDriftKey(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       const validated = this.validateWithZod(driftKeySchema, this.req.body);
-      if (!validated.success) return;
-      const platform = validated.data.platform ? assertSecretsPlatform(validated.data.platform) : undefined;
+      if (!validated.success) {
+        return;
+      }
+      const platform = validated.data.platform
+        ? assertSecretsPlatform(validated.data.platform)
+        : undefined;
       const result = await secretDriftService.ignoreDriftKey(
         this.user!,
         validated.data.secretName,
@@ -160,11 +254,19 @@ export class SecretIngestionController extends BaseController {
   }
 
   // POST /api/secrets/drift/unignore — resume notifications for a previously-ignored key
-  async unignoreDriftKey(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async unignoreDriftKey(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       const validated = this.validateWithZod(driftKeySchema, this.req.body);
-      if (!validated.success) return;
-      const platform = validated.data.platform ? assertSecretsPlatform(validated.data.platform) : undefined;
+      if (!validated.success) {
+        return;
+      }
+      const platform = validated.data.platform
+        ? assertSecretsPlatform(validated.data.platform)
+        : undefined;
       const result = await secretDriftService.unignoreDriftKey(
         this.user!,
         validated.data.secretName,
@@ -178,21 +280,36 @@ export class SecretIngestionController extends BaseController {
   }
 
   // PUT /api/secrets/requests/:id/review
-  async reviewRequest(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async reviewRequest(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
-      const validated = this.validateWithZod(reviewIngestionSchema, this.req.body);
-      if (!validated.success) return;
+      const validated = this.validateWithZod(
+        reviewIngestionSchema,
+        this.req.body,
+      );
+      if (!validated.success) {
+        return;
+      }
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {
+        return;
+      }
       const id = this.req.params.id as string;
 
       const row = await prisma.secretIngestionRequest.findUnique({
         where: { id },
         select: { groupId: true, platform: true },
       });
-      if (!row) throw new NotFoundError('Secret ingestion request not found');
+      if (!row) {
+        throw new NotFoundError('Secret ingestion request not found');
+      }
       if (!(await secretIngestionService.canReview(this.user!, row))) {
-        throw new AuthorizationError('You do not have permission to review this secret ingestion request.');
+        throw new AuthorizationError(
+          'You do not have permission to review this secret ingestion request.',
+        );
       }
 
       const reviewer = { id: userId, username: this.user!.username };
@@ -210,19 +327,29 @@ export class SecretIngestionController extends BaseController {
 
   // POST /api/secrets/requests/:id/retry-merge — retry a stuck deployment PR merge (e.g. after
   // GitHub branch protection blocked the auto-merge and a human has since unblocked it)
-  async retryMerge(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async retryMerge(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {
+        return;
+      }
       const id = this.req.params.id as string;
 
       const row = await prisma.secretIngestionRequest.findUnique({
         where: { id },
         select: { groupId: true, platform: true },
       });
-      if (!row) throw new NotFoundError('Secret ingestion request not found');
+      if (!row) {
+        throw new NotFoundError('Secret ingestion request not found');
+      }
       if (!(await secretIngestionService.canReview(this.user!, row))) {
-        throw new AuthorizationError('You do not have permission to retry this secret ingestion request.');
+        throw new AuthorizationError(
+          'You do not have permission to retry this secret ingestion request.',
+        );
       }
 
       const updated = await secretIngestionService.retryInfraMerge(id);
@@ -234,19 +361,29 @@ export class SecretIngestionController extends BaseController {
 
   // POST /api/secrets/requests/:id/dismiss-merge — dismiss a stuck deployment PR merge (e.g. mark it CLOSED
   // in the database and close the PR on GitHub)
-  async dismissMerge(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async dismissMerge(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {
+        return;
+      }
       const id = this.req.params.id as string;
 
       const row = await prisma.secretIngestionRequest.findUnique({
         where: { id },
         select: { groupId: true, platform: true },
       });
-      if (!row) throw new NotFoundError('Secret ingestion request not found');
+      if (!row) {
+        throw new NotFoundError('Secret ingestion request not found');
+      }
       if (!(await secretIngestionService.canReview(this.user!, row))) {
-        throw new AuthorizationError('You do not have permission to dismiss this secret ingestion request.');
+        throw new AuthorizationError(
+          'You do not have permission to dismiss this secret ingestion request.',
+        );
       }
 
       const updated = await secretIngestionService.dismissInfraMerge(id);

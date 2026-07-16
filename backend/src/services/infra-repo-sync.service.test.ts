@@ -412,6 +412,7 @@ describe('live-mode GitHub calls (axios mocked)', () => {
     const svc = new InfraRepoSyncService();
     mockGet.mockImplementation((url: string) => {
       if (url.includes('/git/ref/heads/')) return Promise.resolve({ data: { object: { sha: 'base-commit-sha' } } });
+      if (url.includes('/git/commits/')) return Promise.resolve({ data: { tree: { sha: 'base-tree-sha' } } });
       if (url.includes('/contents/')) {
         return Promise.resolve({ data: { sha: 'base-sha', content: Buffer.from(VALUES, 'utf8').toString('base64') } });
       }
@@ -652,5 +653,79 @@ describe('live-mode GitHub calls (axios mocked)', () => {
     expect(prPayload).toBeDefined();
     expect(prPayload.title).toBe('[Hermes] chore(secrets): register 1 key(s) in Investment-Middleware-Secrets-Prod');
     expect(prPayload.body).toContain('**Requested by:** admin-alice (alice@bachatt.com)');
+  });
+
+  // --- markReady / merge diagnostics (auto-merge path) ---
+
+  /** Shared live-mode wiring for the merge path; `graphql` decides what markReady returns. */
+  const mergeHarness = (opts: { graphql: any; mergeError?: any }) => {
+    mockGet.mockImplementation((url: string) => {
+      if (url.includes('/git/ref/heads/')) return Promise.resolve({ data: { object: { sha: 'base-commit-sha' } } });
+      if (url.includes('/git/commits/')) return Promise.resolve({ data: { tree: { sha: 'base-tree-sha' } } });
+      if (url.includes('/contents/')) {
+        return Promise.resolve({ data: { sha: 'base-sha', content: Buffer.from(VALUES, 'utf8').toString('base64') } });
+      }
+      return Promise.reject(new Error(`unexpected GET ${url}`));
+    });
+    mockPost.mockImplementation((url: string) => {
+      if (url.includes('/graphql')) return Promise.resolve({ data: opts.graphql });
+      if (url.includes('/git/blobs')) return Promise.resolve({ data: { sha: 'blob-sha' } });
+      if (url.includes('/git/trees')) return Promise.resolve({ data: { sha: 'tree-sha' } });
+      if (url.includes('/git/commits')) return Promise.resolve({ data: { sha: 'new-commit-sha' } });
+      return Promise.resolve({ data: {} }); // comment
+    });
+    mockPut.mockImplementation((url: string) => {
+      if (url.includes('/merge')) {
+        if (opts.mergeError) return Promise.reject(opts.mergeError);
+        return Promise.resolve({ data: {} });
+      }
+      return Promise.resolve({ data: {} });
+    });
+    mockPatch.mockResolvedValue({ data: {} });
+
+    return new InfraRepoSyncService().mergePrForRequest({
+      request: {
+        id: 'req-1',
+        secretName: 'Investment-Middleware-Secrets-Prod',
+        infraPrNumber: 42,
+        infraPrNodeId: 'PR_node',
+        infraBranch: 'hermes/secret-keys/investment-middleware-secrets-prod-req-1',
+      },
+      approvedKeys: ['NEW_KEY'],
+      targets: [{ path: 'svc/prod/values-prod.yaml', manifestRef: 'Investment-Middleware-Secrets-Prod', format: 'helm-values' }],
+    });
+  };
+
+  it('markReady surfaces a GraphQL error instead of merging a still-draft PR', async () => {
+    // GraphQL reports mutation failures in a 200 body, so this used to resolve as success:
+    // the PR stayed a draft and the failure resurfaced as an unexplained 405 from the merge.
+    const result = await mergeHarness({
+      graphql: { errors: [{ message: 'Resource not accessible by integration' }] },
+    });
+
+    expect(result.state).toBe('FAILED');
+    expect(result.note).toMatch(/Resource not accessible by integration/);
+    // The real point: we never attempted a merge we knew would fail.
+    expect(mockPut).not.toHaveBeenCalledWith(expect.stringContaining('/merge'), expect.anything());
+  });
+
+  it('markReady treats "not a draft" as already-done and proceeds to merge', async () => {
+    // The retry path and the submit/review race both re-run markReady against a PR an
+    // earlier pass already flipped — that must stay a no-op, not become a failure.
+    const result = await mergeHarness({
+      graphql: { errors: [{ message: 'Pull request is not a draft' }] },
+    });
+
+    expect(result.state).toBe('MERGED');
+    expect(mockPut).toHaveBeenCalledWith(expect.stringContaining('/pulls/42/merge'), expect.anything());
+  });
+
+  it('a 405 merge failure quotes GitHub\'s own reason rather than asserting branch protection', async () => {
+    const err: any = new Error('blocked');
+    err.response = { status: 405, data: { message: 'Draft pull requests cannot be merged.' } };
+    const result = await mergeHarness({ graphql: {}, mergeError: err });
+
+    expect(result.state).toBe('FAILED');
+    expect(result.note).toMatch(/Draft pull requests cannot be merged/);
   });
 });

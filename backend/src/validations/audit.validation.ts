@@ -23,7 +23,7 @@ export const auditQuerySchema = z
   .transform((q) => {
     const cleaned: typeof q = { ...q };
     (Object.keys(cleaned) as (keyof typeof q)[]).forEach((k) => {
-      if (cleaned[k] === '') cleaned[k] = undefined;
+      if (cleaned[k] === '') {cleaned[k] = undefined;}
     });
     return cleaned;
   });

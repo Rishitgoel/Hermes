@@ -1,6 +1,10 @@
 import { z } from 'zod';
 
-export const groupSlugSchema = z.string().min(1).max(100).regex(/^[a-z0-9-]+$/, 'Slug must be lowercase alphanumeric with hyphens');
+export const groupSlugSchema = z
+  .string()
+  .min(1)
+  .max(100)
+  .regex(/^[a-z0-9-]+$/, 'Slug must be lowercase alphanumeric with hyphens');
 export const groupIdSchema = z.string().uuid('Invalid Group ID format');
 
 // ── Group CRUD (super / platform admin only — enforced in the controller) ─────
@@ -9,7 +13,11 @@ export const groupIdSchema = z.string().uuid('Invalid Group ID format');
 // its backing platform group — leave it blank on create and Hermes provisions one
 // via the platform adapter (the same path level CRUD uses).
 export const createGroupSchema = z.object({
-  name: z.string().trim().min(1, 'Name is required').max(100, 'Name must not exceed 100 characters'),
+  name: z
+    .string()
+    .trim()
+    .min(1, 'Name is required')
+    .max(100, 'Name must not exceed 100 characters'),
   slug: z
     .string()
     .trim()
@@ -25,7 +33,12 @@ export const createGroupSchema = z.object({
     .optional()
     .default(''),
   // Stored lowercase; the controller validates it against the provisioning registry.
-  platform: z.string().trim().min(1, 'Platform is required').max(50).toLowerCase(),
+  platform: z
+    .string()
+    .trim()
+    .min(1, 'Platform is required')
+    .max(50)
+    .toLowerCase(),
   icon: z.string().trim().max(100).optional(),
   color: z.string().trim().max(50).optional(),
   tables: z.array(z.string().trim().min(1)).max(200).optional(),
@@ -57,4 +70,6 @@ export const updateGroupSchema = z
     // Toggle implicit "everyone is a member" enrollment (see createGroupSchema).
     openEnrollment: z.boolean().optional(),
   })
-  .refine((data) => Object.keys(data).length > 0, { message: 'No fields to update' });
+  .refine(data => Object.keys(data).length > 0, {
+    message: 'No fields to update',
+  });

@@ -66,6 +66,12 @@ export interface SecretDrift {
   fixable: boolean;
 }
 
+/** A secret whose drift check threw — its true state is UNKNOWN, not "in sync". */
+export interface DriftFailure {
+  secretName: string;
+  error: string;
+}
+
 export interface DriftReport {
   platform: string;
   infraEnabled: boolean;
@@ -73,6 +79,13 @@ export interface DriftReport {
   truncated: boolean;
   generatedAt: string;
   drifts: SecretDrift[];
+  /**
+   * Secrets that could not be checked at all. Load-bearing: a failed check yields no drift entry,
+   * so without this an all-errors scan is indistinguishable from a clean one — the report reads
+   * "N scanned, no drift" while actually knowing nothing. Callers must treat a non-empty `failed`
+   * as "the report is incomplete", never as "these are fine".
+   */
+  failed: DriftFailure[];
 }
 
 export class SecretDriftService {
@@ -105,7 +118,11 @@ export class SecretDriftService {
     });
     return rows
       .filter((g): g is OwningGroup => !!g.externalGroupId)
-      .map((g) => ({ id: g.id, name: g.name, externalGroupId: g.externalGroupId }));
+      .map((g) => ({
+        id: g.id,
+        name: g.name,
+        externalGroupId: g.externalGroupId,
+      }));
   }
 
   /**
@@ -115,7 +132,10 @@ export class SecretDriftService {
   private async resolveScopedSecrets(
     platform: string,
     groups: OwningGroup[],
-  ): Promise<{ names: { secretName: string; group: OwningGroup }[]; truncated: boolean }> {
+  ): Promise<{
+    names: { secretName: string; group: OwningGroup }[];
+    truncated: boolean;
+  }> {
     const svc = getSecretsManagerService(platform);
     // Sort groups for deterministic ownership when a secret matches more than one.
     const ordered = [...groups].sort((a, b) => a.id.localeCompare(b.id));
@@ -123,12 +143,22 @@ export class SecretDriftService {
     const patternsByGroup = ordered
       .map((g) => {
         try {
-          return { group: g, patterns: svc.parseScopePatterns(g.externalGroupId) };
+          return {
+            group: g,
+            patterns: svc.parseScopePatterns(g.externalGroupId),
+          };
         } catch {
           return null;
         }
       })
-      .filter((x): x is { group: OwningGroup; patterns: ReturnType<typeof svc.parseScopePatterns> } => x !== null);
+      .filter(
+        (
+          x,
+        ): x is {
+          group: OwningGroup;
+          patterns: ReturnType<typeof svc.parseScopePatterns>;
+        } => x !== null,
+      );
 
     const needsLive = patternsByGroup.some((pg) => pg.patterns.some((p) => p.kind !== 'exact'));
     const allNames = needsLive ? await svc.listAllAwsSecrets() : [];
@@ -138,10 +168,14 @@ export class SecretDriftService {
     for (const { group, patterns } of patternsByGroup) {
       for (const p of patterns) {
         if (p.kind === 'exact') {
-          if (!owner.has(p.name)) owner.set(p.name, group);
+          if (!owner.has(p.name)) {
+            owner.set(p.name, group);
+          }
         } else {
           for (const name of allNames) {
-            if (svc.matchesPattern(p, name) && !owner.has(name)) owner.set(name, group);
+            if (svc.matchesPattern(p, name) && !owner.has(name)) {
+              owner.set(name, group);
+            }
           }
         }
       }
@@ -151,7 +185,10 @@ export class SecretDriftService {
       .map(([secretName, group]) => ({ secretName, group }))
       .sort((a, b) => a.secretName.localeCompare(b.secretName));
     const truncated = all.length > MAX_DRIFT_SECRETS;
-    return { names: truncated ? all.slice(0, MAX_DRIFT_SECRETS) : all, truncated };
+    return {
+      names: truncated ? all.slice(0, MAX_DRIFT_SECRETS) : all,
+      truncated,
+    };
   }
 
   /** Compute drift for one already-resolved secret. Returns null when the secret is fully in sync. */
@@ -169,7 +206,11 @@ export class SecretDriftService {
     );
 
     const registeredUnion = new Set<string>();
-    for (const m of manifests) for (const k of m.registeredKeys) registeredUnion.add(k);
+    for (const m of manifests) {
+      for (const k of m.registeredKeys) {
+        registeredUnion.add(k);
+      }
+    }
 
     const missingInManifest = [...new Set(manifests.flatMap((m) => m.missingKeys))].sort();
     const awsSet = new Set(awsKeys);
@@ -185,7 +226,9 @@ export class SecretDriftService {
     const hasDrift =
       manifests.length > 0 &&
       (missingInManifest.length > 0 || missingInAws.length > 0 || unmatchedManifests.length > 0);
-    if (!hasDrift) return null;
+    if (!hasDrift) {
+      return null;
+    }
 
     return {
       secretName,
@@ -217,7 +260,11 @@ export class SecretDriftService {
    */
   private async loadIgnoredKeys(platform: string): Promise<Map<string, Set<string>>> {
     const rows = await prisma.auditEntry.findMany({
-      where: { action: { in: ['SECRET_DRIFT_KEY_IGNORED', 'SECRET_DRIFT_KEY_UNIGNORED'] } },
+      where: {
+        action: {
+          in: ['SECRET_DRIFT_KEY_IGNORED', 'SECRET_DRIFT_KEY_UNIGNORED'],
+        },
+      },
       orderBy: { createdAt: 'desc' },
       take: 5000,
       select: { action: true, details: true },
@@ -225,10 +272,18 @@ export class SecretDriftService {
     const decided = new Set<string>(); // secretName::key pairs already resolved (latest wins)
     const ignored = new Map<string, Set<string>>();
     for (const row of rows) {
-      const d = (row.details ?? {}) as { platform?: string; secretName?: string; key?: string };
-      if (d.platform !== platform || !d.secretName || !d.key) continue;
+      const d = (row.details ?? {}) as {
+        platform?: string;
+        secretName?: string;
+        key?: string;
+      };
+      if (d.platform !== platform || !d.secretName || !d.key) {
+        continue;
+      }
       const pairKey = `${d.secretName}::${d.key}`;
-      if (decided.has(pairKey)) continue;
+      if (decided.has(pairKey)) {
+        continue;
+      }
       decided.add(pairKey);
       if (row.action === 'SECRET_DRIFT_KEY_IGNORED') {
         const set = ignored.get(d.secretName) ?? new Set<string>();
@@ -249,10 +304,13 @@ export class SecretDriftService {
       truncated: false,
       generatedAt: new Date().toISOString(),
       drifts: [],
+      failed: [],
     };
     // With no infra-deployment repo wired there are no manifests to compare against — every
     // secret would look "unconsumed", which is noise, not drift. Report nothing instead.
-    if (!infraEnabled || groups.length === 0) return base;
+    if (!infraEnabled || groups.length === 0) {
+      return base;
+    }
 
     const { names, truncated } = await this.resolveScopedSecrets(platform, groups);
     if (truncated) {
@@ -265,6 +323,7 @@ export class SecretDriftService {
     const ignoredBySecret = await this.loadIgnoredKeys(platform);
 
     const drifts: SecretDrift[] = [];
+    const failed: DriftFailure[] = [];
     // Bounded concurrency: each secret is an independent AWS read + (cached) manifest lookup.
     const CONCURRENCY = 6;
     let next = 0;
@@ -279,19 +338,40 @@ export class SecretDriftService {
             group,
             ignoredBySecret.get(secretName),
           );
-          if (drift) drifts.push(drift);
+          if (drift) {
+            drifts.push(drift);
+          }
         } catch (err: any) {
+          // Record it, don't just swallow it: a failed check produces no drift entry, so
+          // dropping it here silently downgrades "we don't know" to "no drift found".
+          failed.push({
+            secretName,
+            error: err?.message ? String(err.message) : String(err),
+          });
           logger.warn(
             { platform, secretName, error: err.message },
-            'Secret drift check failed for one secret — skipping it',
+            'Secret drift check failed for one secret — reporting it as unchecked',
           );
         }
       }
     });
     await Promise.all(workers);
 
+    if (failed.length > 0) {
+      logger.error(
+        { platform, failed: failed.length, of: names.length },
+        'Secret drift scan could not check every secret — report is incomplete',
+      );
+    }
     drifts.sort((a, b) => a.secretName.localeCompare(b.secretName));
-    return { ...base, scannedSecretCount: names.length, truncated, drifts };
+    failed.sort((a, b) => a.secretName.localeCompare(b.secretName));
+    return {
+      ...base,
+      scannedSecretCount: names.length,
+      truncated,
+      drifts,
+      failed,
+    };
   }
 
   /**
@@ -310,6 +390,7 @@ export class SecretDriftService {
         truncated: false,
         generatedAt: new Date().toISOString(),
         drifts: [],
+        failed: [],
       };
     }
     const groups = await this.groupsForScope(key, scope);
@@ -355,11 +436,7 @@ export class SecretDriftService {
    * manually on GitHub. When auto-merge is on, Hermes merges immediately after opening.
    * Authorization: the caller must manage a secrets group whose scope covers the secret.
    */
-  async resolveDrift(
-    user: AuthenticatedUser,
-    secretName: string,
-    platform: string = PLATFORM,
-  ) {
+  async resolveDrift(user: AuthenticatedUser, secretName: string, platform: string = PLATFORM) {
     const key = assertSecretsPlatform(platform);
     if (!isInfraRepoEnabled(key)) {
       throw new ValidationError(
@@ -407,7 +484,10 @@ export class SecretDriftService {
     // full resolution. When off (default), the PR stays open for a human to review and merge
     // manually on GitHub (the existing two-step flow).
     if (result.state === 'OPEN' && isInfraAutoMergeEnabled(key)) {
-      const mergeResult = await getInfraRepoSyncService(key).mergeDriftPr(secretName, drift.missingInManifest);
+      const mergeResult = await getInfraRepoSyncService(key).mergeDriftPr(
+        secretName,
+        drift.missingInManifest,
+      );
       await prisma.auditEntry.create({
         data: {
           action: 'SECRET_DRIFT_MERGED',
@@ -507,16 +587,28 @@ export class SecretDriftService {
     }
     const groups = await this.groupsForScope(key, { all: true, groupIds: [] });
     const report = await this.computeDrift(key, groups);
-    if (report.drifts.length === 0) return { drifting: 0, alerted: 0 };
+    if (report.drifts.length === 0) {
+      return { drifting: 0, alerted: 0 };
+    }
 
     // Ignored missingInAws keys don't count toward notifications (that's the whole point of
     // ignoring one) — strip them before fingerprinting/alerting, and drop any secret whose
     // drift is entirely resolved once its ignored keys are excluded. The on-demand report
     // (computeDrift above) is untouched — it still shows ignored keys, badged, for visibility.
     const effectiveDrifts = report.drifts
-      .map((d) => ({ ...d, missingInAws: d.missingInAws.filter((k) => !d.missingInAwsIgnored.includes(k)) }))
-      .filter((d) => d.missingInManifest.length > 0 || d.missingInAws.length > 0 || d.unmatchedManifests.length > 0);
-    if (effectiveDrifts.length === 0) return { drifting: report.drifts.length, alerted: 0 };
+      .map((d) => ({
+        ...d,
+        missingInAws: d.missingInAws.filter((k) => !d.missingInAwsIgnored.includes(k)),
+      }))
+      .filter(
+        (d) =>
+          d.missingInManifest.length > 0 ||
+          d.missingInAws.length > 0 ||
+          d.unmatchedManifests.length > 0,
+      );
+    if (effectiveDrifts.length === 0) {
+      return { drifting: report.drifts.length, alerted: 0 };
+    }
 
     // Last-alerted fingerprint per secret, newest first (the first row seen per secret wins).
     const previous = await prisma.auditEntry.findMany({
@@ -527,15 +619,25 @@ export class SecretDriftService {
     });
     const lastFingerprint = new Map<string, string>();
     for (const row of previous) {
-      const d = (row.details ?? {}) as { platform?: string; secretName?: string; fingerprint?: string };
-      if (d.platform !== key || !d.secretName || !d.fingerprint) continue;
-      if (!lastFingerprint.has(d.secretName)) lastFingerprint.set(d.secretName, d.fingerprint);
+      const d = (row.details ?? {}) as {
+        platform?: string;
+        secretName?: string;
+        fingerprint?: string;
+      };
+      if (d.platform !== key || !d.secretName || !d.fingerprint) {
+        continue;
+      }
+      if (!lastFingerprint.has(d.secretName)) {
+        lastFingerprint.set(d.secretName, d.fingerprint);
+      }
     }
 
     const newlyDrifting = effectiveDrifts.filter(
       (d) => lastFingerprint.get(d.secretName) !== this.fingerprint(d),
     );
-    if (newlyDrifting.length === 0) return { drifting: report.drifts.length, alerted: 0 };
+    if (newlyDrifting.length === 0) {
+      return { drifting: report.drifts.length, alerted: 0 };
+    }
 
     // Record the new fingerprints first so a notification failure below can't cause the same
     // drift to be alerted again on the next run (the audit rows are the dedupe state).
@@ -557,7 +659,11 @@ export class SecretDriftService {
 
     await notificationService.notifySecretDriftDetected(key, newlyDrifting);
     logger.warn(
-      { platform: key, drifting: report.drifts.length, alerted: newlyDrifting.length },
+      {
+        platform: key,
+        drifting: report.drifts.length,
+        alerted: newlyDrifting.length,
+      },
       'Secret drift detected — admins notified',
     );
     return { drifting: report.drifts.length, alerted: newlyDrifting.length };
@@ -566,7 +672,9 @@ export class SecretDriftService {
   /** Scan every enabled, infra-wired secrets instance and notify on new drift. */
   async scanAllAndNotify(): Promise<void> {
     for (const platform of secretsFamilyPlatforms()) {
-      if (!isInfraRepoEnabled(platform)) continue;
+      if (!isInfraRepoEnabled(platform)) {
+        continue;
+      }
       try {
         await this.scanAndNotify(platform);
       } catch (err: any) {

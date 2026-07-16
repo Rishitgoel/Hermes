@@ -19,12 +19,21 @@ import logger from '../utils/logger';
 
 export async function ensureDefaultGroupMembership(
   platform: string,
-  user: { userId: string; userName: string; userEmail: string; externalUserId?: string | null },
+  user: {
+    userId: string;
+    userName: string;
+    userEmail: string;
+    externalUserId?: string | null;
+  },
 ): Promise<void> {
   // Identify the built-in "default" group from the synced cache (name "default",
   // type "builtin") rather than a hardcoded id — the id varies per Redash instance.
   const ext = await prisma.platformExternalGroup.findFirst({
-    where: { platform, type: 'builtin', name: { equals: 'default', mode: 'insensitive' } },
+    where: {
+      platform,
+      type: 'builtin',
+      name: { equals: 'default', mode: 'insensitive' },
+    },
     select: { externalId: true },
   });
   if (!ext) {

@@ -467,7 +467,14 @@ export function registerEventListeners(): void {
           const opened = await infra.openPrForRequest({
             requestId,
             secretName: row.secretName,
-            proposedKeys: newApprovedKeys,
+            // The FULL approved set, not newApprovedKeys: "AWS already holds this key" does not
+            // imply "a manifest already registers it" — a key in AWS that no manifest lists is
+            // precisely what drift detection reports, and narrowing to the new-to-AWS subset
+            // would open no PR for it, leaving it unregistered for good. openPrForRequest diffs
+            // the live manifest and adds only genuinely-missing keys, so passing everything
+            // approved is safe (an already-registered key just yields SKIPPED). Mirrors
+            // retryInfraMerge's re-open, which passes the full set for the same reason.
+            proposedKeys: approvedKeys,
             targets,
             requesterName: row.requesterName,
             requesterEmail: row.requesterEmail,
@@ -492,6 +499,7 @@ export function registerEventListeners(): void {
           rejectedKeys,
           requesterName: row.requesterName ?? undefined,
           requesterEmail: row.requesterEmail ?? undefined,
+          reviewerName: row.reviewerName ?? undefined,
         };
         const synced = isInfraAutoMergeEnabled(instance)
           ? await infra.mergePrForRequest({
@@ -505,7 +513,6 @@ export function registerEventListeners(): void {
               request: req,
               approvedKeys,
               targets,
-              newApprovedKeys,
               review,
             });
         await persistInfraResult(requestId, synced);

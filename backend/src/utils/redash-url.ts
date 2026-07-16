@@ -25,11 +25,13 @@ export function normalizeRedashInviteLink<T extends string | null | undefined>(
   link: T,
   baseUrl: string = config.redash.baseUrl,
 ): T {
-  if (!link) return link;
+  if (!link) {
+    return link;
+  }
   try {
     if (link.startsWith('/')) {
       const base = baseUrl.replace(/\/$/, '');
-      return (`${base}${link}`) as T;
+      return `${base}${link}` as T;
     }
     const parsedUrl = new URL(link);
     const configuredUrl = new URL(baseUrl);

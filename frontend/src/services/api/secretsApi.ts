@@ -1,5 +1,5 @@
-import apiClient from '../apiClient';
-import { fetchPlatforms } from './platforms';
+import apiClient from "../apiClient";
+import { fetchPlatforms } from "./platforms";
 
 /** One Secret Ingestion instance (AWS account) as offered by the prod/sandbox chooser. */
 export interface SecretsInstance {
@@ -13,11 +13,19 @@ export interface SecretsInstance {
  */
 export const listSecretsInstances = async (): Promise<SecretsInstance[]> => {
   const platforms = await fetchPlatforms();
-  return platforms
-    .filter((p) => p.family === 'secrets')
-    .map((p) => ({ key: p.key, label: p.label || p.displayName }))
-    // Prod ("secrets") first, then the rest alphabetically for a stable chooser order.
-    .sort((a, b) => (a.key === 'secrets' ? -1 : b.key === 'secrets' ? 1 : a.key.localeCompare(b.key)));
+  return (
+    platforms
+      .filter((p) => p.family === "secrets")
+      .map((p) => ({ key: p.key, label: p.label || p.displayName }))
+      // Prod ("secrets") first, then the rest alphabetically for a stable chooser order.
+      .sort((a, b) =>
+        a.key === "secrets"
+          ? -1
+          : b.key === "secrets"
+            ? 1
+            : a.key.localeCompare(b.key),
+      )
+  );
 };
 
 export interface SecretScopeEntry {
@@ -37,7 +45,7 @@ export interface SecretIngestionEntry {
   key: string;
   /** null once the request is terminal — values are redacted server-side. */
   value: string | null;
-  decision?: 'APPROVED' | 'REJECTED' | null;
+  decision?: "APPROVED" | "REJECTED" | null;
   applied?: boolean;
   error?: string | null;
   /**
@@ -48,9 +56,15 @@ export interface SecretIngestionEntry {
   previousValue?: string | null;
 }
 
-export type SecretIngestionStatus = 'PENDING' | 'APPLYING' | 'APPLIED' | 'PARTIALLY_APPLIED' | 'APPLY_FAILED' | 'REJECTED';
+export type SecretIngestionStatus =
+  | "PENDING"
+  | "APPLYING"
+  | "APPLIED"
+  | "PARTIALLY_APPLIED"
+  | "APPLY_FAILED"
+  | "REJECTED";
 
-export type InfraManifestFormat = 'helm-values' | 'spc';
+export type InfraManifestFormat = "helm-values" | "spc";
 
 /** A manifest the auto-scan found, with the keys a request would add to it (compose preview). */
 export interface InfraTargetPreview {
@@ -108,7 +122,7 @@ export interface SecretIngestionRequest {
   // infra-deployment PR mirror
   infraPrNumber?: number | null;
   infraPrUrl?: string | null;
-  infraSyncState?: 'OPEN' | 'MERGED' | 'CLOSED' | 'SKIPPED' | 'FAILED' | null;
+  infraSyncState?: "OPEN" | "MERGED" | "CLOSED" | "SKIPPED" | "FAILED" | null;
   infraSyncNote?: string | null;
   infraTargets?: InfraTargetSelection[] | null;
 }
@@ -117,14 +131,35 @@ export interface SecretIngestionRequest {
 // targets prod ("secrets"); the reviewer inbox (listIngestionRequests scope 'review' with no
 // platform) intentionally merges the whole family so an admin sees both accounts in one list.
 
-export const getSecretScope = (platform?: string): Promise<SecretScopeEntry[]> =>
-  apiClient.get('/api/secrets/scope', { params: platform ? { platform } : {} }).then((r) => r.data);
+export const getSecretScope = (
+  platform?: string,
+): Promise<SecretScopeEntry[]> =>
+  apiClient
+    .get("/api/secrets/scope", { params: platform ? { platform } : {} })
+    .then((r) => r.data);
 
-export const listSecretKeys = (name: string, platform?: string): Promise<SecretKeysResult> =>
-  apiClient.get('/api/secrets/keys', { params: { name, ...(platform ? { platform } : {}) } }).then((r) => r.data);
+export const listSecretKeys = (
+  name: string,
+  platform?: string,
+): Promise<SecretKeysResult> =>
+  apiClient
+    .get("/api/secrets/keys", {
+      params: { name, ...(platform ? { platform } : {}) },
+    })
+    .then((r) => r.data);
 
-export const previewInfraTargets = (secretName: string, keys: string[], platform?: string): Promise<InfraPreviewResult> =>
-  apiClient.post('/api/secrets/requests/infra-preview', { secretName, keys, ...(platform ? { platform } : {}) }).then((r) => r.data);
+export const previewInfraTargets = (
+  secretName: string,
+  keys: string[],
+  platform?: string,
+): Promise<InfraPreviewResult> =>
+  apiClient
+    .post("/api/secrets/requests/infra-preview", {
+      secretName,
+      keys,
+      ...(platform ? { platform } : {}),
+    })
+    .then((r) => r.data);
 
 export const submitIngestionRequest = (payload: {
   secretName: string;
@@ -133,26 +168,46 @@ export const submitIngestionRequest = (payload: {
   infraTargets?: InfraTargetSelection[];
   platform?: string;
 }): Promise<SecretIngestionRequest> =>
-  apiClient.post('/api/secrets/requests', payload).then((r) => r.data);
+  apiClient.post("/api/secrets/requests", payload).then((r) => r.data);
 
-export const listIngestionRequests = (scope: 'mine' | 'review', platform?: string): Promise<SecretIngestionRequest[]> =>
-  apiClient.get('/api/secrets/requests', { params: { scope, ...(platform ? { platform } : {}) } }).then((r) => r.data);
+export const listIngestionRequests = (
+  scope: "mine" | "review",
+  platform?: string,
+): Promise<SecretIngestionRequest[]> =>
+  apiClient
+    .get("/api/secrets/requests", {
+      params: { scope, ...(platform ? { platform } : {}) },
+    })
+    .then((r) => r.data);
 
 export const reviewIngestionRequest = (
   id: string,
-  payload: { decisions: { key: string; decision: 'APPROVED' | 'REJECTED' }[]; note?: string }
+  payload: {
+    decisions: { key: string; decision: "APPROVED" | "REJECTED" }[];
+    note?: string;
+  },
 ): Promise<SecretIngestionRequest> =>
-  apiClient.put(`/api/secrets/requests/${id}/review`, payload).then((r) => r.data);
+  apiClient
+    .put(`/api/secrets/requests/${id}/review`, payload)
+    .then((r) => r.data);
 
 /** Retries a stuck deployment PR merge (infraSyncState FAILED — e.g. GitHub branch protection
  *  blocked the auto-merge) once a human has unblocked the underlying cause. */
-export const retryIngestionMerge = (id: string): Promise<SecretIngestionRequest> =>
-  apiClient.post(`/api/secrets/requests/${id}/retry-merge`, {}).then((r) => r.data);
+export const retryIngestionMerge = (
+  id: string,
+): Promise<SecretIngestionRequest> =>
+  apiClient
+    .post(`/api/secrets/requests/${id}/retry-merge`, {})
+    .then((r) => r.data);
 
 /** Dismisses a stuck deployment PR merge (infraSyncState FAILED — e.g. after a merge failure
  *  has been manually resolved or is obsolete). */
-export const dismissIngestionMerge = (id: string): Promise<SecretIngestionRequest> =>
-  apiClient.post(`/api/secrets/requests/${id}/dismiss-merge`, {}).then((r) => r.data);
+export const dismissIngestionMerge = (
+  id: string,
+): Promise<SecretIngestionRequest> =>
+  apiClient
+    .post(`/api/secrets/requests/${id}/dismiss-merge`, {})
+    .then((r) => r.data);
 
 // ── Drift detection (AWS Secrets Manager ⇄ infra-deployment manifests) ──────────────
 
@@ -186,6 +241,12 @@ export interface SecretDrift {
   fixable: boolean;
 }
 
+/** A secret whose drift check threw — its state is UNKNOWN, not "in sync". */
+export interface DriftFailure {
+  secretName: string;
+  error: string;
+}
+
 export interface DriftReport {
   platform: string;
   infraEnabled: boolean;
@@ -193,10 +254,13 @@ export interface DriftReport {
   truncated: boolean;
   generatedAt: string;
   drifts: SecretDrift[];
+  /** Secrets that could not be checked. Non-empty ⇒ the report is incomplete, so an empty
+   * `drifts` must NOT be presented as "everything is in sync". */
+  failed?: DriftFailure[];
 }
 
 export interface DriftResolveResult {
-  state: 'OPEN' | 'MERGED' | 'CLOSED' | 'SKIPPED' | 'FAILED';
+  state: "OPEN" | "MERGED" | "CLOSED" | "SKIPPED" | "FAILED";
   secretName: string;
   keys?: string[];
   prNumber?: number | null;
@@ -206,14 +270,43 @@ export interface DriftResolveResult {
 }
 
 export const getSecretDrift = (platform?: string): Promise<DriftReport> =>
-  apiClient.get('/api/secrets/drift', { params: platform ? { platform } : {} }).then((r) => r.data);
+  apiClient
+    .get("/api/secrets/drift", { params: platform ? { platform } : {} })
+    .then((r) => r.data);
 
-export const resolveSecretDrift = (secretName: string, platform?: string): Promise<DriftResolveResult> =>
-  apiClient.post('/api/secrets/drift/resolve', { secretName, ...(platform ? { platform } : {}) }).then((r) => r.data);
+export const resolveSecretDrift = (
+  secretName: string,
+  platform?: string,
+): Promise<DriftResolveResult> =>
+  apiClient
+    .post("/api/secrets/drift/resolve", {
+      secretName,
+      ...(platform ? { platform } : {}),
+    })
+    .then((r) => r.data);
 
+export const ignoreDriftKey = (
+  secretName: string,
+  key: string,
+  platform?: string,
+): Promise<{ secretName: string; key: string; ignored: boolean }> =>
+  apiClient
+    .post("/api/secrets/drift/ignore", {
+      secretName,
+      key,
+      ...(platform ? { platform } : {}),
+    })
+    .then((r) => r.data);
 
-export const ignoreDriftKey = (secretName: string, key: string, platform?: string): Promise<{ secretName: string; key: string; ignored: boolean }> =>
-  apiClient.post('/api/secrets/drift/ignore', { secretName, key, ...(platform ? { platform } : {}) }).then((r) => r.data);
-
-export const unignoreDriftKey = (secretName: string, key: string, platform?: string): Promise<{ secretName: string; key: string; ignored: boolean }> =>
-  apiClient.post('/api/secrets/drift/unignore', { secretName, key, ...(platform ? { platform } : {}) }).then((r) => r.data);
+export const unignoreDriftKey = (
+  secretName: string,
+  key: string,
+  platform?: string,
+): Promise<{ secretName: string; key: string; ignored: boolean }> =>
+  apiClient
+    .post("/api/secrets/drift/unignore", {
+      secretName,
+      key,
+      ...(platform ? { platform } : {}),
+    })
+    .then((r) => r.data);

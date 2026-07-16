@@ -85,25 +85,25 @@ export const CommandPalette: React.FC = () => {
     const isGroupAdmin = (scopes?.groups?.length ?? 0) > 0;
 
     const pages: PaletteItem[] = [
-      { key: 'page:/', label: 'Dashboard', hint: 'Page', path: '/', icon: <Icons.LayoutDashboard size={16} /> },
-      { key: 'page:/groups', label: 'Groups', hint: 'Page', path: '/groups', icon: <Icons.Layers size={16} /> },
-      { key: 'page:/my-requests', label: 'My Requests', hint: 'Page', path: '/my-requests', icon: <Icons.FileClock size={16} /> },
+      { key: 'page:/', label: 'Dashboard', hint: 'Page', path: '/hermes', icon: <Icons.LayoutDashboard size={16} /> },
+      { key: 'page:/groups', label: 'Groups', hint: 'Page', path: '/hermes/groups', icon: <Icons.Layers size={16} /> },
+      { key: 'page:/my-requests', label: 'My Requests', hint: 'Page', path: '/hermes/my-requests', icon: <Icons.FileClock size={16} /> },
     ];
     if (isSuper || isPlatformAdmin || isGroupAdmin) {
-      pages.push({ key: 'page:/pending-approvals', label: 'Pending Approvals', hint: 'Page', path: '/pending-approvals', icon: <Icons.CheckSquare size={16} /> });
+      pages.push({ key: 'page:/pending-approvals', label: 'Pending Approvals', hint: 'Page', path: '/hermes/pending-approvals', icon: <Icons.CheckSquare size={16} /> });
     }
     if (isSuper || isPlatformAdmin) {
-      pages.push({ key: 'page:/admin', label: 'Admin Management', hint: 'Page', path: '/admin', icon: <Icons.ShieldCheck size={16} /> });
+      pages.push({ key: 'page:/admin', label: 'Admin Management', hint: 'Page', path: '/hermes/admin', icon: <Icons.ShieldCheck size={16} /> });
     }
     if (isSuper) {
-      pages.push({ key: 'page:/audit-log', label: 'Audit Log', hint: 'Page', path: '/audit-log', icon: <Icons.History size={16} /> });
+      pages.push({ key: 'page:/audit-log', label: 'Audit Log', hint: 'Page', path: '/hermes/audit-log', icon: <Icons.History size={16} /> });
     }
 
     const groups: PaletteItem[] = (groupsQuery.data ?? []).map((g) => ({
       key: `group:${g.id}`,
       label: g.name,
       hint: 'Group',
-      path: `/groups/${g.slug}`,
+      path: `/hermes/groups/${g.slug}`,
       icon: <Icons.Database size={16} />,
     }));
 

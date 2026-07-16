@@ -27,11 +27,16 @@ export class ProvisioningRegistry {
     // RedashProvisioner (own platform key), so prod and QA never share state.
     for (const instance of config.redashInstances) {
       if (!instance.baseUrl) {
-        logger.info(`🔌 Provisioning Registry: Skipping Redash instance "${instance.key}" (no base URL configured)`);
+        logger.info(
+          `🔌 Provisioning Registry: Skipping Redash instance "${instance.key}" (no base URL configured)`,
+        );
         continue;
       }
       const service = getRedashService(instance);
-      this.register(instance.key, createRedashProvisioner({ ...instance, service }));
+      this.register(
+        instance.key,
+        createRedashProvisioner({ ...instance, service }),
+      );
     }
     this.register('aws', awsProvisioner);
     this.register('zookeeper', zookeeperProvisioner);
@@ -43,7 +48,9 @@ export class ProvisioningRegistry {
     // own SecretsManagerService (own AWS account/credentials/cache) via its unique platform key.
     for (const instance of config.secretsInstances) {
       if (!instance.enabled) {
-        logger.info(`🔌 Provisioning Registry: Skipping Secret Ingestion instance "${instance.key}" (not configured)`);
+        logger.info(
+          `🔌 Provisioning Registry: Skipping Secret Ingestion instance "${instance.key}" (not configured)`,
+        );
         continue;
       }
       this.register(instance.key, createSecretsProvisioner(instance));
@@ -54,7 +61,9 @@ export class ProvisioningRegistry {
   register(platform: string, adapter: PlatformAdapter) {
     const key = platform.toLowerCase();
     this.registry.set(key, adapter);
-    logger.info(`🔌 Provisioning Registry: Registered provisioner for platform "${key}"`);
+    logger.info(
+      `🔌 Provisioning Registry: Registered provisioner for platform "${key}"`,
+    );
   }
 
   /**
@@ -67,7 +76,9 @@ export class ProvisioningRegistry {
   unregister(platform: string): void {
     const key = platform.toLowerCase();
     this.registry.delete(key);
-    logger.info(`🔌 Provisioning Registry: Unregistered provisioner for platform "${key}"`);
+    logger.info(
+      `🔌 Provisioning Registry: Unregistered provisioner for platform "${key}"`,
+    );
   }
 
   get(platform: string): PlatformAdapter {
@@ -92,7 +103,9 @@ export class ProvisioningRegistry {
     return Array.from(this.registry.keys());
   }
 
-  async healthCheckAll(): Promise<Record<string, { healthy: boolean; message?: string }>> {
+  async healthCheckAll(): Promise<
+    Record<string, { healthy: boolean; message?: string }>
+  > {
     const results: Record<string, { healthy: boolean; message?: string }> = {};
     for (const [key, adapter] of this.registry) {
       try {

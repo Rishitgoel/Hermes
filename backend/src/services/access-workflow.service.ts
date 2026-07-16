@@ -4,12 +4,37 @@ import provisioningRegistry from './provisioning.registry';
 import { PlatformAdapter } from './provisioner.interface';
 import eventBus from './event-bus';
 import logger from '../utils/logger';
-import { AccessDuration, AccessRequest, RequestStatus, UserCreationStatus, Prisma } from '@prisma/client';
-import { ValidationError, NotFoundError, ConflictError, UserNotApprovedError } from '../utils/errors';
+import {
+  AccessDuration,
+  AccessRequest,
+  RequestStatus,
+  UserCreationStatus,
+  Prisma,
+} from '../../generated/hermes';
+import {
+  ValidationError,
+  NotFoundError,
+  ConflictError,
+  UserNotApprovedError,
+} from '../utils/errors';
 
-type GroupRow = { id: string; name: string; slug: string; platform: string; externalGroupId: string | null };
-type LevelRow = { id: string; name: string; slug: string; externalGroupId: string | null };
-type AccessRequestWithGroup = AccessRequest & { group: GroupRow; level?: LevelRow | null };
+type GroupRow = {
+  id: string;
+  name: string;
+  slug: string;
+  platform: string;
+  externalGroupId: string | null;
+};
+type LevelRow = {
+  id: string;
+  name: string;
+  slug: string;
+  externalGroupId: string | null;
+};
+type AccessRequestWithGroup = AccessRequest & {
+  group: GroupRow;
+  level?: LevelRow | null;
+};
 
 // After this many consecutive failed auto-expiry attempts, the scheduler stops
 // retrying every cron run: it force-marks the grant inactive in Hermes, audits it,
@@ -27,7 +52,7 @@ export class AccessWorkflowService {
     const d = new Date();
     const day = d.getDate();
     d.setMonth(d.getMonth() + months);
-    if (d.getDate() !== day) d.setDate(0); // overflowed into the next month → clamp back
+    if (d.getDate() !== day) {d.setDate(0);} // overflowed into the next month → clamp back
     return d;
   }
 
@@ -53,10 +78,10 @@ export class AccessWorkflowService {
     groupId: string,
     justification: string,
     duration: AccessDuration,
-    levelId?: string | null
+    levelId?: string | null,
   ) {
     const group = await prisma.group.findUnique({ where: { id: groupId } });
-    if (!group) throw new NotFoundError('Group not found');
+    if (!group) {throw new NotFoundError('Group not found');}
 
     // Open-enrollment groups are granted to everyone implicitly — there is nothing
     // to request. Refuse so no pending request is ever created for one (that would
@@ -73,16 +98,22 @@ export class AccessWorkflowService {
     });
     let level: LevelRow | null = null;
     if (activeLevels.length > 0) {
-      if (!levelId) throw new ValidationError('This group requires selecting a level.');
-      level = activeLevels.find((l) => l.id === levelId) ?? null;
-      if (!level) throw new ValidationError('Invalid or inactive level for this group.');
+      if (!levelId)
+        {throw new ValidationError('This group requires selecting a level.');}
+      level = activeLevels.find(l => l.id === levelId) ?? null;
+      if (!level)
+        {throw new ValidationError('Invalid or inactive level for this group.');}
       // A level must be backed by its own external group. Block the request early
       // rather than silently falling back to the base group at provision time.
       if (!level.externalGroupId) {
-        throw new ValidationError('This level is not fully configured yet (no backing platform group). Please contact an admin.');
+        throw new ValidationError(
+          'This level is not fully configured yet (no backing platform group). Please contact an admin.',
+        );
       }
     } else if (levelId) {
-      throw new ValidationError('This group has no levels; do not specify a level.');
+      throw new ValidationError(
+        'This group has no levels; do not specify a level.',
+      );
     }
 
     // Check if there is an active access
@@ -102,14 +133,24 @@ export class AccessWorkflowService {
       where: {
         requesterId: requester.id,
         groupId: groupId,
-        status: { in: [RequestStatus.PENDING, RequestStatus.WAITING_FOR_SETUP] },
+        status: {
+          in: [RequestStatus.PENDING, RequestStatus.WAITING_FOR_SETUP],
+        },
       },
     });
     if (pendingRequest) {
-      throw new ConflictError('You already have a pending request for this group.');
+      throw new ConflictError(
+        'You already have a pending request for this group.',
+      );
     }
 
-    return this._persistPendingRequest(requester, group, level, justification, duration);
+    return this._persistPendingRequest(
+      requester,
+      group,
+      level,
+      justification,
+      duration,
+    );
   }
 
   /**
@@ -133,7 +174,7 @@ export class AccessWorkflowService {
     duration: AccessDuration,
   ): Promise<AccessRequest> {
     const group = await prisma.group.findUnique({ where: { id: groupId } });
-    if (!group) throw new NotFoundError('Group not found');
+    if (!group) {throw new NotFoundError('Group not found');}
 
     // Open enrollment never expires and holds no grant to extend.
     if (group.openEnrollment) {
@@ -156,7 +197,9 @@ export class AccessWorkflowService {
       where: {
         requesterId: requester.id,
         groupId,
-        status: { in: [RequestStatus.PENDING, RequestStatus.WAITING_FOR_SETUP] },
+        status: {
+          in: [RequestStatus.PENDING, RequestStatus.WAITING_FOR_SETUP],
+        },
       },
     });
     if (pendingRequest) {
@@ -175,7 +218,13 @@ export class AccessWorkflowService {
       });
     }
 
-    return this._persistPendingRequest(requester, group, level, justification, duration);
+    return this._persistPendingRequest(
+      requester,
+      group,
+      level,
+      justification,
+      duration,
+    );
   }
 
   /**
@@ -195,61 +244,92 @@ export class AccessWorkflowService {
    */
   async createRequestsBulk(
     requester: { id: string; username: string; email: string },
-    items: { groupId: string; levelId?: string | null; justification: string }[],
+    items: {
+      groupId: string;
+      levelId?: string | null;
+      justification: string;
+    }[],
     duration: AccessDuration,
   ): Promise<{
-    created: { groupId: string; requestId: string; groupName: string; levelName: string | null }[];
+    created: {
+      groupId: string;
+      requestId: string;
+      groupName: string;
+      levelName: string | null;
+    }[];
     failed: { groupId: string; groupName: string | null; error: string }[];
   }> {
     // De-dupe by groupId (the UI sends unique ids, but this also prevents an
     // intra-batch collision against the open-request unique index).
     const seenGroup = new Set<string>();
-    const deduped = items.filter((it) => {
-      if (seenGroup.has(it.groupId)) return false;
+    const deduped = items.filter(it => {
+      if (seenGroup.has(it.groupId)) {return false;}
       seenGroup.add(it.groupId);
       return true;
     });
-    const groupIds = deduped.map((it) => it.groupId);
+    const groupIds = deduped.map(it => it.groupId);
 
     // Batch-load everything per-item validation needs — no N+1.
-    const [groups, activeLevels, activeAccesses, openRequests] = await Promise.all([
-      prisma.group.findMany({ where: { id: { in: groupIds } } }),
-      prisma.groupLevel.findMany({ where: { groupId: { in: groupIds }, isActive: true } }),
-      prisma.userAccess.findMany({
-        where: { userId: requester.id, groupId: { in: groupIds }, isActive: true },
-        select: { groupId: true },
-      }),
-      prisma.accessRequest.findMany({
-        where: {
-          requesterId: requester.id,
-          groupId: { in: groupIds },
-          status: { in: [RequestStatus.PENDING, RequestStatus.WAITING_FOR_SETUP] },
-        },
-        select: { groupId: true },
-      }),
-    ]);
+    const [groups, activeLevels, activeAccesses, openRequests] =
+      await Promise.all([
+        prisma.group.findMany({ where: { id: { in: groupIds } } }),
+        prisma.groupLevel.findMany({
+          where: { groupId: { in: groupIds }, isActive: true },
+        }),
+        prisma.userAccess.findMany({
+          where: {
+            userId: requester.id,
+            groupId: { in: groupIds },
+            isActive: true,
+          },
+          select: { groupId: true },
+        }),
+        prisma.accessRequest.findMany({
+          where: {
+            requesterId: requester.id,
+            groupId: { in: groupIds },
+            status: {
+              in: [RequestStatus.PENDING, RequestStatus.WAITING_FOR_SETUP],
+            },
+          },
+          select: { groupId: true },
+        }),
+      ]);
 
-    const groupById = new Map(groups.map((g) => [g.id, g]));
+    const groupById = new Map(groups.map(g => [g.id, g]));
     const levelsByGroup = new Map<string, LevelRow[]>();
     for (const lvl of activeLevels) {
       const arr = levelsByGroup.get(lvl.groupId) ?? [];
       arr.push(lvl);
       levelsByGroup.set(lvl.groupId, arr);
     }
-    const hasActiveAccess = new Set(activeAccesses.map((a) => a.groupId));
-    const hasOpenRequest = new Set(openRequests.map((r) => r.groupId));
+    const hasActiveAccess = new Set(activeAccesses.map(a => a.groupId));
+    const hasOpenRequest = new Set(openRequests.map(r => r.groupId));
 
     const expiresAt = this.calculateExpiry(duration);
-    const valid: { group: GroupRow; level: LevelRow | null; justification: string }[] = [];
-    const failed: { groupId: string; groupName: string | null; error: string }[] = [];
+    const valid: {
+      group: GroupRow;
+      level: LevelRow | null;
+      justification: string;
+    }[] = [];
+    const failed: {
+      groupId: string;
+      groupName: string | null;
+      error: string;
+    }[] = [];
 
     for (const it of deduped) {
       const group = groupById.get(it.groupId);
       if (!group) {
-        failed.push({ groupId: it.groupId, groupName: null, error: 'Group not found' });
+        failed.push({
+          groupId: it.groupId,
+          groupName: null,
+          error: 'Group not found',
+        });
         continue;
       }
-      const fail = (error: string) => failed.push({ groupId: it.groupId, groupName: group.name, error });
+      const fail = (error: string) =>
+        failed.push({ groupId: it.groupId, groupName: group.name, error });
 
       // Open enrollment: implicitly granted to everyone, so there is nothing to request.
       if (group.openEnrollment) {
@@ -265,13 +345,15 @@ export class AccessWorkflowService {
           fail('This group requires selecting a level.');
           continue;
         }
-        level = levels.find((l) => l.id === it.levelId) ?? null;
+        level = levels.find(l => l.id === it.levelId) ?? null;
         if (!level) {
           fail('Invalid or inactive level for this group.');
           continue;
         }
         if (!level.externalGroupId) {
-          fail('This level is not fully configured yet (no backing platform group). Please contact an admin.');
+          fail(
+            'This level is not fully configured yet (no backing platform group). Please contact an admin.',
+          );
           continue;
         }
       } else if (it.levelId) {
@@ -300,10 +382,18 @@ export class AccessWorkflowService {
     // open-request unique index mid-transaction and roll the whole batch back — surface
     // that as a retryable conflict rather than silently dropping the valid items.
     const bulkId = randomUUID();
-    let createdRows: { request: AccessRequest; group: GroupRow; level: LevelRow | null }[];
+    let createdRows: {
+      request: AccessRequest;
+      group: GroupRow;
+      level: LevelRow | null;
+    }[];
     try {
-      createdRows = await prisma.$transaction(async (tx) => {
-        const out: { request: AccessRequest; group: GroupRow; level: LevelRow | null }[] = [];
+      createdRows = await prisma.$transaction(async tx => {
+        const out: {
+          request: AccessRequest;
+          group: GroupRow;
+          level: LevelRow | null;
+        }[] = [];
         for (const v of valid) {
           const request = await tx.accessRequest.create({
             data: {
@@ -359,7 +449,7 @@ export class AccessWorkflowService {
         requesterId: requester.id,
         requesterName: requester.username,
         duration,
-        items: createdRows.map((r) => ({
+        items: createdRows.map(r => ({
           requestId: r.request.id,
           groupId: r.group.id,
           groupName: r.group.name,
@@ -370,7 +460,7 @@ export class AccessWorkflowService {
     });
 
     return {
-      created: createdRows.map((r) => ({
+      created: createdRows.map(r => ({
         groupId: r.group.id,
         requestId: r.request.id,
         groupName: r.group.name,
@@ -417,7 +507,9 @@ export class AccessWorkflowService {
       // second tab) slipped past the check-then-create above. Surface it the same
       // way the precheck would have.
       if (err?.code === 'P2002') {
-        throw new ConflictError('You already have a pending request for this group.');
+        throw new ConflictError(
+          'You already have a pending request for this group.',
+        );
       }
       throw err;
     }
@@ -540,8 +632,9 @@ export class AccessWorkflowService {
       where: { id: userAccessId },
       include: { group: true, level: true },
     });
-    if (!access) throw new NotFoundError('Member access grant not found');
-    if (!access.isActive) throw new ValidationError('This grant is no longer active.');
+    if (!access) {throw new NotFoundError('Member access grant not found');}
+    if (!access.isActive)
+      {throw new ValidationError('This grant is no longer active.');}
 
     const activeLevels = await prisma.groupLevel.findMany({
       where: { groupId: access.groupId, isActive: true },
@@ -549,10 +642,13 @@ export class AccessWorkflowService {
     if (activeLevels.length === 0) {
       throw new ValidationError('This group has no levels to assign.');
     }
-    const targetLevel = activeLevels.find((l) => l.id === levelId) ?? null;
-    if (!targetLevel) throw new ValidationError('Invalid or inactive level for this group.');
+    const targetLevel = activeLevels.find(l => l.id === levelId) ?? null;
+    if (!targetLevel)
+      {throw new ValidationError('Invalid or inactive level for this group.');}
     if (!targetLevel.externalGroupId) {
-      throw new ValidationError('This level is not fully configured yet (no backing platform group). Configure it first.');
+      throw new ValidationError(
+        'This level is not fully configured yet (no backing platform group). Configure it first.',
+      );
     }
     if (access.levelId === targetLevel.id) {
       throw new ConflictError('This member already holds that level.');
@@ -566,12 +662,16 @@ export class AccessWorkflowService {
         where: { id: access.accessRequestId },
         select: { duration: true },
       });
-      if (orig) duration = orig.duration;
+      if (orig) {duration = orig.duration;}
     }
 
     const fullRequest = await this._persistSelfReviewedRequest({
       performer: { id: performer.id, username: performer.username },
-      target: { id: access.userId, name: access.userName, email: access.userEmail },
+      target: {
+        id: access.userId,
+        name: access.userName,
+        email: access.userEmail,
+      },
       groupId: access.groupId,
       level: targetLevel,
       justification: `Level set to "${targetLevel.name}" by ${performer.username} via Admin Management`,
@@ -583,7 +683,10 @@ export class AccessWorkflowService {
         fromLevelName: access.level?.name ?? null,
       },
     });
-    return this._provision(fullRequest, { id: performer.id, name: performer.username });
+    return this._provision(fullRequest, {
+      id: performer.id,
+      name: performer.username,
+    });
   }
 
   /**
@@ -604,38 +707,52 @@ export class AccessWorkflowService {
     duration: AccessDuration,
   ): Promise<{ kind: 'provisioned' | 'queued'; request: AccessRequest }> {
     const group = await prisma.group.findUnique({ where: { id: groupId } });
-    if (!group) throw new NotFoundError('Group not found');
+    if (!group) {throw new NotFoundError('Group not found');}
 
     // Level requiredness — mirrors createRequest exactly.
-    const activeLevels = await prisma.groupLevel.findMany({ where: { groupId, isActive: true } });
+    const activeLevels = await prisma.groupLevel.findMany({
+      where: { groupId, isActive: true },
+    });
     let level: LevelRow | null = null;
     if (activeLevels.length > 0) {
-      if (!levelId) throw new ValidationError('This group requires selecting a level.');
-      level = activeLevels.find((l) => l.id === levelId) ?? null;
-      if (!level) throw new ValidationError('Invalid or inactive level for this group.');
+      if (!levelId)
+        {throw new ValidationError('This group requires selecting a level.');}
+      level = activeLevels.find(l => l.id === levelId) ?? null;
+      if (!level)
+        {throw new ValidationError('Invalid or inactive level for this group.');}
       if (!level.externalGroupId) {
-        throw new ValidationError('This level is not fully configured yet (no backing platform group). Configure it first.');
+        throw new ValidationError(
+          'This level is not fully configured yet (no backing platform group). Configure it first.',
+        );
       }
     } else if (levelId) {
-      throw new ValidationError('This group has no levels; do not specify a level.');
+      throw new ValidationError(
+        'This group has no levels; do not specify a level.',
+      );
     }
 
     const activeAccess = await prisma.userAccess.findFirst({
       where: { userId: target.id, groupId, isActive: true },
     });
     if (activeAccess) {
-      throw new ConflictError('This user is already an active member of this group.');
+      throw new ConflictError(
+        'This user is already an active member of this group.',
+      );
     }
 
     const openRequest = await prisma.accessRequest.findFirst({
       where: {
         requesterId: target.id,
         groupId,
-        status: { in: [RequestStatus.PENDING, RequestStatus.WAITING_FOR_SETUP] },
+        status: {
+          in: [RequestStatus.PENDING, RequestStatus.WAITING_FOR_SETUP],
+        },
       },
     });
     if (openRequest) {
-      throw new ConflictError('This user already has an open request for this group — review that request instead.');
+      throw new ConflictError(
+        'This user already has an open request for this group — review that request instead.',
+      );
     }
 
     // Per-platform account gate — same bar as reviewRequest's APPROVED branch.
@@ -684,7 +801,9 @@ export class AccessWorkflowService {
         // Partial unique open-request index fired (a concurrent submit slipped past
         // the check above) — surface it the same way the precheck would have.
         if (err?.code === 'P2002') {
-          throw new ConflictError('This user already has an open request for this group — review that request instead.');
+          throw new ConflictError(
+            'This user already has an open request for this group — review that request instead.',
+          );
         }
         throw err;
       }
@@ -733,7 +852,10 @@ export class AccessWorkflowService {
       reviewNote,
       auditDetails: { adminAdded: true },
     });
-    const provisioned = await this._provision(fullRequest, { id: performer.id, name: performer.username });
+    const provisioned = await this._provision(fullRequest, {
+      id: performer.id,
+      name: performer.username,
+    });
     return { kind: 'provisioned', request: provisioned };
   }
 
@@ -742,14 +864,14 @@ export class AccessWorkflowService {
     requestId: string,
     reviewer: { id: string; username: string },
     status: 'APPROVED' | 'REJECTED',
-    note?: string
+    note?: string,
   ) {
     const request = await prisma.accessRequest.findUnique({
       where: { id: requestId },
       include: { group: true, level: true },
     });
 
-    if (!request) throw new NotFoundError('Access request not found');
+    if (!request) {throw new NotFoundError('Access request not found');}
     if (request.status !== RequestStatus.PENDING) {
       throw new ValidationError('Access request is already reviewed');
     }
@@ -882,7 +1004,11 @@ export class AccessWorkflowService {
       },
     });
 
-    return this._provision(request, { id: reviewer.id, name: reviewer.username }, note);
+    return this._provision(
+      request,
+      { id: reviewer.id, name: reviewer.username },
+      note,
+    );
   }
 
   /**
@@ -896,9 +1022,14 @@ export class AccessWorkflowService {
    * Platform routing is explicit — there is no implicit default, because
    * guessing would silently provision against the wrong system.
    */
-  private requirePlatform(group: { platform: string | null; name: string }): string {
+  private requirePlatform(group: {
+    platform: string | null;
+    name: string;
+  }): string {
     if (!group.platform) {
-      throw new ValidationError(`Group "${group.name}" has no platform configured`);
+      throw new ValidationError(
+        `Group "${group.name}" has no platform configured`,
+      );
     }
     return group.platform.toLowerCase();
   }
@@ -919,7 +1050,8 @@ export class AccessWorkflowService {
     excludeGroupId?: string;
     excludeUserAccessIds?: string[];
   }): Promise<Map<string, string[]>> {
-    const { keys, platform, keyType, excludeGroupId, excludeUserAccessIds } = args;
+    const { keys, platform, keyType, excludeGroupId, excludeUserAccessIds } =
+      args;
     const keyField = keyType === 'email' ? 'userEmail' : 'userId';
     const others = await prisma.userAccess.findMany({
       where: {
@@ -927,7 +1059,9 @@ export class AccessWorkflowService {
         isActive: true,
         group: { platform },
         ...(excludeGroupId ? { groupId: { not: excludeGroupId } } : {}),
-        ...(excludeUserAccessIds ? { id: { notIn: excludeUserAccessIds } } : {}),
+        ...(excludeUserAccessIds
+          ? { id: { notIn: excludeUserAccessIds } }
+          : {}),
       },
       include: { group: true, level: true },
     });
@@ -937,7 +1071,7 @@ export class AccessWorkflowService {
     }
     for (const a of others) {
       const externalId = a.level?.externalGroupId ?? a.group.externalGroupId;
-      if (!externalId) continue;
+      if (!externalId) {continue;}
       const key = keyType === 'email' ? a.userEmail : a.userId;
       const list = byKey.get(key) ?? [];
       list.push(externalId);
@@ -970,9 +1104,17 @@ export class AccessWorkflowService {
   ): Promise<void> {
     const provisioner = provisioningRegistry.get(platform);
     const retainExternalGroupId = provisioner.reconcileMembers
-      ? await this.collectRetainedExternalGroupId(userId, platform, userAccessId)
+      ? await this.collectRetainedExternalGroupId(
+          userId,
+          platform,
+          userAccessId,
+        )
       : undefined;
-    await provisioner.deprovision({ externalUserId, externalGroupId, retainExternalGroupId });
+    await provisioner.deprovision({
+      externalUserId,
+      externalGroupId,
+      retainExternalGroupId,
+    });
   }
 
   private async _provision(
@@ -986,7 +1128,10 @@ export class AccessWorkflowService {
     // fails (e.g. the level-swap transaction aborts on a concurrent revoke), the
     // user has already been added to the external group with no Hermes grant
     // backing it — flag that in the failure audit so it can be cleaned up manually.
-    let platformProvisioned: { externalUserId: string; externalGroupId: string } | null = null;
+    let platformProvisioned: {
+      externalUserId: string;
+      externalGroupId: string;
+    } | null = null;
 
     try {
       // Platform routing happens here: the registry hands back the adapter
@@ -1014,7 +1159,10 @@ export class AccessWorkflowService {
         name: request.requesterName,
         userId: request.requesterId,
         externalGroupId,
-        metadata: { groupSlug: request.group.slug, levelSlug: request.level?.slug ?? null },
+        metadata: {
+          groupSlug: request.group.slug,
+          levelSlug: request.level?.slug ?? null,
+        },
       });
       const externalUserId = result.externalUserId;
       platformProvisioned = { externalUserId, externalGroupId };
@@ -1035,7 +1183,11 @@ export class AccessWorkflowService {
       // genuine concurrent duplicate (double-provision of one request) and is left to
       // the P2002 short-circuit in the create branch below — not a swap.
       const existingGrant = await prisma.userAccess.findFirst({
-        where: { userId: request.requesterId, groupId: request.groupId, isActive: true },
+        where: {
+          userId: request.requesterId,
+          groupId: request.groupId,
+          isActive: true,
+        },
         include: { level: true },
       });
       if (existingGrant && existingGrant.accessRequestId !== request.id) {
@@ -1078,7 +1230,11 @@ export class AccessWorkflowService {
         // not a hard failure, and point back to the existing grant.
         if (createErr?.code === 'P2002') {
           const existing = await prisma.userAccess.findFirst({
-            where: { userId: request.requesterId, groupId: request.groupId, isActive: true },
+            where: {
+              userId: request.requesterId,
+              groupId: request.groupId,
+              isActive: true,
+            },
           });
           if (existing) {
             logger.info(
@@ -1129,7 +1285,10 @@ export class AccessWorkflowService {
         note,
       });
     } catch (err: any) {
-      logger.error(`Provisioning failed for request ${request.id}:`, err.message);
+      logger.error(
+        `Provisioning failed for request ${request.id}:`,
+        err.message,
+      );
 
       await prisma.accessRequest.update({
         where: { id: request.id },
@@ -1195,8 +1354,18 @@ export class AccessWorkflowService {
       note?: string;
     },
   ): Promise<AccessRequest> {
-    const { externalUserId, grantedAt, expiresAt, performer, platform, newExternalGroupId, provisioner, note } = ctx;
-    const oldExternalGroupId = existingGrant.level?.externalGroupId ?? request.group.externalGroupId;
+    const {
+      externalUserId,
+      grantedAt,
+      expiresAt,
+      performer,
+      platform,
+      newExternalGroupId,
+      provisioner,
+      note,
+    } = ctx;
+    const oldExternalGroupId =
+      existingGrant.level?.externalGroupId ?? request.group.externalGroupId;
     // Same level being re-granted = a renewal (extend the expiry), not a level change.
     // Drives the request/audit wording below; the platform deprovision is skipped
     // anyway because both levels resolve to the same external group.
@@ -1208,13 +1377,15 @@ export class AccessWorkflowService {
     // guarded with `isActive: true` + a row-count check, so a concurrent revoke that
     // slipped in between _provision's read and here aborts the swap (transaction
     // rolls back) instead of silently re-granting access the admin just removed.
-    const { finalRequest, newAccess } = await prisma.$transaction(async (tx) => {
+    const { finalRequest, newAccess } = await prisma.$transaction(async tx => {
       const deactivated = await tx.userAccess.updateMany({
         where: { id: existingGrant.id, isActive: true },
         data: { isActive: false, revokedAt: new Date() },
       });
       if (deactivated.count === 0) {
-        throw new ConflictError('This access was changed by someone else — please retry the level change.');
+        throw new ConflictError(
+          'This access was changed by someone else — please retry the level change.',
+        );
       }
 
       const newAccess = await tx.userAccess.create({
@@ -1294,7 +1465,11 @@ export class AccessWorkflowService {
     // short-circuits a same-level renewal for single-target adapters (which ignore the
     // hint and would otherwise drop the one shared group).
     let oldDeprovisionError: string | null = null;
-    if (existingGrant.externalUserId && oldExternalGroupId && oldExternalGroupId !== newExternalGroupId) {
+    if (
+      existingGrant.externalUserId &&
+      oldExternalGroupId &&
+      oldExternalGroupId !== newExternalGroupId
+    ) {
       // Keep every target the user still legitimately holds after the swap: the NEW
       // mapping (this group's new level) AND every OTHER active grant on this platform —
       // so a shared ZooKeeper znode path held via a DIFFERENT group is not stripped.
@@ -1305,9 +1480,15 @@ export class AccessWorkflowService {
       // deactivated above, so the query returns only the user's OTHER groups. Skip the
       // query for single-target adapters (no reconcileMembers) — they ignore the hint.
       const crossGroupRetain = provisioner.reconcileMembers
-        ? await this.collectRetainedExternalGroupId(request.requesterId, platform, newAccess.id)
+        ? await this.collectRetainedExternalGroupId(
+            request.requesterId,
+            platform,
+            newAccess.id,
+          )
         : undefined;
-      const retainExternalGroupId = [newExternalGroupId, crossGroupRetain].filter(Boolean).join('\n');
+      const retainExternalGroupId = [newExternalGroupId, crossGroupRetain]
+        .filter(Boolean)
+        .join('\n');
       try {
         await provisioner.deprovision({
           externalUserId: existingGrant.externalUserId,
@@ -1317,7 +1498,12 @@ export class AccessWorkflowService {
       } catch (err: any) {
         oldDeprovisionError = err.message;
         logger.error(
-          { userAccessId: existingGrant.id, platform, oldExternalGroupId, error: err.message },
+          {
+            userAccessId: existingGrant.id,
+            platform,
+            oldExternalGroupId,
+            error: err.message,
+          },
           'Level change: failed to remove the user from the previous level group — flagged for manual cleanup',
         );
       }
@@ -1395,7 +1581,14 @@ export class AccessWorkflowService {
       note?: string;
     },
   ): Promise<AccessRequest> {
-    const { performer, platform, externalUserId, externalGroupId, expiresAt, note } = ctx;
+    const {
+      performer,
+      platform,
+      externalUserId,
+      externalGroupId,
+      expiresAt,
+      note,
+    } = ctx;
 
     const finalRequest = await prisma.accessRequest.update({
       where: { id: request.id },
@@ -1457,21 +1650,27 @@ export class AccessWorkflowService {
    * does not also reject the user's requests on other platforms); all platforms if
    * omitted. Mirrors the per-platform filter on provisionWaitingRequests.
    */
-  async cascadeRejectForUser(userId: string, note: string, platform?: string): Promise<number> {
+  async cascadeRejectForUser(
+    userId: string,
+    note: string,
+    platform?: string,
+  ): Promise<number> {
     const toReject = await prisma.accessRequest.findMany({
       where: {
         requesterId: userId,
-        status: { in: [RequestStatus.PENDING, RequestStatus.WAITING_FOR_SETUP] },
+        status: {
+          in: [RequestStatus.PENDING, RequestStatus.WAITING_FOR_SETUP],
+        },
         ...(platform ? { group: { platform } } : {}),
       },
       include: { group: true },
     });
-    if (toReject.length === 0) return 0;
+    if (toReject.length === 0) {return 0;}
 
     const now = new Date();
     await prisma.$transaction([
       prisma.accessRequest.updateMany({
-        where: { id: { in: toReject.map((r) => r.id) } },
+        where: { id: { in: toReject.map(r => r.id) } },
         data: {
           status: RequestStatus.REJECTED,
           // Stamp the system as reviewer so rejected rows don't show an empty
@@ -1483,7 +1682,7 @@ export class AccessWorkflowService {
         },
       }),
       prisma.auditEntry.createMany({
-        data: toReject.map((r) => ({
+        data: toReject.map(r => ({
           action: 'REQUEST_REJECTED',
           performerId: 'system_cascade',
           performerName: 'System (cascade reject)',
@@ -1538,7 +1737,7 @@ export class AccessWorkflowService {
       },
       include: { group: true, level: true },
     });
-    if (waiting.length === 0) return { provisioned: 0, failed: 0 };
+    if (waiting.length === 0) {return { provisioned: 0, failed: 0 };}
 
     let provisioned = 0;
     let failed = 0;
@@ -1550,7 +1749,10 @@ export class AccessWorkflowService {
       });
 
       try {
-        await this._provision(req, { id: 'system_sync', name: 'System (post-setup)' });
+        await this._provision(req, {
+          id: 'system_sync',
+          name: 'System (post-setup)',
+        });
         provisioned += 1;
       } catch (err: any) {
         failed += 1;
@@ -1574,21 +1776,23 @@ export class AccessWorkflowService {
     userAccessId: string,
     revoker: { id: string; username: string },
     reason?: string,
-    force: boolean = false
+    force: boolean = false,
   ) {
     const access = await prisma.userAccess.findUnique({
       where: { id: userAccessId },
       include: { group: true, level: true },
     });
 
-    if (!access) throw new NotFoundError('User access grant not found');
-    if (!access.isActive) throw new ValidationError('Access is already inactive');
+    if (!access) {throw new NotFoundError('User access grant not found');}
+    if (!access.isActive)
+      {throw new ValidationError('Access is already inactive');}
 
     // 1. Remove from platform Group — resolve via the level the user was actually
     // granted on (falls back to the group for legacy/level-less grants), matching
     // how _provision picked the target.
     const externalUserId = access.externalUserId;
-    const externalGroupId = access.level?.externalGroupId ?? access.group.externalGroupId;
+    const externalGroupId =
+      access.level?.externalGroupId ?? access.group.externalGroupId;
     const platform = this.requirePlatform(access.group);
 
     // 1. Disable UserAccess entry FIRST
@@ -1602,9 +1806,18 @@ export class AccessWorkflowService {
 
     if (externalUserId && externalGroupId) {
       try {
-        await this.deprovisionWithRetain(access.userId, platform, userAccessId, externalUserId, externalGroupId);
+        await this.deprovisionWithRetain(
+          access.userId,
+          platform,
+          userAccessId,
+          externalUserId,
+          externalGroupId,
+        );
       } catch (err: any) {
-        logger.error(`Failed to deprovision user from platform ${platform} during revocation of ${userAccessId}:`, err.message);
+        logger.error(
+          `Failed to deprovision user from platform ${platform} during revocation of ${userAccessId}:`,
+          err.message,
+        );
         if (!force) {
           // A genuinely-absent membership (user removed from the group, or deleted,
           // directly on the platform) is NOT a failure: the adapters' deprovision
@@ -1678,12 +1891,15 @@ export class AccessWorkflowService {
       include: { group: true, level: true },
     });
 
-    if (!access || !access.isActive) return;
+    if (!access || !access.isActive) {return;}
 
-    logger.info(`Expiring temporary access grant ${userAccessId} for user ${access.userName} in group ${access.group.name}...`);
+    logger.info(
+      `Expiring temporary access grant ${userAccessId} for user ${access.userName} in group ${access.group.name}...`,
+    );
 
     const externalUserId = access.externalUserId;
-    const externalGroupId = access.level?.externalGroupId ?? access.group.externalGroupId;
+    const externalGroupId =
+      access.level?.externalGroupId ?? access.group.externalGroupId;
     const platform = this.requirePlatform(access.group);
 
     // 1. Disable UserAccess entry FIRST
@@ -1697,7 +1913,13 @@ export class AccessWorkflowService {
 
     if (externalUserId && externalGroupId) {
       try {
-        await this.deprovisionWithRetain(access.userId, platform, userAccessId, externalUserId, externalGroupId);
+        await this.deprovisionWithRetain(
+          access.userId,
+          platform,
+          userAccessId,
+          externalUserId,
+          externalGroupId,
+        );
       } catch (err: any) {
         const attempts = access.expiryAttempts + 1;
         logger.error(
@@ -1723,7 +1945,12 @@ export class AccessWorkflowService {
         // Hermes, audit it, and alert admins — the user may still exist on the
         // platform, so it's flagged for manual cleanup rather than silently dropped.
         // Deliberately do NOT re-throw, so the scheduler stops re-fetching this grant.
-        await this.forceExpireAfterFailure(access, attempts, err.message, platform);
+        await this.forceExpireAfterFailure(
+          access,
+          attempts,
+          err.message,
+          platform,
+        );
         return;
       }
     }
@@ -1750,7 +1977,11 @@ export class AccessWorkflowService {
         targetUserName: access.userName,
         groupId: access.groupId,
         accessRequestId: access.accessRequestId,
-        details: { userAccessId, levelId: access.levelId ?? null, levelName: access.level?.name ?? null },
+        details: {
+          userAccessId,
+          levelId: access.levelId ?? null,
+          levelName: access.level?.name ?? null,
+        },
       },
     });
 
@@ -1775,7 +2006,7 @@ export class AccessWorkflowService {
       include: { group: true },
     });
 
-    if (!access || !access.isActive || access.expiryWarnedAt) return;
+    if (!access || !access.isActive || access.expiryWarnedAt) {return;}
 
     await prisma.userAccess.update({
       where: { id: userAccessId },
@@ -1801,7 +2032,9 @@ export class AccessWorkflowService {
    * the platform and needs manual cleanup.
    */
   private async forceExpireAfterFailure(
-    access: Prisma.UserAccessGetPayload<{ include: { group: true; level: true } }>,
+    access: Prisma.UserAccessGetPayload<{
+      include: { group: true; level: true };
+    }>,
     attempts: number,
     errorMessage: string,
     platform: string,

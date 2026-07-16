@@ -19,12 +19,13 @@ export class PlatformController extends BaseController {
   //    instance within its family (e.g. "Prod"/"QA"); null when not set.
   async list(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const platforms = provisioningRegistry.listPlatforms()
-        .filter((key) => {
+      const platforms = provisioningRegistry
+        .listPlatforms()
+        .filter(key => {
           const adapter = provisioningRegistry.get(key);
           return !(adapter.isEnabled && !adapter.isEnabled());
         })
-        .map((key) => {
+        .map(key => {
           const adapter = provisioningRegistry.get(key);
           return {
             key,
@@ -35,7 +36,7 @@ export class PlatformController extends BaseController {
           };
         });
       this.sendResponse(
-        { live: platforms.map((p) => p.key), platforms },
+        { live: platforms.map(p => p.key), platforms },
         'Platforms retrieved',
       );
     } catch (error) {

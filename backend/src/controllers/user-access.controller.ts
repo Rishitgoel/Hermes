@@ -9,10 +9,14 @@ import { PlatformSchema } from '../validations/platform.validation';
 
 export class UserAccessController extends BaseController {
   // GET /api/user-access/me
-  async getMyAccess(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async getMyAccess(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {return;}
 
       const accesses = await prisma.userAccess.findMany({
         where: { userId, isActive: true },
@@ -27,14 +31,20 @@ export class UserAccessController extends BaseController {
   }
 
   // GET /api/user-access/group/:groupId
-  async getGroupAccessList(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async getGroupAccessList(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       const groupId = this.req.params.groupId as string;
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {return;}
 
       if (!(await isGroupAdminOf(this.user!, groupId))) {
-        throw new AuthorizationError('You do not have permission to view this group member list');
+        throw new AuthorizationError(
+          'You do not have permission to view this group member list',
+        );
       }
 
       const accesses = await prisma.userAccess.findMany({
@@ -49,12 +59,16 @@ export class UserAccessController extends BaseController {
   }
 
   // DELETE /api/user-access/:id
-  async revokeAccess(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async revokeAccess(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       const id = this.req.params.id as string;
       const { reason, force } = this.req.body;
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {return;}
 
       // 1. Fetch user access record to identify group
       const access = await prisma.userAccess.findUnique({
@@ -66,8 +80,12 @@ export class UserAccessController extends BaseController {
         throw new NotFoundError('User access record not found');
       }
 
-      if (!(await isGroupAdminOf(this.user!, access.groupId, access.group?.slug))) {
-        throw new AuthorizationError('You do not have permission to revoke access for this group');
+      if (
+        !(await isGroupAdminOf(this.user!, access.groupId, access.group?.slug))
+      ) {
+        throw new AuthorizationError(
+          'You do not have permission to revoke access for this group',
+        );
       }
 
       const revoker = {
@@ -76,7 +94,12 @@ export class UserAccessController extends BaseController {
       };
 
       const isForce = force === true || force === 'true';
-      const updatedAccess = await accessWorkflowService.revokeAccess(id, revoker, reason, isForce);
+      const updatedAccess = await accessWorkflowService.revokeAccess(
+        id,
+        revoker,
+        reason,
+        isForce,
+      );
       this.sendResponse(updatedAccess, 'Access revoked successfully');
     } catch (error) {
       this.handleError(error, 'Failed to revoke access');
@@ -84,16 +107,27 @@ export class UserAccessController extends BaseController {
   }
 
   // GET /api/user-access/platform-status/:platform
-  async getPlatformStatus(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async getPlatformStatus(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
-      const platformResult = this.validateWithZod(PlatformSchema, this.req.params.platform, 'Invalid platform');
-      if (!platformResult.success) return;
+      const platformResult = this.validateWithZod(
+        PlatformSchema,
+        this.req.params.platform,
+        'Invalid platform',
+      );
+      if (!platformResult.success) {return;}
       const platform = platformResult.data;
 
       const email = this.user!.email || '';
 
       if (!email && platform !== 'zookeeper') {
-        this.sendResponse({ exists: false, email: '' }, 'Email not found in session');
+        this.sendResponse(
+          { exists: false, email: '' },
+          'Email not found in session',
+        );
         return;
       }
 
@@ -104,5 +138,4 @@ export class UserAccessController extends BaseController {
       this.handleError(error, 'Failed to retrieve platform user status');
     }
   }
-
 }

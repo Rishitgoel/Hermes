@@ -640,7 +640,7 @@ export const Groups: React.FC = () => {
                             cursor: 'pointer',
                             fontSize: '15px'
                           }}
-                          onClick={() => navigate(`/groups/${group.slug}`)}
+                          onClick={() => navigate(`/hermes/groups/${group.slug}`)}
                         >
                           {group.name}
                         </span>
@@ -669,7 +669,7 @@ export const Groups: React.FC = () => {
                     <td>
                       <span 
                         className="group-members-count" 
-                        onClick={() => navigate(`/groups/${group.slug}`)} 
+                        onClick={() => navigate(`/hermes/groups/${group.slug}`)} 
                         style={{ cursor: 'pointer', textDecoration: 'underline' }}
                       >
                         <Icons.Users size={14} />
@@ -704,7 +704,7 @@ export const Groups: React.FC = () => {
                     <td style={{ textAlign: 'right' }}>
                       <button
                         className="btn btn-outline btn-sm"
-                        onClick={() => navigate(`/groups/${group.slug}`)}
+                        onClick={() => navigate(`/hermes/groups/${group.slug}`)}
                       >
                         Details
                       </button>

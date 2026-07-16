@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { AccessDuration } from '@prisma/client';
+import { AccessDuration } from '../../generated/hermes';
 
 // userId is a Keycloak user id (the JWT `sub`). It's UUID-shaped in live
 // Keycloak but the simulation identities use non-UUID strings, so we only

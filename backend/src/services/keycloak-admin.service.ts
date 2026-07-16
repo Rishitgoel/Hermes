@@ -39,7 +39,7 @@ class KeycloakAdminService {
    * sub-request. Uses the cached token, so it's cheap.
    */
   async canConnect(): Promise<boolean> {
-    if (!this.isLive) return false;
+    if (!this.isLive) {return false;}
     return (await this.getToken()) !== null;
   }
 
@@ -76,29 +76,40 @@ class KeycloakAdminService {
   private async authHeaders(): Promise<Record<string, string>> {
     const token = await this.getToken();
     if (!token) {
-      throw new ExternalServiceError('Could not authenticate with the Keycloak Admin API');
+      throw new ExternalServiceError(
+        'Could not authenticate with the Keycloak Admin API',
+      );
     }
-    return { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+    return {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    };
   }
 
   /** Fetch a realm role representation, or null if it doesn't exist. */
   async getRealmRole(roleName: string): Promise<RoleRepresentation | null> {
-    if (!this.isLive) return null;
+    if (!this.isLive) {return null;}
     try {
       const headers = await this.authHeaders();
-      const res = await axios.get(`${this.base}/roles/${encodeURIComponent(roleName)}`, { headers });
+      const res = await axios.get(
+        `${this.base}/roles/${encodeURIComponent(roleName)}`,
+        { headers },
+      );
       return res.data as RoleRepresentation;
     } catch (err: any) {
-      if (err.response?.status === 404) return null;
+      if (err.response?.status === 404) {return null;}
       throw err;
     }
   }
 
   /** Create a realm role if missing. Returns its representation (null in sim). */
-  async ensureRealmRole(roleName: string, description?: string): Promise<RoleRepresentation | null> {
-    if (!this.isLive) return null;
+  async ensureRealmRole(
+    roleName: string,
+    description?: string,
+  ): Promise<RoleRepresentation | null> {
+    if (!this.isLive) {return null;}
     const existing = await this.getRealmRole(roleName);
-    if (existing) return existing;
+    if (existing) {return existing;}
     const headers = await this.authHeaders();
     await axios.post(
       `${this.base}/roles`,
@@ -114,12 +125,16 @@ class KeycloakAdminService {
    * so granting the scoped role also carries the blanket marker in the JWT
    * (e.g. hermes_group_admin_growth ⊃ hermes_group_admin). Idempotent.
    */
-  async ensureCompositeRole(scopedRole: string, markerRole: string, description?: string): Promise<void> {
-    if (!this.isLive) return;
+  async ensureCompositeRole(
+    scopedRole: string,
+    markerRole: string,
+    description?: string,
+  ): Promise<void> {
+    if (!this.isLive) {return;}
     await this.ensureRealmRole(markerRole);
     await this.ensureRealmRole(scopedRole, description);
     const marker = await this.getRealmRole(markerRole);
-    if (!marker) return;
+    if (!marker) {return;}
     const headers = await this.authHeaders();
     // Adding a composite that's already present is a harmless no-op (204).
     await axios.post(
@@ -132,11 +147,14 @@ class KeycloakAdminService {
   /** Assign a realm role to a user. Idempotent; no-op in sim. */
   async assignRealmRole(userId: string, roleName: string): Promise<void> {
     if (!this.isLive) {
-      logger.info(`Keycloak admin (sim): would assign role "${roleName}" to user ${userId}`);
+      logger.info(
+        `Keycloak admin (sim): would assign role "${roleName}" to user ${userId}`,
+      );
       return;
     }
     const role = await this.getRealmRole(roleName);
-    if (!role) throw new ExternalServiceError(`Keycloak role "${roleName}" not found`);
+    if (!role)
+      {throw new ExternalServiceError(`Keycloak role "${roleName}" not found`);}
     const headers = await this.authHeaders();
     await axios.post(
       `${this.base}/users/${encodeURIComponent(userId)}/role-mappings/realm`,
@@ -148,23 +166,31 @@ class KeycloakAdminService {
   /** Remove a realm role from a user. Idempotent; no-op in sim. */
   async removeRealmRole(userId: string, roleName: string): Promise<void> {
     if (!this.isLive) {
-      logger.info(`Keycloak admin (sim): would remove role "${roleName}" from user ${userId}`);
+      logger.info(
+        `Keycloak admin (sim): would remove role "${roleName}" from user ${userId}`,
+      );
       return;
     }
     const role = await this.getRealmRole(roleName);
-    if (!role) return;
+    if (!role) {return;}
     const headers = await this.authHeaders();
-    await axios.delete(`${this.base}/users/${encodeURIComponent(userId)}/role-mappings/realm`, {
-      headers,
-      data: [role],
-    });
+    await axios.delete(
+      `${this.base}/users/${encodeURIComponent(userId)}/role-mappings/realm`,
+      {
+        headers,
+        data: [role],
+      },
+    );
   }
 
   /** All realm roles (name + composite flag). Empty when not live. */
   async listRealmRoles(): Promise<RoleRepresentation[]> {
-    if (!this.isLive) return [];
+    if (!this.isLive) {return [];}
     const headers = await this.authHeaders();
-    const res = await axios.get(`${this.base}/roles`, { headers, params: { max: 2000 } });
+    const res = await axios.get(`${this.base}/roles`, {
+      headers,
+      params: { max: 2000 },
+    });
     return Array.isArray(res.data) ? (res.data as RoleRepresentation[]) : [];
   }
 
@@ -176,9 +202,11 @@ class KeycloakAdminService {
     }
     try {
       const headers = await this.authHeaders();
-      await axios.delete(`${this.base}/roles/${encodeURIComponent(roleName)}`, { headers });
+      await axios.delete(`${this.base}/roles/${encodeURIComponent(roleName)}`, {
+        headers,
+      });
     } catch (err: any) {
-      if (err.response?.status === 404) return;
+      if (err.response?.status === 404) {return;}
       throw err;
     }
   }
@@ -194,28 +222,49 @@ class KeycloakAdminService {
    */
   async logoutUser(userId: string): Promise<void> {
     if (!this.isLive) {
-      logger.info(`Keycloak admin (sim): would terminate sessions for user ${userId}`);
+      logger.info(
+        `Keycloak admin (sim): would terminate sessions for user ${userId}`,
+      );
       return;
     }
     try {
       const headers = await this.authHeaders();
-      await axios.post(`${this.base}/users/${encodeURIComponent(userId)}/logout`, {}, { headers });
-      logger.info(`Keycloak admin: terminated sessions for user ${userId} (immediate role revocation)`);
+      await axios.post(
+        `${this.base}/users/${encodeURIComponent(userId)}/logout`,
+        {},
+        { headers },
+      );
+      logger.info(
+        `Keycloak admin: terminated sessions for user ${userId} (immediate role revocation)`,
+      );
     } catch (err: any) {
-      if (err.response?.status === 404) return; // user gone — nothing to log out
-      logger.warn(`Keycloak admin: failed to terminate sessions for user ${userId}: ${err.message}`);
+      if (err.response?.status === 404) {return;} // user gone — nothing to log out
+      logger.warn(
+        `Keycloak admin: failed to terminate sessions for user ${userId}: ${err.message}`,
+      );
     }
   }
 
   /** Fetch a user representation (username/email/...) by id, or null. */
-  async getUser(userId: string): Promise<{ id: string; username?: string; email?: string; firstName?: string; lastName?: string } | null> {
-    if (!this.isLive) return null;
+  async getUser(
+    userId: string,
+  ): Promise<{
+    id: string;
+    username?: string;
+    email?: string;
+    firstName?: string;
+    lastName?: string;
+  } | null> {
+    if (!this.isLive) {return null;}
     try {
       const headers = await this.authHeaders();
-      const res = await axios.get(`${this.base}/users/${encodeURIComponent(userId)}`, { headers });
+      const res = await axios.get(
+        `${this.base}/users/${encodeURIComponent(userId)}`,
+        { headers },
+      );
       return res.data;
     } catch (err: any) {
-      if (err.response?.status === 404) return null;
+      if (err.response?.status === 404) {return null;}
       throw err;
     }
   }
@@ -228,36 +277,49 @@ class KeycloakAdminService {
    * grants to the right user. Exact, case-insensitive match.
    */
   async findUserIdByEmail(email: string): Promise<string | null> {
-    if (!this.isLive) return null;
+    if (!this.isLive) {return null;}
     try {
       const headers = await this.authHeaders();
       const res = await axios.get(`${this.base}/users`, {
         headers,
         params: { email, exact: true },
       });
-      const users: Array<{ id: string; email?: string }> = Array.isArray(res.data) ? res.data : [];
+      const users: Array<{ id: string; email?: string }> = Array.isArray(
+        res.data,
+      )
+        ? res.data
+        : [];
       const match =
-        users.find((u) => (u.email || '').toLowerCase() === email.toLowerCase()) ?? users[0];
+        users.find(
+          u => (u.email || '').toLowerCase() === email.toLowerCase(),
+        ) ?? users[0];
       return match?.id ?? null;
     } catch (err: any) {
-      logger.warn(`Keycloak admin: findUserIdByEmail failed for ${email}: ${err.message}`);
+      logger.warn(
+        `Keycloak admin: findUserIdByEmail failed for ${email}: ${err.message}`,
+      );
       return null;
     }
   }
 
   /** Keycloak user IDs holding a given realm role. Empty when not live. */
   async getUsersInRole(roleName: string): Promise<string[]> {
-    if (!this.isLive) return [];
+    if (!this.isLive) {return [];}
     try {
       const headers = await this.authHeaders();
-      const res = await axios.get(`${this.base}/roles/${encodeURIComponent(roleName)}/users`, {
-        headers,
-        params: { max: 500 },
-      });
+      const res = await axios.get(
+        `${this.base}/roles/${encodeURIComponent(roleName)}/users`,
+        {
+          headers,
+          params: { max: 500 },
+        },
+      );
       const users: any[] = Array.isArray(res.data) ? res.data : [];
-      return users.map((u) => u.id).filter((id): id is string => typeof id === 'string');
+      return users
+        .map(u => u.id)
+        .filter((id): id is string => typeof id === 'string');
     } catch (err: any) {
-      if (err.response?.status === 404) return [];
+      if (err.response?.status === 404) {return [];}
       throw err;
     }
   }

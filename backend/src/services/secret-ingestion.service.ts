@@ -901,6 +901,7 @@ export class SecretIngestionService {
         .filter(Boolean),
       requesterName: row.requesterName ?? undefined,
       requesterEmail: row.requesterEmail ?? undefined,
+      reviewerName: row.reviewerName ?? undefined,
     };
     const targets = (row.infraTargets as SelectedTarget[] | null) || undefined;
 

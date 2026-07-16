@@ -27,13 +27,21 @@ export async function notifyUserCreationWorkflow(
     where: { platform },
     select: { userEmail: true },
   });
-  if (tracked.length === 0) return;
-  const trackedEmails = new Set(tracked.map((r) => r.userEmail.toLowerCase()));
+  if (tracked.length === 0) {
+    return;
+  }
+  const trackedEmails = new Set(tracked.map(r => r.userEmail.toLowerCase()));
 
-  const { default: userCreationService } = await import('./user-creation.service');
+  const { default: userCreationService } = await import(
+    './user-creation.service'
+  );
   for (const u of users) {
-    if (u.isDisabled) continue;
-    if (!trackedEmails.has(u.email.toLowerCase())) continue;
+    if (u.isDisabled) {
+      continue;
+    }
+    if (!trackedEmails.has(u.email.toLowerCase())) {
+      continue;
+    }
     try {
       await userCreationService.handlePlatformUserDetected(platform, {
         externalId: u.externalId,
@@ -43,7 +51,12 @@ export async function notifyUserCreationWorkflow(
       });
     } catch (err: any) {
       logger.error(
-        { platform, externalId: u.externalId, email: u.email, error: err.message },
+        {
+          platform,
+          externalId: u.externalId,
+          email: u.email,
+          error: err.message,
+        },
         'handlePlatformUserDetected failed for one user; continuing batch',
       );
     }
@@ -51,10 +64,18 @@ export async function notifyUserCreationWorkflow(
 }
 
 /** Recompute and persist member counts for every cached group of one platform. */
-export async function recomputeGroupMemberCounts(platform: string): Promise<void> {
+export async function recomputeGroupMemberCounts(
+  platform: string,
+): Promise<void> {
   const [groups, users] = await Promise.all([
-    prisma.platformExternalGroup.findMany({ where: { platform }, select: { id: true, externalId: true } }),
-    prisma.platformExternalUser.findMany({ where: { platform }, select: { externalGroupIds: true } }),
+    prisma.platformExternalGroup.findMany({
+      where: { platform },
+      select: { id: true, externalId: true },
+    }),
+    prisma.platformExternalUser.findMany({
+      where: { platform },
+      select: { externalGroupIds: true },
+    }),
   ]);
   const counts = new Map<string, number>();
   for (const u of users) {
@@ -62,11 +83,13 @@ export async function recomputeGroupMemberCounts(platform: string): Promise<void
       counts.set(gid, (counts.get(gid) ?? 0) + 1);
     }
   }
-  const updates = groups.map((group) =>
+  const updates = groups.map(group =>
     prisma.platformExternalGroup.update({
       where: { id: group.id },
       data: { memberCount: counts.get(group.externalId) ?? 0 },
     }),
   );
-  if (updates.length) await prisma.$transaction(updates);
+  if (updates.length) {
+    await prisma.$transaction(updates);
+  }
 }

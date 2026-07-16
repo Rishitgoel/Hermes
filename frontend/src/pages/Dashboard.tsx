@@ -165,7 +165,7 @@ export const Dashboard: React.FC = () => {
           label: 'Create password',
           color: 'var(--status-pending-text)',
           bg: 'var(--status-pending-bg)',
-          onClick: () => navigate('/my-requests'),
+          onClick: () => navigate('/hermes/my-requests'),
         };
       case 'PENDING':
       case 'APPROVED':
@@ -208,7 +208,7 @@ export const Dashboard: React.FC = () => {
           </div>
         </div>
 
-        <div className="stat-card" onClick={() => navigate('/my-requests')} style={{ cursor: 'pointer' }}>
+        <div className="stat-card" onClick={() => navigate('/hermes/my-requests')} style={{ cursor: 'pointer' }}>
           <div className="stat-icon-wrapper">
             <Icons.FileClock size={26} />
           </div>
@@ -236,7 +236,7 @@ export const Dashboard: React.FC = () => {
         )}
 
         {isAdmin && (
-          <div className="stat-card" onClick={() => navigate('/pending-approvals')} style={{ cursor: 'pointer', borderLeft: '4px solid var(--secondary)' }}>
+          <div className="stat-card" onClick={() => navigate('/hermes/pending-approvals')} style={{ cursor: 'pointer', borderLeft: '4px solid var(--secondary)' }}>
             <div className="stat-icon-wrapper" style={{ backgroundColor: 'var(--primary-light)', color: 'var(--secondary)' }}>
               <Icons.CheckSquare size={26} />
             </div>
@@ -250,7 +250,7 @@ export const Dashboard: React.FC = () => {
         {isSuperAdmin && provisionFailureCount > 0 && (
           <div
             className="stat-card stat-card-danger"
-            onClick={() => navigate('/audit-log')}
+            onClick={() => navigate('/hermes/audit-log')}
             style={{ cursor: 'pointer' }}
             title="PROVISION_FAILED audit entries in the last 7 days"
           >
@@ -320,7 +320,7 @@ export const Dashboard: React.FC = () => {
           title="No Active Access"
           description="You do not currently hold active permissions for any data groups. Browse data groups to submit access requests."
           action={
-            <button className="btn btn-primary" onClick={() => navigate('/groups')}>
+            <button className="btn btn-primary" onClick={() => navigate('/hermes/groups')}>
               Browse Groups
             </button>
           }
@@ -379,7 +379,7 @@ export const Dashboard: React.FC = () => {
                             </div>
                             <span
                               style={{ fontWeight: 700, color: 'var(--text-main)', cursor: 'pointer', fontSize: '15px' }}
-                              onClick={() => navigate(`/groups/${access.group.slug}`)}
+                              onClick={() => navigate(`/hermes/groups/${access.group.slug}`)}
                             >
                               {access.group.name}
                             </span>
@@ -421,7 +421,7 @@ export const Dashboard: React.FC = () => {
                             )}
                             <button
                               className="btn btn-outline btn-sm"
-                              onClick={() => navigate(`/groups/${access.group.slug}`)}
+                              onClick={() => navigate(`/hermes/groups/${access.group.slug}`)}
                             >
                               Details
                             </button>

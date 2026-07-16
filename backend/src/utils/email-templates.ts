@@ -13,7 +13,7 @@ const BORDER = '#e5e7eb';
 
 /** HTML-escape user-supplied values before interpolating into markup. */
 function esc(value: string | null | undefined): string {
-  if (!value) return '';
+  if (!value) {return '';}
   return value
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -83,7 +83,9 @@ export function adminNewAccountRequest(opts: {
 }): EmailContent {
   const href = url('/pending-approvals');
   const label = opts.platformLabel || 'platform';
-  const reason = opts.justification ? `<p style="margin:12px 0 0;"><strong>Reason:</strong> ${esc(opts.justification)}</p>` : '';
+  const reason = opts.justification
+    ? `<p style="margin:12px 0 0;"><strong>Reason:</strong> ${esc(opts.justification)}</p>`
+    : '';
   return {
     subject: `[Hermes] New account request from ${opts.userName}`,
     html: layout({
@@ -123,7 +125,9 @@ export function adminNewGroupRequestsBulk(opts: {
 }): EmailContent {
   const href = url('/pending-approvals');
   const durationLabel = opts.duration.replace(/_/g, ' ').toLowerCase();
-  const list = opts.groupLabels.map((g) => `<li style="margin-bottom:4px;">${esc(g)}</li>`).join('');
+  const list = opts.groupLabels
+    .map(g => `<li style="margin-bottom:4px;">${esc(g)}</li>`)
+    .join('');
   return {
     subject: `[Hermes] ${opts.requesterName} requested access to ${opts.groupLabels.length} group(s)`,
     html: layout({
@@ -171,12 +175,26 @@ export function userZkChangeReviewed(opts: {
   const href = url('/zookeeper');
   const approved = opts.approved ?? 0;
   const rejected = opts.rejected ?? 0;
-  const noteHtml = opts.note ? `<p style="margin:12px 0 0;"><strong>Note:</strong> ${esc(opts.note)}</p>` : '';
+  const noteHtml = opts.note
+    ? `<p style="margin:12px 0 0;"><strong>Note:</strong> ${esc(opts.note)}</p>`
+    : '';
   const copy: Record<typeof opts.status, { heading: string; line: string }> = {
-    APPLIED: { heading: 'Config change applied ✅', line: `all ${approved} change(s) were approved and applied` },
-    PARTIALLY_APPLIED: { heading: 'Config change partially applied', line: `${approved} change(s) approved &amp; applied, ${rejected} rejected` },
-    APPLY_FAILED: { heading: 'Config change needs attention', line: `${approved} change(s) were approved but one or more failed to apply — an admin will follow up` },
-    REJECTED: { heading: 'Config change declined', line: 'your change(s) were rejected' },
+    APPLIED: {
+      heading: 'Config change applied ✅',
+      line: `all ${approved} change(s) were approved and applied`,
+    },
+    PARTIALLY_APPLIED: {
+      heading: 'Config change partially applied',
+      line: `${approved} change(s) approved &amp; applied, ${rejected} rejected`,
+    },
+    APPLY_FAILED: {
+      heading: 'Config change needs attention',
+      line: `${approved} change(s) were approved but one or more failed to apply — an admin will follow up`,
+    },
+    REJECTED: {
+      heading: 'Config change declined',
+      line: 'your change(s) were rejected',
+    },
   };
   const { heading, line } = copy[opts.status];
   return {
@@ -191,7 +209,10 @@ export function userZkChangeReviewed(opts: {
   };
 }
 
-export function userAccountApproved(opts: { reviewerName: string; platformLabel?: string }): EmailContent {
+export function userAccountApproved(opts: {
+  reviewerName: string;
+  platformLabel?: string;
+}): EmailContent {
   const href = url('/my-requests');
   const label = opts.platformLabel || 'the platform';
   return {
@@ -206,7 +227,9 @@ export function userAccountApproved(opts: { reviewerName: string; platformLabel?
   };
 }
 
-export function userAccountSetupComplete(opts: { platformLabel: string }): EmailContent {
+export function userAccountSetupComplete(opts: {
+  platformLabel: string;
+}): EmailContent {
   const href = url('/');
   const label = opts.platformLabel;
   return {
@@ -269,7 +292,7 @@ export function userZookeeperAccountReady(opts: {
       subject: '[Hermes] Your ZooKeeper access is ready',
       html: layout({
         heading: 'Your ZooKeeper access is ready 🎉',
-        bodyHtml: `<p style="margin:0;">Your ZooKeeper access has been set up. Any group access an admin has approved is already attached to your identity.</p>`,
+        bodyHtml: '<p style="margin:0;">Your ZooKeeper access has been set up. Any group access an admin has approved is already attached to your identity.</p>',
       }),
       text: 'Your ZooKeeper access is ready. Any approved group access is already attached to your identity.',
     };
@@ -294,17 +317,22 @@ export function userZookeeperAccountReady(opts: {
         <p style="margin:14px 0 0;color:${MUTED};font-size:13px;">Any group access an admin has approved is already attached to this identity.</p>`,
     }),
     text:
-      `Your ZooKeeper access is ready. Store this credential now — it is shown only once and Hermes keeps no copy.\n` +
+      'Your ZooKeeper access is ready. Store this credential now — it is shown only once and Hermes keeps no copy.\n' +
       (connect ? `Connect string: ${connect}\n` : '') +
       `Username: ${opts.username}\nPassword: ${opts.password}\n` +
       `Authenticate with: addauth digest ${opts.username}:${opts.password}\n` +
-      `Approved group access is already attached to this identity.`,
+      'Approved group access is already attached to this identity.',
   };
 }
 
-export function userAccountRejected(opts: { reviewerName: string; note?: string }): EmailContent {
+export function userAccountRejected(opts: {
+  reviewerName: string;
+  note?: string;
+}): EmailContent {
   const href = url('/my-requests');
-  const noteHtml = opts.note ? `<p style="margin:12px 0 0;"><strong>Reason:</strong> ${esc(opts.note)}</p>` : '';
+  const noteHtml = opts.note
+    ? `<p style="margin:12px 0 0;"><strong>Reason:</strong> ${esc(opts.note)}</p>`
+    : '';
   return {
     subject: '[Hermes] Your account request was declined',
     html: layout({
@@ -317,9 +345,15 @@ export function userAccountRejected(opts: { reviewerName: string; note?: string 
   };
 }
 
-export function userGroupApproved(opts: { groupName: string; reviewerName: string; note?: string }): EmailContent {
+export function userGroupApproved(opts: {
+  groupName: string;
+  reviewerName: string;
+  note?: string;
+}): EmailContent {
   const href = url('/');
-  const noteHtml = opts.note ? `<p style="margin:12px 0 0;"><strong>Note:</strong> ${esc(opts.note)}</p>` : '';
+  const noteHtml = opts.note
+    ? `<p style="margin:12px 0 0;"><strong>Note:</strong> ${esc(opts.note)}</p>`
+    : '';
   return {
     subject: `[Hermes] Access approved: ${opts.groupName}`,
     html: layout({
@@ -332,9 +366,15 @@ export function userGroupApproved(opts: { groupName: string; reviewerName: strin
   };
 }
 
-export function userGroupRejected(opts: { groupName: string; reviewerName: string; note?: string }): EmailContent {
+export function userGroupRejected(opts: {
+  groupName: string;
+  reviewerName: string;
+  note?: string;
+}): EmailContent {
   const href = url('/my-requests');
-  const noteHtml = opts.note ? `<p style="margin:12px 0 0;"><strong>Reason:</strong> ${esc(opts.note)}</p>` : '';
+  const noteHtml = opts.note
+    ? `<p style="margin:12px 0 0;"><strong>Reason:</strong> ${esc(opts.note)}</p>`
+    : '';
   return {
     subject: `[Hermes] Access request declined: ${opts.groupName}`,
     html: layout({
@@ -347,9 +387,15 @@ export function userGroupRejected(opts: { groupName: string; reviewerName: strin
   };
 }
 
-export function userAccessRevoked(opts: { groupName: string; revokerName: string; reason?: string }): EmailContent {
+export function userAccessRevoked(opts: {
+  groupName: string;
+  revokerName: string;
+  reason?: string;
+}): EmailContent {
   const href = url('/groups');
-  const reasonHtml = opts.reason ? `<p style="margin:12px 0 0;"><strong>Reason:</strong> ${esc(opts.reason)}</p>` : '';
+  const reasonHtml = opts.reason
+    ? `<p style="margin:12px 0 0;"><strong>Reason:</strong> ${esc(opts.reason)}</p>`
+    : '';
   return {
     subject: `[Hermes] Access revoked: ${opts.groupName}`,
     html: layout({
@@ -376,7 +422,10 @@ export function userAccessExpired(opts: { groupName: string }): EmailContent {
   };
 }
 
-export function userAccessExpiringSoon(opts: { groupName: string; expiresAt: Date }): EmailContent {
+export function userAccessExpiringSoon(opts: {
+  groupName: string;
+  expiresAt: Date;
+}): EmailContent {
   const href = url('/groups');
   const dateStr = opts.expiresAt.toLocaleDateString();
   return {
@@ -397,7 +446,7 @@ export function userSecretsAccountReady(_opts: Record<string, never>): EmailCont
     subject: '[Hermes] Your Secret Ingestion access is ready',
     html: layout({
       heading: 'Your Secret Ingestion access is ready 🎉',
-      bodyHtml: `<p style="margin:0;">Your Secret Ingestion access has been set up. Any approved secret access is now available.</p>`,
+      bodyHtml: '<p style="margin:0;">Your Secret Ingestion access has been set up. Any approved secret access is now available.</p>',
       ctaLabel: 'Open Secret Ingestion',
       ctaHref: href,
     }),
@@ -444,10 +493,12 @@ export function userSecretIngestionReviewed(opts: {
     APPLIED: `all ${opts.approved} secret(s) were approved and ingested`,
     PARTIALLY_APPLIED: `${opts.approved} secret(s) approved & ingested, ${opts.rejected} rejected`,
     APPLY_FAILED: `${opts.approved} secret(s) approved but ${opts.failed ?? 'one or more'} failed to ingest — an admin will follow up`,
-    REJECTED: `your secret ingestion request was rejected`,
+    REJECTED: 'your secret ingestion request was rejected',
   };
   const actionText = summary[opts.status];
-  const noteHtml = opts.note ? `<p style="margin:12px 0 0;"><strong>Reviewer Note:</strong> ${esc(opts.note)}</p>` : '';
+  const noteHtml = opts.note
+    ? `<p style="margin:12px 0 0;"><strong>Reviewer Note:</strong> ${esc(opts.note)}</p>`
+    : '';
   return {
     subject: `[Hermes] Secret Ingestion request reviewed: ${opts.secretName}`,
     html: layout({
@@ -460,5 +511,3 @@ export function userSecretIngestionReviewed(opts: {
     text: `Your Secret Ingestion request for ${opts.secretName} was reviewed by ${opts.reviewerName}: ${actionText}.${opts.note ? ` Note: ${opts.note}` : ''} ${href}`,
   };
 }
-
-

@@ -99,7 +99,7 @@ function simMembershipKey(groupId: string, userId: string): string {
 }
 
 function ensureSimSeeded(): void {
-  if (sim.seeded) return;
+  if (sim.seeded) {return;}
   sim.seeded = true;
   const seedUsers: Array<Omit<SimUser, 'userId'> & { userId: string }> = [
     { userId: 'usr-sim-mayank', userName: 'mayank.aggarwal@bachatt.app', displayName: 'Mayank Aggarwal', email: 'mayank.aggarwal@bachatt.app' },
@@ -107,12 +107,12 @@ function ensureSimSeeded(): void {
     { userId: 'usr-sim-rishit', userName: 'rishit.goel@bachatt.app', displayName: 'Rishit Goel', email: 'rishit.goel@bachatt.app' },
     { userId: 'usr-sim-ankit', userName: 'ankit.sharma@bachatt.app', displayName: 'Ankit Sharma', email: 'ankit.sharma@bachatt.app' },
   ];
-  for (const u of seedUsers) sim.users.set(u.userId, u);
+  for (const u of seedUsers) {sim.users.set(u.userId, u);}
   const seedGroups: SimGroup[] = [
     { groupId: 'grp-sim-growth', displayName: 'Growth', description: 'AWS Growth team' },
     { groupId: 'grp-sim-credit-card', displayName: 'Credit Card', description: 'AWS Credit Card team' },
   ];
-  for (const g of seedGroups) sim.groups.set(g.groupId, g);
+  for (const g of seedGroups) {sim.groups.set(g.groupId, g);}
 }
 
 function randomSimId(prefix: string): string {
@@ -161,7 +161,7 @@ export class AwsIdentityCenterService {
 
   /** Lazily build a single Identity Store client (reused for retry-token quota). */
   private getClient(): IdentitystoreClient {
-    if (this.client) return this.client;
+    if (this.client) {return this.client;}
     const region = config.aws.identityCenterRegion;
     if (!region) {
       throw new ExternalServiceError('AWS region for Identity Center is not configured');
@@ -201,7 +201,7 @@ export class AwsIdentityCenterService {
         return await fn();
       } catch (err: any) {
         lastErr = err;
-        if (err?.name !== ERR_NOT_FOUND && !isRetryable(err)) throw err;
+        if (err?.name !== ERR_NOT_FOUND && !isRetryable(err)) {throw err;}
         if (i < attempts - 1) {
           const delayMs = 300 * Math.pow(2, i);
           logger.warn(
@@ -253,7 +253,7 @@ export class AwsIdentityCenterService {
       );
       return res.UserId ?? null;
     } catch (err: any) {
-      if (err?.name === ERR_NOT_FOUND) return null; // normal "absent" signal, not a 500
+      if (err?.name === ERR_NOT_FOUND) {return null;} // normal "absent" signal, not a 500
       this.mapError(err, 'getUserIdByEmail');
     }
   }
@@ -263,7 +263,7 @@ export class AwsIdentityCenterService {
     if (this.isSimulation) {
       ensureSimSeeded();
       const u = sim.users.get(userId);
-      if (!u) return null;
+      if (!u) {return null;}
       const groupIds = [...sim.memberships.values()].filter(m => m.userId === userId).map(m => m.groupId);
       return { userId: u.userId, userName: u.userName, displayName: u.displayName, email: u.email, isPending: false, groupIds };
     }
@@ -281,7 +281,7 @@ export class AwsIdentityCenterService {
         groupIds: await this.listGroupIdsForUser(userId),
       };
     } catch (err: any) {
-      if (err?.name === ERR_NOT_FOUND) return null;
+      if (err?.name === ERR_NOT_FOUND) {return null;}
       this.mapError(err, 'getUserById');
     }
   }
@@ -297,7 +297,7 @@ export class AwsIdentityCenterService {
     if (this.isSimulation) {
       ensureSimSeeded();
       const existing = [...sim.users.values()].find(u => u.userName === userName);
-      if (existing) return { userId: existing.userId };
+      if (existing) {return { userId: existing.userId };}
       const userId = randomSimId('usr-sim');
       sim.users.set(userId, { userId, userName, displayName: name, email: userName });
       logger.info({ userId, email: userName }, '🧪 AWS IDC (sim): created user');
@@ -346,7 +346,9 @@ export class AwsIdentityCenterService {
     if (this.isSimulation) {
       ensureSimSeeded();
       for (const [key, m] of sim.memberships) {
-        if (m.userId === userId) sim.memberships.delete(key);
+        if (m.userId === userId) {
+          sim.memberships.delete(key);
+        }
       }
       sim.users.delete(userId);
       logger.info({ userId }, '🧪 AWS IDC (sim): deleted user');
@@ -377,7 +379,10 @@ export class AwsIdentityCenterService {
       } while (nextToken);
 
       await this.getClient().send(
-        new DeleteUserCommand({ IdentityStoreId: this.identityStoreId, UserId: userId }),
+        new DeleteUserCommand({
+          IdentityStoreId: this.identityStoreId,
+          UserId: userId,
+        }),
       );
     } catch (err: any) {
       if (err?.name === ERR_NOT_FOUND) {
@@ -457,8 +462,8 @@ export class AwsIdentityCenterService {
           const uid = (m.MemberId as { UserId?: string } | undefined)?.UserId;
           if (uid) {
             const existing = map.get(uid);
-            if (existing) existing.push(g.groupId);
-            else map.set(uid, [g.groupId]);
+            if (existing) {existing.push(g.groupId);}
+            else {map.set(uid, [g.groupId]);}
           }
         }
         nextToken = res.NextToken;
@@ -487,7 +492,7 @@ export class AwsIdentityCenterService {
       );
       return res.GroupId ?? null;
     } catch (err: any) {
-      if (err?.name === ERR_NOT_FOUND) return null;
+      if (err?.name === ERR_NOT_FOUND) {return null;}
       this.mapError(err, 'getGroupIdByName');
     }
   }
@@ -497,7 +502,7 @@ export class AwsIdentityCenterService {
     if (this.isSimulation) {
       ensureSimSeeded();
       const existing = [...sim.groups.values()].find(g => g.displayName === displayName);
-      if (existing) return existing;
+      if (existing) {return existing;}
       const groupId = randomSimId('grp-sim');
       const group: SimGroup = { groupId, displayName, description };
       sim.groups.set(groupId, group);
@@ -540,7 +545,7 @@ export class AwsIdentityCenterService {
     if (this.isSimulation) {
       ensureSimSeeded();
       for (const [key, m] of sim.memberships) {
-        if (m.groupId === groupId) sim.memberships.delete(key);
+        if (m.groupId === groupId) {sim.memberships.delete(key);}
       }
       sim.groups.delete(groupId);
       logger.info({ groupId }, '🧪 AWS IDC (sim): deleted group');
@@ -702,7 +707,7 @@ export class AwsIdentityCenterService {
         }),
       );
       for (const m of res.GroupMemberships ?? []) {
-        if (m.GroupId === groupId && m.MembershipId) return m.MembershipId;
+        if (m.GroupId === groupId && m.MembershipId) {return m.MembershipId;}
       }
       nextToken = res.NextToken;
     } while (nextToken);
@@ -728,13 +733,13 @@ export class AwsIdentityCenterService {
           }),
         );
         for (const m of res.GroupMemberships ?? []) {
-          if (m.GroupId) ids.push(m.GroupId);
+          if (m.GroupId) {ids.push(m.GroupId);}
         }
         nextToken = res.NextToken;
       } while (nextToken);
       return ids;
     } catch (err: any) {
-      if (err?.name === ERR_NOT_FOUND) return [];
+      if (err?.name === ERR_NOT_FOUND) {return [];}
       this.mapError(err, 'listGroupIdsForUser');
     }
   }
@@ -743,7 +748,7 @@ export class AwsIdentityCenterService {
 
   /** Cheap liveness probe: list a single group. Never throws. */
   async healthCheck(): Promise<{ healthy: boolean; message?: string }> {
-    if (this.isSimulation) return { healthy: true, message: 'simulation' };
+    if (this.isSimulation) {return { healthy: true, message: 'simulation' };}
     try {
       await this.getClient().send(
         new ListGroupsCommand({ IdentityStoreId: this.identityStoreId, MaxResults: 1 }),
@@ -758,8 +763,8 @@ export class AwsIdentityCenterService {
 /** Split a display name into given/family for the Identity Store Name field. */
 function splitName(name: string): { given: string; family: string } {
   const parts = (name || '').trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return { given: 'Unknown', family: 'User' };
-  if (parts.length === 1) return { given: parts[0], family: parts[0] };
+  if (parts.length === 0) {return { given: 'Unknown', family: 'User' };}
+  if (parts.length === 1) {return { given: parts[0], family: parts[0] };}
   return { given: parts[0], family: parts.slice(1).join(' ') };
 }
 

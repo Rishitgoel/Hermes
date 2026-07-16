@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { Prisma } from '@prisma/client';
+import { Prisma } from '../../generated/hermes';
 import BaseController from './base.controller';
 import prisma from '../config/prisma';
 import { AuthorizationError, ValidationError } from '../utils/errors';
@@ -26,7 +26,7 @@ export class AuditController extends BaseController {
   async getAuditLogs(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {return;}
 
       // Authorization Check: Super Admin only
       if (!isSuperAdmin(this.user!)) {
@@ -34,14 +34,14 @@ export class AuditController extends BaseController {
       }
 
       const pagination = this.validatePagination();
-      if (!pagination) return;
+      if (!pagination) {return;}
 
       const { pageNo, pageSize } = pagination;
       const skip = (pageNo - 1) * pageSize;
 
       // Optional filters
       const queryResult = this.validateWithZod(auditQuerySchema, this.req.query, 'Invalid query parameters');
-      if (!queryResult.success) return;
+      if (!queryResult.success) {return;}
       const { action, search, performerId, groupId, platform, fromDate, toDate } = queryResult.data;
 
       const where: Prisma.AuditEntryWhereInput = {};
@@ -64,8 +64,8 @@ export class AuditController extends BaseController {
       // Date range on createdAt (inclusive bounds). When both are provided, reject toDate < fromDate.
       if (fromDate || toDate) {
         const createdAt: Prisma.DateTimeFilter = {};
-        if (fromDate) createdAt.gte = this.parseFilterDate(fromDate, false);
-        if (toDate) createdAt.lte = this.parseFilterDate(toDate, true);
+        if (fromDate) {createdAt.gte = this.parseFilterDate(fromDate, false);}
+        if (toDate) {createdAt.lte = this.parseFilterDate(toDate, true);}
         if (createdAt.gte && createdAt.lte && (createdAt.lte as Date) < (createdAt.gte as Date)) {
           throw new ValidationError('toDate must be on or after fromDate');
         }

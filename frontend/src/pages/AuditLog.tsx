@@ -8,7 +8,7 @@ import { queryKeys } from '../lib/queryKeys';
 import { fetchPlatforms } from '../services/api/platforms';
 import { useToast } from '../contexts/ToastContext';
 import {
-  AuditLogEntry,
+  type AuditLogEntry,
   actionBadgeStyle,
   auditLabel,
   auditActionGroups,

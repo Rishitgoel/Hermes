@@ -98,7 +98,12 @@ export interface ReconcileMembersContext {
    * the member still legitimately holds through a different group/level. Single-target
    * adapters ignore it.
    */
-  members: { email: string; name: string; externalUserId: string; retainExternalGroupIds?: string[] }[];
+  members: {
+    email: string;
+    name: string;
+    externalUserId: string;
+    retainExternalGroupIds?: string[];
+  }[];
 }
 
 /**
@@ -177,7 +182,11 @@ export interface PlatformAdapter {
    * so many users share the empty string) use it to key per-user state on a stable id.
    * Email-keyed adapters (Redash/AWS) ignore it.
    */
-  inviteUser(email: string, name: string, userId?: string): Promise<ProvisionResult>;
+  inviteUser(
+    email: string,
+    name: string,
+    userId?: string,
+  ): Promise<ProvisionResult>;
 
   /**
    * Optional: re-issue a one-time setup link for a user whose account already
@@ -209,7 +218,9 @@ export interface PlatformAdapter {
    * (e.g. read-only vs write data-source access) on the platform directly.
    * Adapters that can't create groups simply omit this.
    */
-  createExternalGroup?(name: string): Promise<{ externalGroupId: string; name?: string }>;
+  createExternalGroup?(
+    name: string,
+  ): Promise<{ externalGroupId: string; name?: string }>;
   /** Optional: delete a backing group on the platform by its external id. */
   deleteExternalGroup?(externalGroupId: string): Promise<void>;
 
@@ -228,7 +239,9 @@ export interface PlatformAdapter {
    * Best-effort: the Hermes-side config has already been saved as the source of truth,
    * so per-member failures are returned (not thrown) for auditing/manual cleanup.
    */
-  reconcileMembers?(ctx: ReconcileMembersContext): Promise<ReconcileMembersResult>;
+  reconcileMembers?(
+    ctx: ReconcileMembersContext,
+  ): Promise<ReconcileMembersResult>;
 
   /**
    * Optional: validate a candidate `externalGroupId` for this platform's id format
@@ -267,7 +280,11 @@ export interface PlatformAdapter {
    * Hermes-group reconciliation skips creating these and archives any active
    * Hermes group that points at one. It does NOT delete anything on the platform.
    */
-  isReservedExternalGroup?(group: { externalId: string; name: string; type?: string | null }): boolean;
+  isReservedExternalGroup?(group: {
+    externalId: string;
+    name: string;
+    type?: string | null;
+  }): boolean;
 
   /** Liveness probe surfaced on the `/health` endpoint. */
   healthCheck(): Promise<{ healthy: boolean; message?: string }>;

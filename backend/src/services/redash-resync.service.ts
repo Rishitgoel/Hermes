@@ -67,8 +67,15 @@
  *    which throws ConflictError otherwise — this function doesn't re-check).
  */
 import prisma from '../config/prisma';
-import { RequestStatus, UserCreationStatus, Prisma } from '@prisma/client';
-import { importRedashMemberships, RedashImportReport } from './redash-import.service';
+import {
+  RequestStatus,
+  UserCreationStatus,
+  Prisma,
+} from '../../generated/hermes';
+import {
+  importRedashMemberships,
+  RedashImportReport,
+} from './redash-import.service';
 import provisioningRegistry from './provisioning.registry';
 import { ConflictError } from '../utils/errors';
 import logger from '../utils/logger';
@@ -137,7 +144,11 @@ type GrantWithGroupAndLevel = Prisma.UserAccessGetPayload<{
   include: { group: { include: { levels: true } }; level: true };
 }>;
 
-type AlternateTarget = { levelId: string | null; levelName: string | null; externalGroupId: string };
+type AlternateTarget = {
+  levelId: string | null;
+  levelName: string | null;
+  externalGroupId: string;
+};
 
 /**
  * A grant's own group/level is no longer in the user's cached memberships —
@@ -152,14 +163,32 @@ function resolveAlternateTarget(
   cachedGroupIds: Set<string>,
 ): AlternateTarget | null {
   const levelCandidates = group.levels
-    .filter((l) => l.isActive && l.externalGroupId && l.externalGroupId !== excludeExternalGroupId && cachedGroupIds.has(l.externalGroupId))
+    .filter(
+      l =>
+        l.isActive &&
+        l.externalGroupId &&
+        l.externalGroupId !== excludeExternalGroupId &&
+        cachedGroupIds.has(l.externalGroupId),
+    )
     .sort((a, b) => b.rank - a.rank);
   if (levelCandidates.length > 0) {
     const l = levelCandidates[0];
-    return { levelId: l.id, levelName: l.name, externalGroupId: l.externalGroupId! };
+    return {
+      levelId: l.id,
+      levelName: l.name,
+      externalGroupId: l.externalGroupId!,
+    };
   }
-  if (group.externalGroupId && group.externalGroupId !== excludeExternalGroupId && cachedGroupIds.has(group.externalGroupId)) {
-    return { levelId: null, levelName: null, externalGroupId: group.externalGroupId };
+  if (
+    group.externalGroupId &&
+    group.externalGroupId !== excludeExternalGroupId &&
+    cachedGroupIds.has(group.externalGroupId)
+  ) {
+    return {
+      levelId: null,
+      levelName: null,
+      externalGroupId: group.externalGroupId,
+    };
   }
   return null;
 }
@@ -176,12 +205,20 @@ export async function resyncRedashMemberships(opts: {
   const displayName = lowerPlatform === 'redash-qa' ? 'Redash QA' : 'Redash';
 
   if (inFlight.has(lowerPlatform)) {
-    throw new ConflictError(`A ${displayName} resync is already running — try again in a moment.`);
+    throw new ConflictError(
+      `A ${displayName} resync is already running — try again in a moment.`,
+    );
   }
   inFlight.add(lowerPlatform);
 
   try {
-    return await runResync({ ...opts, apply, force, lowerPlatform, displayName });
+    return await runResync({
+      ...opts,
+      apply,
+      force,
+      lowerPlatform,
+      displayName,
+    });
   } finally {
     inFlight.delete(lowerPlatform);
   }
@@ -227,8 +264,12 @@ async function runResync(opts: {
 
   // Cache is read once and shared by Pass B (membership/disabled checks) and
   // Pass D (account-existence checks), regardless of whether Pass B itself runs.
-  const cachedUsers = await prisma.platformExternalUser.findMany({ where: { platform: lowerPlatform } });
-  const cachedByEmail = new Map(cachedUsers.map((u) => [u.email.toLowerCase(), u]));
+  const cachedUsers = await prisma.platformExternalUser.findMany({
+    where: { platform: lowerPlatform },
+  });
+  const cachedByEmail = new Map(
+    cachedUsers.map(u => [u.email.toLowerCase(), u]),
+  );
 
   // ── Pass B — REMOVE / SWAP / REPAIR ──────────────────────────────────────
   if (cachedUsers.length === 0) {
@@ -257,7 +298,9 @@ async function runResync(opts: {
           'a degraded response can look like valid data without being trustworthy.',
       );
     } else {
-      const cachedByExternalId = new Map(cachedUsers.map((u) => [u.externalId, u]));
+      const cachedByExternalId = new Map(
+        cachedUsers.map(u => [u.externalId, u]),
+      );
 
       const activeGrants = await prisma.userAccess.findMany({
         where: { isActive: true, group: { platform: lowerPlatform } },
@@ -268,15 +311,28 @@ async function runResync(opts: {
       // the true removal count up front — checking it after partial writes
       // would be meaningless.
       const orphans: { grant: GrantWithGroupAndLevel; label: string }[] = [];
-      const swaps: { grant: GrantWithGroupAndLevel; label: string; target: AlternateTarget; freshExternalId: string }[] = [];
-      const refreshes: { grant: GrantWithGroupAndLevel; newExternalId: string }[] = [];
+      const swaps: {
+        grant: GrantWithGroupAndLevel;
+        label: string;
+        target: AlternateTarget;
+        freshExternalId: string;
+      }[] = [];
+      const refreshes: {
+        grant: GrantWithGroupAndLevel;
+        newExternalId: string;
+      }[] = [];
 
       for (const grant of activeGrants) {
-        const label = grant.level ? `${grant.group.name} — ${grant.level.name}` : grant.group.name;
-        const externalGroupId = grant.level?.externalGroupId ?? grant.group.externalGroupId;
+        const label = grant.level
+          ? `${grant.group.name} — ${grant.level.name}`
+          : grant.group.name;
+        const externalGroupId =
+          grant.level?.externalGroupId ?? grant.group.externalGroupId;
 
         if (!externalGroupId || !grant.externalUserId) {
-          report.activeGrantsSkippedUnmapped.push(`${grant.userEmail} → ${label}`);
+          report.activeGrantsSkippedUnmapped.push(
+            `${grant.userEmail} → ${label}`,
+          );
           continue;
         }
 
@@ -310,9 +366,18 @@ async function runResync(opts: {
           continue;
         }
 
-        const altTarget = resolveAlternateTarget(grant.group, externalGroupId, cachedGroupIds);
+        const altTarget = resolveAlternateTarget(
+          grant.group,
+          externalGroupId,
+          cachedGroupIds,
+        );
         if (altTarget && cachedUser) {
-          swaps.push({ grant, label, target: altTarget, freshExternalId: cachedUser.externalId });
+          swaps.push({
+            grant,
+            label,
+            target: altTarget,
+            freshExternalId: cachedUser.externalId,
+          });
           continue;
         }
 
@@ -321,22 +386,30 @@ async function runResync(opts: {
 
       report.levelsSwapped = swaps.length;
       report.swappedGrants = swaps.map(
-        (s) => `${s.grant.userEmail} → ${s.grant.group.name}: ${s.grant.level?.name ?? '(base)'} → ${s.target.levelName ?? '(base)'}`,
+        s =>
+          `${s.grant.userEmail} → ${s.grant.group.name}: ${s.grant.level?.name ?? '(base)'} → ${s.target.levelName ?? '(base)'}`,
       );
       report.externalUserIdsRefreshed = refreshes.length;
-      report.refreshedExternalUserIds = refreshes.map((r) => {
-        const grantLabel = r.grant.level ? `${r.grant.group.name} — ${r.grant.level.name}` : r.grant.group.name;
+      report.refreshedExternalUserIds = refreshes.map(r => {
+        const grantLabel = r.grant.level
+          ? `${r.grant.group.name} — ${r.grant.level.name}`
+          : r.grant.group.name;
         return `${r.grant.userEmail} → ${grantLabel} (${r.grant.externalUserId} → ${r.newExternalId})`;
       });
 
       // Refresh + swap are corrective (they never reduce anyone's access) —
       // they always proceed, regardless of the removal safety cap below.
       for (const r of refreshes) {
-        if (!apply) continue;
+        if (!apply) {continue;}
         try {
-          await prisma.userAccess.update({ where: { id: r.grant.id }, data: { externalUserId: r.newExternalId } });
+          await prisma.userAccess.update({
+            where: { id: r.grant.id },
+            data: { externalUserId: r.newExternalId },
+          });
         } catch (err: any) {
-          report.errors.push(`refresh externalUserId for ${r.grant.userEmail}: ${err.message}`);
+          report.errors.push(
+            `refresh externalUserId for ${r.grant.userEmail}: ${err.message}`,
+          );
         }
       }
 
@@ -344,10 +417,13 @@ async function runResync(opts: {
         logger.info(
           `  ${apply ? '⇄' : 'would swap'} grant: ${s.grant.userEmail} → ${s.grant.group.name} (${s.grant.level?.name ?? 'base'} → ${s.target.levelName ?? 'base'})`,
         );
-        if (!apply) continue;
+        if (!apply) {continue;}
         try {
-          await prisma.$transaction(async (tx) => {
-            await tx.userAccess.update({ where: { id: s.grant.id }, data: { isActive: false, revokedAt: now } });
+          await prisma.$transaction(async tx => {
+            await tx.userAccess.update({
+              where: { id: s.grant.id },
+              data: { isActive: false, revokedAt: now },
+            });
             await tx.userAccess.create({
               data: {
                 userId: s.grant.userId,
@@ -392,7 +468,9 @@ async function runResync(opts: {
             },
           });
         } catch (err: any) {
-          report.errors.push(`swap level for ${s.grant.userEmail} on ${s.label}: ${err.message}`);
+          report.errors.push(
+            `swap level for ${s.grant.userEmail} on ${s.label}: ${err.message}`,
+          );
         }
       }
 
@@ -402,7 +480,10 @@ async function runResync(opts: {
       // "everyone left." Dry run always shows the full picture; only a real
       // Apply is blocked, and only the destructive removal step.
       const threshold = Math.min(
-        Math.max(SAFETY_CAP_MIN_ABSOLUTE, Math.ceil(activeGrants.length * SAFETY_CAP_RATIO)),
+        Math.max(
+          SAFETY_CAP_MIN_ABSOLUTE,
+          Math.ceil(activeGrants.length * SAFETY_CAP_RATIO),
+        ),
         Math.ceil(activeGrants.length * SAFETY_CAP_MAX_SHARE),
       );
       report.removePassSafetyCapThreshold = threshold;
@@ -411,7 +492,7 @@ async function runResync(opts: {
       // admin can review exactly who's affected before deciding whether to force.
       report.removePassOrphansFound = orphans.length;
       report.deactivatedGrants = orphans.map(
-        (o) => `${o.grant.userEmail} → ${o.label} (no longer on ${displayName})`,
+        o => `${o.grant.userEmail} → ${o.label} (no longer on ${displayName})`,
       );
 
       if (apply && overCap && !force) {
@@ -427,10 +508,15 @@ async function runResync(opts: {
         report.grantsDeactivated = orphans.length;
         for (const o of orphans) {
           const reasonText = `no longer on ${displayName}`;
-          logger.info(`  ${apply ? '－' : 'would deactivate'} grant: ${o.grant.userEmail} → ${o.label} (${reasonText})`);
-          if (!apply) continue;
+          logger.info(
+            `  ${apply ? '－' : 'would deactivate'} grant: ${o.grant.userEmail} → ${o.label} (${reasonText})`,
+          );
+          if (!apply) {continue;}
           try {
-            await prisma.userAccess.update({ where: { id: o.grant.id }, data: { isActive: false, revokedAt: now } });
+            await prisma.userAccess.update({
+              where: { id: o.grant.id },
+              data: { isActive: false, revokedAt: now },
+            });
             if (o.grant.accessRequestId) {
               await prisma.accessRequest.update({
                 where: { id: o.grant.accessRequestId },
@@ -461,7 +547,9 @@ async function runResync(opts: {
               },
             });
           } catch (err: any) {
-            report.errors.push(`deactivate grant for ${o.grant.userEmail} on ${o.label}: ${err.message}`);
+            report.errors.push(
+              `deactivate grant for ${o.grant.userEmail} on ${o.label}: ${err.message}`,
+            );
           }
         }
       }
@@ -470,12 +558,17 @@ async function runResync(opts: {
 
   // ── Pass C — FIX STUCK ───────────────────────────────────────────────────
   const stuckRequests = await prisma.accessRequest.findMany({
-    where: { status: { in: STUCK_STATUSES }, group: { platform: lowerPlatform } },
+    where: {
+      status: { in: STUCK_STATUSES },
+      group: { platform: lowerPlatform },
+    },
     include: { group: true, level: true },
   });
 
   for (const req of stuckRequests) {
-    const label = req.level ? `${req.group.name} — ${req.level.name}` : req.group.name;
+    const label = req.level
+      ? `${req.group.name} — ${req.level.name}`
+      : req.group.name;
     const activeGrant = await prisma.userAccess.findFirst({
       where: { userId: req.requesterId, groupId: req.groupId, isActive: true },
     });
@@ -484,21 +577,31 @@ async function runResync(opts: {
     if (!levelMatches) {
       report.stuckReported.push(
         `${req.requesterEmail} → ${label} (${req.status})${
-          activeGrant ? ' — active grant is on a different level' : ` — user not yet a member on ${displayName}`
+          activeGrant
+            ? ' — active grant is on a different level'
+            : ` — user not yet a member on ${displayName}`
         }`,
       );
       continue;
     }
 
     report.requestsReconciled++;
-    report.reconciledRequests.push(`${req.requesterEmail} → ${label} (was ${req.status})`);
-    logger.info(`  ${apply ? '✓' : 'would reconcile'} request: ${req.requesterEmail} → ${label} (${req.status} → PROVISIONED)`);
+    report.reconciledRequests.push(
+      `${req.requesterEmail} → ${label} (was ${req.status})`,
+    );
+    logger.info(
+      `  ${apply ? '✓' : 'would reconcile'} request: ${req.requesterEmail} → ${label} (${req.status} → PROVISIONED)`,
+    );
 
-    if (!apply) continue;
+    if (!apply) {continue;}
     try {
       await prisma.accessRequest.update({
         where: { id: req.id },
-        data: { status: RequestStatus.PROVISIONED, provisionedAt: now, provisionError: null },
+        data: {
+          status: RequestStatus.PROVISIONED,
+          provisionedAt: now,
+          provisionError: null,
+        },
       });
       await prisma.auditEntry.create({
         data: {
@@ -518,7 +621,9 @@ async function runResync(opts: {
         },
       });
     } catch (err: any) {
-      report.errors.push(`reconcile stuck request for ${req.requesterEmail} on ${label}: ${err.message}`);
+      report.errors.push(
+        `reconcile stuck request for ${req.requesterEmail} on ${label}: ${err.message}`,
+      );
     }
   }
 

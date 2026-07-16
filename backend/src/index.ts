@@ -58,7 +58,7 @@ app.use(
       }
     },
     credentials: true,
-  })
+  }),
 );
 
 app.use(express.json({ limit: '50kb' }));
@@ -66,10 +66,18 @@ app.use(requestIdMiddleware);
 app.use(performanceMiddleware);
 app.use(generalRateLimiter);
 
+// App Routes and Deep diagnostics
+const hermesRoutes = express.Router();
+
+// Public health check route supported with/without /hermes prefix
+hermesRoutes.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
 // Deep diagnostics — DB + live platform health. Behind super-admin auth so anonymous
 // callers can't trigger outbound platform calls (amplification) or read dependency
 // topology. The public liveness probe above stays minimal.
-app.get('/health/deep', authenticateToken, requireRole(['hermes_super_admin']), async (req: Request, res: Response) => {
+hermesRoutes.get('/health/deep', authenticateToken, requireRole(['hermes_super_admin']), async (req: Request, res: Response) => {
   const checks: Record<string, any> = { timestamp: new Date().toISOString() };
 
   // Database check. Don't surface raw error text in prod — Prisma error messages
@@ -79,7 +87,7 @@ app.get('/health/deep', authenticateToken, requireRole(['hermes_super_admin']), 
     checks.database = 'healthy';
   } catch (err: any) {
     checks.database = 'unhealthy';
-    if (config.isDev) checks.databaseError = err.message;
+    if (config.isDev) {checks.databaseError = err.message;}
   }
 
   // Platform checks (via registry)
@@ -87,7 +95,7 @@ app.get('/health/deep', authenticateToken, requireRole(['hermes_super_admin']), 
     checks.platforms = await provisioningRegistry.healthCheckAll();
   } catch (err: any) {
     checks.platforms = 'error';
-    if (config.isDev) checks.platformsError = err.message;
+    if (config.isDev) {checks.platformsError = err.message;}
   }
 
   // Last successful platform sync of any platform (null if never run)
@@ -100,18 +108,20 @@ app.get('/health/deep', authenticateToken, requireRole(['hermes_super_admin']), 
   });
 });
 
-// App Routes
-app.use('/auth', authRouter);
-app.use('/api/groups', groupRouter);
-app.use('/api/access-requests', accessRequestRouter);
-app.use('/api/user-access', userAccessRouter);
-app.use('/api/notifications', notificationRouter);
-app.use('/api/audit', auditRouter);
-app.use('/api/admin', adminRouter);
-app.use('/api/user-creation-requests', userCreationRouter);
-app.use('/api/platforms', platformRouter);
-app.use('/api/zookeeper', zookeeperRouter);
-app.use('/api/secrets', secretIngestionRouter);
+hermesRoutes.use('/auth', authRouter);
+hermesRoutes.use('/api/groups', groupRouter);
+hermesRoutes.use('/api/access-requests', accessRequestRouter);
+hermesRoutes.use('/api/user-access', userAccessRouter);
+hermesRoutes.use('/api/notifications', notificationRouter);
+hermesRoutes.use('/api/audit', auditRouter);
+hermesRoutes.use('/api/admin', adminRouter);
+hermesRoutes.use('/api/user-creation-requests', userCreationRouter);
+hermesRoutes.use('/api/platforms', platformRouter);
+hermesRoutes.use('/api/zookeeper', zookeeperRouter);
+hermesRoutes.use('/api/secrets', secretIngestionRouter);
+
+app.use('/', hermesRoutes);
+app.use('/hermes', hermesRoutes);
 
 // Fallbacks
 app.use(notFoundHandler);

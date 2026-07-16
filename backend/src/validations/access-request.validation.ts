@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { AccessDuration } from '@prisma/client';
+import { AccessDuration } from '../../generated/hermes';
 
 export const createRequestSchema = z.object({
   groupId: z.string().uuid('Invalid Group ID format'),
@@ -35,7 +35,10 @@ export const reviewRequestSchema = z.object({
   status: z.enum(['APPROVED', 'REJECTED'], {
     errorMap: () => ({ message: 'Status must be APPROVED or REJECTED' }),
   }),
-  note: z.string().max(250, 'Review notes must not exceed 250 characters').optional(),
+  note: z
+    .string()
+    .max(250, 'Review notes must not exceed 250 characters')
+    .optional(),
 });
 
 // Bulk submit (Groups page): one duration shared across all selected groups, each
@@ -70,7 +73,10 @@ export const reviewRequestsBulkSchema = z.object({
         status: z.enum(['APPROVED', 'REJECTED'], {
           errorMap: () => ({ message: 'Status must be APPROVED or REJECTED' }),
         }),
-        note: z.string().max(250, 'Review notes must not exceed 250 characters').optional(),
+        note: z
+          .string()
+          .max(250, 'Review notes must not exceed 250 characters')
+          .optional(),
       }),
     )
     .min(1, 'At least one item is required')

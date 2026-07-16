@@ -36,20 +36,25 @@ export class SyncService {
    *  concurrently — platforms are independent (different cache rows, different
    *  adapters). Per-platform failures are isolated via Promise.allSettled so one
    *  bad platform can't block or fail the rest. */
-  async syncAllPlatforms(): Promise<{ usersSynced: number; groupsSynced: number }> {
+  async syncAllPlatforms(): Promise<{
+    usersSynced: number;
+    groupsSynced: number;
+  }> {
     logger.info('🔄 SyncService: Starting sync across all platforms...');
 
-    const platforms = provisioningRegistry.listPlatforms().filter((platform) => {
+    const platforms = provisioningRegistry.listPlatforms().filter(platform => {
       const adapter = provisioningRegistry.tryGet(platform);
       if (adapter?.isEnabled && !adapter.isEnabled()) {
-        logger.info(`🔄 SyncService: Skipping ${platform} sync because it is disabled.`);
+        logger.info(
+          `🔄 SyncService: Skipping ${platform} sync because it is disabled.`,
+        );
         return false;
       }
       return true;
     });
 
     const results = await Promise.allSettled(
-      platforms.map((platform) => this.syncSinglePlatform(platform)),
+      platforms.map(platform => this.syncSinglePlatform(platform)),
     );
 
     let usersSynced = 0;
@@ -60,28 +65,40 @@ export class SyncService {
         groupsSynced += result.value.groupsSynced;
       } else {
         logger.error(
-          { platform: platforms[i], error: result.reason?.message ?? String(result.reason) },
+          {
+            platform: platforms[i],
+            error: result.reason?.message ?? String(result.reason),
+          },
           '🔄 SyncService: Platform sync failed',
         );
       }
     });
 
     this.lastSyncedAt = new Date();
-    logger.info(`🔄 SyncService: Sync complete — ${usersSynced} users, ${groupsSynced} groups.`);
+    logger.info(
+      `🔄 SyncService: Sync complete — ${usersSynced} users, ${groupsSynced} groups.`,
+    );
     return { usersSynced, groupsSynced };
   }
 
   /** Refresh the cache for a single platform. Groups first, then users (member counts depend on both). */
-  async syncSinglePlatform(platform: string): Promise<{ usersSynced: number; groupsSynced: number }> {
+  async syncSinglePlatform(
+    platform: string,
+  ): Promise<{ usersSynced: number; groupsSynced: number }> {
     const adapter = provisioningRegistry.get(platform);
-    const groups = adapter.syncGroups ? await adapter.syncGroups() : { count: 0 };
+    const groups = adapter.syncGroups
+      ? await adapter.syncGroups()
+      : { count: 0 };
     const users = adapter.syncUsers ? await adapter.syncUsers() : { count: 0 };
     if (adapter.syncGroups) {
       try {
         await this.reconcileHermesGroups(platform, adapter);
       } catch (err: any) {
         // Reconciliation is best-effort on top of the cache sync — never fail the sync over it.
-        logger.error({ platform, error: err.message }, '🔄 SyncService: Hermes-group reconciliation failed');
+        logger.error(
+          { platform, error: err.message },
+          '🔄 SyncService: Hermes-group reconciliation failed',
+        );
       }
     }
     this.lastSyncedAt = new Date();
@@ -121,42 +138,74 @@ export class SyncService {
    * archiving is also a deliberate admin action, so only a *broken* link being
    * healed reactivates — anything else stays as the admin left it.
    */
-  async reconcileHermesGroups(platform: string, adapter: PlatformAdapter): Promise<void> {
+  async reconcileHermesGroups(
+    platform: string,
+    adapter: PlatformAdapter,
+  ): Promise<void> {
     if (adapter.isSimulation?.()) {
-      logger.debug({ platform }, '🔄 SyncService: simulation mode — skipping Hermes-group reconciliation');
+      logger.debug(
+        { platform },
+        '🔄 SyncService: simulation mode — skipping Hermes-group reconciliation',
+      );
       return;
     }
 
-    const cached = await prisma.platformExternalGroup.findMany({ where: { platform } });
+    const cached = await prisma.platformExternalGroup.findMany({
+      where: { platform },
+    });
     // An empty cache means the platform fetch returned nothing (or never ran) —
     // archiving everything on that signal would be the exact disaster this
     // feature exists to prevent. Bail out.
     if (cached.length === 0) {
-      logger.warn({ platform }, '🔄 SyncService: external-group cache empty — skipping reconciliation');
+      logger.warn(
+        { platform },
+        '🔄 SyncService: external-group cache empty — skipping reconciliation',
+      );
       return;
     }
 
-    const isReserved = (g: { externalId: string; name: string; type: string | null }) =>
-      adapter.isReservedExternalGroup?.({ externalId: g.externalId, name: g.name, type: g.type }) ?? false;
+    const isReserved = (g: {
+      externalId: string;
+      name: string;
+      type: string | null;
+    }) =>
+      adapter.isReservedExternalGroup?.({
+        externalId: g.externalId,
+        name: g.name,
+        type: g.type,
+      }) ?? false;
     const cachedIds = new Set(cached.map(g => g.externalId));
-    const reservedIds = new Set(cached.filter(isReserved).map(g => g.externalId));
+    const reservedIds = new Set(
+      cached.filter(isReserved).map(g => g.externalId),
+    );
     // Name → cache row, for healing broken links (dash/whitespace-insensitive).
     const byName = new Map<string, (typeof cached)[number]>();
     for (const g of cached) {
-      if (!reservedIds.has(g.externalId)) byName.set(this.normalizeName(g.name), g);
+      if (!reservedIds.has(g.externalId)) {
+        byName.set(this.normalizeName(g.name), g);
+      }
     }
 
     const hermesGroups = await prisma.group.findMany({
       where: { platform },
-      include: { levels: true, _count: { select: { accessRequests: true, userAccesses: true } } },
+      include: {
+        levels: true,
+        _count: { select: { accessRequests: true, userAccesses: true } },
+      },
     });
     // Every external id any Hermes group or level already points at (active or
     // archived) — auto-create must not produce a duplicate mapping, and a
     // level's backing group must not surface as a standalone requestable group.
     const referencedIds = new Set<string>();
     for (const g of hermesGroups) {
-      if (g.externalGroupId) referencedIds.add(g.externalGroupId);
-      for (const l of g.levels) if (l.externalGroupId) referencedIds.add(l.externalGroupId);
+      if (g.externalGroupId) {
+        referencedIds.add(g.externalGroupId);
+      }
+      for (const l of g.levels) {
+        if (l.externalGroupId) {
+          referencedIds.add(l.externalGroupId);
+        }
+      }
     }
 
     // Groups a previous sync run auto-created (audited GROUP_CREATED by the
@@ -164,15 +213,25 @@ export class SyncService {
     // healed link reclaims their platform group, they are duplicates and can be
     // deleted outright.
     const syncCreatedAudits = await prisma.auditEntry.findMany({
-      where: { action: 'GROUP_CREATED', performerId: 'system', groupId: { in: hermesGroups.map(g => g.id) } },
+      where: {
+        action: 'GROUP_CREATED',
+        performerId: 'system',
+        groupId: { in: hermesGroups.map(g => g.id) },
+      },
       select: { groupId: true },
     });
     const syncCreatedIds = new Set(syncCreatedAudits.map(a => a.groupId));
-    const pristineSyncGroupByExtId = new Map<string, (typeof hermesGroups)[number]>();
+    const pristineSyncGroupByExtId = new Map<
+      string,
+      (typeof hermesGroups)[number]
+    >();
     for (const g of hermesGroups) {
       if (
-        g.externalGroupId && syncCreatedIds.has(g.id) && g.levels.length === 0
-        && g._count.accessRequests === 0 && g._count.userAccesses === 0
+        g.externalGroupId &&
+        syncCreatedIds.has(g.id) &&
+        g.levels.length === 0 &&
+        g._count.accessRequests === 0 &&
+        g._count.userAccesses === 0
       ) {
         pristineSyncGroupByExtId.set(g.externalGroupId, g);
       }
@@ -180,8 +239,12 @@ export class SyncService {
     const deletedGroupIds = new Set<string>();
 
     const graceCutoff = new Date(Date.now() - RECONCILE_GRACE_MS);
-    let created = 0, archived = 0, levelsDeactivated = 0;
-    let relinkedGroups = 0, relinkedLevels = 0, duplicatesDeleted = 0;
+    let created = 0,
+      archived = 0,
+      levelsDeactivated = 0;
+    let relinkedGroups = 0,
+      relinkedLevels = 0,
+      duplicatesDeleted = 0;
 
     /**
      * Free `extId` so a healed group/level can claim it. Returns false if a real
@@ -189,9 +252,13 @@ export class SyncService {
      * pristine sync-created duplicate that owns it.
      */
     const claimForRelink = async (extId: string): Promise<boolean> => {
-      if (!referencedIds.has(extId)) return true;
+      if (!referencedIds.has(extId)) {
+        return true;
+      }
       const dup = pristineSyncGroupByExtId.get(extId);
-      if (!dup || deletedGroupIds.has(dup.id)) return false;
+      if (!dup || deletedGroupIds.has(dup.id)) {
+        return false;
+      }
       await prisma.group.delete({ where: { id: dup.id } });
       deletedGroupIds.add(dup.id);
       pristineSyncGroupByExtId.delete(extId);
@@ -201,7 +268,13 @@ export class SyncService {
           action: 'GROUP_DELETED',
           performerId: 'system',
           performerName: 'Platform Sync',
-          details: { source: 'platform-sync', platform, slug: dup.slug, externalGroupId: extId, reason: 'duplicate of a re-linked group/level' },
+          details: {
+            source: 'platform-sync',
+            platform,
+            slug: dup.slug,
+            externalGroupId: extId,
+            reason: 'duplicate of a re-linked group/level',
+          },
         },
       });
       duplicatesDeleted++;
@@ -214,11 +287,19 @@ export class SyncService {
     // still points at a live platform group is left exactly as the admin set it.
     for (const g of hermesGroups) {
       for (const level of g.levels) {
-        const linkIntact = level.externalGroupId
-          && cachedIds.has(level.externalGroupId) && !reservedIds.has(level.externalGroupId);
-        if (linkIntact) continue;
-        const candidate = byName.get(this.normalizeName(`${g.name} — ${level.name}`));
-        if (!candidate || !(await claimForRelink(candidate.externalId))) continue;
+        const linkIntact =
+          level.externalGroupId &&
+          cachedIds.has(level.externalGroupId) &&
+          !reservedIds.has(level.externalGroupId);
+        if (linkIntact) {
+          continue;
+        }
+        const candidate = byName.get(
+          this.normalizeName(`${g.name} — ${level.name}`),
+        );
+        if (!candidate || !(await claimForRelink(candidate.externalId))) {
+          continue;
+        }
         await prisma.groupLevel.update({
           where: { id: level.id },
           data: { externalGroupId: candidate.externalId, isActive: true },
@@ -230,8 +311,12 @@ export class SyncService {
             performerName: 'Platform Sync',
             groupId: g.id,
             details: {
-              source: 'platform-sync', platform, levelId: level.id, slug: level.slug,
-              relinkedFrom: level.externalGroupId, relinkedTo: candidate.externalId,
+              source: 'platform-sync',
+              platform,
+              levelId: level.id,
+              slug: level.slug,
+              relinkedFrom: level.externalGroupId,
+              relinkedTo: candidate.externalId,
             },
           },
         });
@@ -241,7 +326,10 @@ export class SyncService {
         relinkedLevels++;
         if (!g.isActive) {
           // The level is live again — surface its parent group too.
-          await prisma.group.update({ where: { id: g.id }, data: { isActive: true } });
+          await prisma.group.update({
+            where: { id: g.id },
+            data: { isActive: true },
+          });
           g.isActive = true;
           await prisma.auditEntry.create({
             data: {
@@ -249,7 +337,13 @@ export class SyncService {
               performerId: 'system',
               performerName: 'Platform Sync',
               groupId: g.id,
-              details: { source: 'platform-sync', platform, slug: g.slug, reactivated: true, reason: 'level re-linked to a live platform group' },
+              details: {
+                source: 'platform-sync',
+                platform,
+                slug: g.slug,
+                reactivated: true,
+                reason: 'level re-linked to a live platform group',
+              },
             },
           });
         }
@@ -258,11 +352,18 @@ export class SyncService {
 
     // ── 2. Heal groups whose backing platform group was recreated under a new id ──
     for (const g of hermesGroups) {
-      if (deletedGroupIds.has(g.id) || !g.externalGroupId) continue;
-      const linkIntact = cachedIds.has(g.externalGroupId) && !reservedIds.has(g.externalGroupId);
-      if (linkIntact) continue;
+      if (deletedGroupIds.has(g.id) || !g.externalGroupId) {
+        continue;
+      }
+      const linkIntact =
+        cachedIds.has(g.externalGroupId) && !reservedIds.has(g.externalGroupId);
+      if (linkIntact) {
+        continue;
+      }
       const candidate = byName.get(this.normalizeName(g.name));
-      if (!candidate || !(await claimForRelink(candidate.externalId))) continue;
+      if (!candidate || !(await claimForRelink(candidate.externalId))) {
+        continue;
+      }
       await prisma.group.update({
         where: { id: g.id },
         data: { externalGroupId: candidate.externalId, isActive: true },
@@ -274,8 +375,12 @@ export class SyncService {
           performerName: 'Platform Sync',
           groupId: g.id,
           details: {
-            source: 'platform-sync', platform, slug: g.slug,
-            relinkedFrom: g.externalGroupId, relinkedTo: candidate.externalId, reactivated: !g.isActive,
+            source: 'platform-sync',
+            platform,
+            slug: g.slug,
+            relinkedFrom: g.externalGroupId,
+            relinkedTo: candidate.externalId,
+            reactivated: !g.isActive,
           },
         },
       });
@@ -289,7 +394,9 @@ export class SyncService {
     // resolver for the "<Group> — <Level>" naming convention below.
     const parentByName = new Map<string, (typeof hermesGroups)[number]>();
     for (const g of hermesGroups) {
-      if (!deletedGroupIds.has(g.id)) parentByName.set(this.normalizeName(g.name), g);
+      if (!deletedGroupIds.has(g.id)) {
+        parentByName.set(this.normalizeName(g.name), g);
+      }
     }
 
     /** Attach a live platform group as a level of `parent`, reactivating the parent if needed. */
@@ -301,7 +408,13 @@ export class SyncService {
       const slug = this.uniqueLevelSlug(levelName, parent.levels);
       const rank = parent.levels.reduce((m, l) => Math.max(m, l.rank), -1) + 1;
       const level = await prisma.groupLevel.create({
-        data: { groupId: parent.id, name: levelName, slug, externalGroupId, rank },
+        data: {
+          groupId: parent.id,
+          name: levelName,
+          slug,
+          externalGroupId,
+          rank,
+        },
       });
       parent.levels.push(level);
       referencedIds.add(externalGroupId);
@@ -311,11 +424,22 @@ export class SyncService {
           performerId: 'system',
           performerName: 'Platform Sync',
           groupId: parent.id,
-          details: { source: 'platform-sync', platform, levelId: level.id, name: levelName, slug, externalGroupId, autoCreated: true },
+          details: {
+            source: 'platform-sync',
+            platform,
+            levelId: level.id,
+            name: levelName,
+            slug,
+            externalGroupId,
+            autoCreated: true,
+          },
         },
       });
       if (!parent.isActive) {
-        await prisma.group.update({ where: { id: parent.id }, data: { isActive: true } });
+        await prisma.group.update({
+          where: { id: parent.id },
+          data: { isActive: true },
+        });
         parent.isActive = true;
         await prisma.auditEntry.create({
           data: {
@@ -323,7 +447,13 @@ export class SyncService {
             performerId: 'system',
             performerName: 'Platform Sync',
             groupId: parent.id,
-            details: { source: 'platform-sync', platform, slug: parent.slug, reactivated: true, reason: 'live level attached' },
+            details: {
+              source: 'platform-sync',
+              platform,
+              slug: parent.slug,
+              reactivated: true,
+              reason: 'live level attached',
+            },
           },
         });
       }
@@ -335,12 +465,19 @@ export class SyncService {
     // structure was missing. If such a group is still pristine, its platform
     // group is alive, and its name parses as "<existing group> — <level>",
     // fold it back into the parent as a level.
-    let convertedToLevels = 0, levelsCreated = 0;
+    let convertedToLevels = 0,
+      levelsCreated = 0;
     for (const [extId, stray] of [...pristineSyncGroupByExtId]) {
-      if (deletedGroupIds.has(stray.id)) continue;
-      if (!cachedIds.has(extId) || reservedIds.has(extId)) continue; // dead/reserved → archive pass handles it
+      if (deletedGroupIds.has(stray.id)) {
+        continue;
+      }
+      if (!cachedIds.has(extId) || reservedIds.has(extId)) {
+        continue;
+      } // dead/reserved → archive pass handles it
       const split = this.splitLevelName(stray.name, parentByName);
-      if (!split || split.parent.id === stray.id) continue;
+      if (!split || split.parent.id === stray.id) {
+        continue;
+      }
       await attachLevel(split.parent, split.levelName, extId);
       await prisma.group.delete({ where: { id: stray.id } });
       deletedGroupIds.add(stray.id);
@@ -351,7 +488,13 @@ export class SyncService {
           action: 'GROUP_DELETED',
           performerId: 'system',
           performerName: 'Platform Sync',
-          details: { source: 'platform-sync', platform, slug: stray.slug, externalGroupId: extId, reason: `converted into level "${split.levelName}" of "${split.parent.name}"` },
+          details: {
+            source: 'platform-sync',
+            platform,
+            slug: stray.slug,
+            externalGroupId: extId,
+            reason: `converted into level "${split.levelName}" of "${split.parent.name}"`,
+          },
         },
       });
       convertedToLevels++;
@@ -360,15 +503,29 @@ export class SyncService {
     // ── 4. Create Hermes groups/levels for platform groups Hermes doesn't know yet ──
     // Plain names first, so "Credit Card" exists before "Credit Card — Admin"
     // tries to resolve it as its parent.
-    const existingSlugs = new Set((await prisma.group.findMany({ select: { slug: true } })).map(g => g.slug));
+    const existingSlugs = new Set(
+      (await prisma.group.findMany({ select: { slug: true } })).map(
+        g => g.slug,
+      ),
+    );
     const existingNames = new Set(
-      hermesGroups.filter(g => !deletedGroupIds.has(g.id)).map(g => this.normalizeName(g.name)),
+      hermesGroups
+        .filter(g => !deletedGroupIds.has(g.id))
+        .map(g => this.normalizeName(g.name)),
     );
     const createCandidates = cached
-      .filter(ext => !reservedIds.has(ext.externalId) && !referencedIds.has(ext.externalId))
-      .sort((a, b) => Number(/[—–-]/.test(a.name)) - Number(/[—–-]/.test(b.name)));
+      .filter(
+        ext =>
+          !reservedIds.has(ext.externalId) &&
+          !referencedIds.has(ext.externalId),
+      )
+      .sort(
+        (a, b) => Number(/[—–-]/.test(a.name)) - Number(/[—–-]/.test(b.name)),
+      );
     for (const ext of createCandidates) {
-      if (referencedIds.has(ext.externalId)) continue; // claimed by a level created earlier in this loop
+      if (referencedIds.has(ext.externalId)) {
+        continue;
+      } // claimed by a level created earlier in this loop
       // "<Group> — <Level>" with a known parent → it's a level, not a group.
       const split = this.splitLevelName(ext.name, parentByName);
       if (split) {
@@ -387,22 +544,40 @@ export class SyncService {
       }
       const slug = this.uniqueSlug(ext.name, platform, existingSlugs);
       const description =
-        (ext.metadata as Record<string, unknown> | null)?.['description'] as string | undefined
-        ?? `Imported automatically from ${adapter.displayName} by platform sync.`;
+        ((ext.metadata as Record<string, unknown> | null)?.['description'] as
+          | string
+          | undefined) ??
+        `Imported automatically from ${adapter.displayName} by platform sync.`;
       const group = await prisma.group.create({
-        data: { name: ext.name, slug, description, platform, externalGroupId: ext.externalId, tables: [] },
+        data: {
+          name: ext.name,
+          slug,
+          description,
+          platform,
+          externalGroupId: ext.externalId,
+          tables: [],
+        },
       });
       existingSlugs.add(slug);
       existingNames.add(this.normalizeName(ext.name));
       referencedIds.add(ext.externalId);
-      parentByName.set(this.normalizeName(group.name), { ...group, levels: [], _count: { accessRequests: 0, userAccesses: 0 } });
+      parentByName.set(this.normalizeName(group.name), {
+        ...group,
+        levels: [],
+        _count: { accessRequests: 0, userAccesses: 0 },
+      });
       await prisma.auditEntry.create({
         data: {
           action: 'GROUP_CREATED',
           performerId: 'system',
           performerName: 'Platform Sync',
           groupId: group.id,
-          details: { source: 'platform-sync', platform, slug, externalGroupId: ext.externalId },
+          details: {
+            source: 'platform-sync',
+            platform,
+            slug,
+            externalGroupId: ext.externalId,
+          },
         },
       });
       created++;
@@ -410,12 +585,26 @@ export class SyncService {
 
     // ── 5. Deactivate levels whose backing platform group vanished ──
     for (const g of hermesGroups) {
-      if (deletedGroupIds.has(g.id)) continue;
+      if (deletedGroupIds.has(g.id)) {
+        continue;
+      }
       for (const level of g.levels) {
-        if (!level.isActive || !level.externalGroupId) continue;
-        if (level.createdAt > graceCutoff) continue;
-        if (cachedIds.has(level.externalGroupId) && !reservedIds.has(level.externalGroupId)) continue;
-        await prisma.groupLevel.update({ where: { id: level.id }, data: { isActive: false } });
+        if (!level.isActive || !level.externalGroupId) {
+          continue;
+        }
+        if (level.createdAt > graceCutoff) {
+          continue;
+        }
+        if (
+          cachedIds.has(level.externalGroupId) &&
+          !reservedIds.has(level.externalGroupId)
+        ) {
+          continue;
+        }
+        await prisma.groupLevel.update({
+          where: { id: level.id },
+          data: { isActive: false },
+        });
         level.isActive = false; // keep the in-memory copy honest for step 3
         await prisma.auditEntry.create({
           data: {
@@ -423,7 +612,13 @@ export class SyncService {
             performerId: 'system',
             performerName: 'Platform Sync',
             groupId: g.id,
-            details: { source: 'platform-sync', platform, levelId: level.id, slug: level.slug, externalGroupId: level.externalGroupId },
+            details: {
+              source: 'platform-sync',
+              platform,
+              levelId: level.id,
+              slug: level.slug,
+              externalGroupId: level.externalGroupId,
+            },
           },
         });
         levelsDeactivated++;
@@ -432,30 +627,73 @@ export class SyncService {
 
     // ── 6. Archive active Hermes groups whose backing platform group vanished ──
     for (const g of hermesGroups) {
-      if (deletedGroupIds.has(g.id)) continue;
-      if (!g.isActive || !g.externalGroupId) continue;
-      if (g.createdAt > graceCutoff) continue;
-      const baseGone = !cachedIds.has(g.externalGroupId) || reservedIds.has(g.externalGroupId);
-      if (!baseGone) continue;
+      if (deletedGroupIds.has(g.id)) {
+        continue;
+      }
+      if (!g.isActive || !g.externalGroupId) {
+        continue;
+      }
+      if (g.createdAt > graceCutoff) {
+        continue;
+      }
+      const baseGone =
+        !cachedIds.has(g.externalGroupId) || reservedIds.has(g.externalGroupId);
+      if (!baseGone) {
+        continue;
+      }
       // A leveled group provisions through its levels, not the base group — keep
       // it visible as long as at least one level is still backed by a live group.
-      if (g.levels.some(l => l.isActive && l.externalGroupId && cachedIds.has(l.externalGroupId))) continue;
-      await prisma.group.update({ where: { id: g.id }, data: { isActive: false } });
+      if (
+        g.levels.some(
+          l =>
+            l.isActive && l.externalGroupId && cachedIds.has(l.externalGroupId),
+        )
+      ) {
+        continue;
+      }
+      await prisma.group.update({
+        where: { id: g.id },
+        data: { isActive: false },
+      });
       await prisma.auditEntry.create({
         data: {
           action: 'GROUP_ARCHIVED',
           performerId: 'system',
           performerName: 'Platform Sync',
           groupId: g.id,
-          details: { source: 'platform-sync', platform, slug: g.slug, externalGroupId: g.externalGroupId },
+          details: {
+            source: 'platform-sync',
+            platform,
+            slug: g.slug,
+            externalGroupId: g.externalGroupId,
+          },
         },
       });
       archived++;
     }
 
-    if (created || levelsCreated || archived || levelsDeactivated || relinkedGroups || relinkedLevels || duplicatesDeleted || convertedToLevels) {
+    if (
+      created ||
+      levelsCreated ||
+      archived ||
+      levelsDeactivated ||
+      relinkedGroups ||
+      relinkedLevels ||
+      duplicatesDeleted ||
+      convertedToLevels
+    ) {
       logger.info(
-        { platform, created, levelsCreated, archived, levelsDeactivated, relinkedGroups, relinkedLevels, duplicatesDeleted, convertedToLevels },
+        {
+          platform,
+          created,
+          levelsCreated,
+          archived,
+          levelsDeactivated,
+          relinkedGroups,
+          relinkedLevels,
+          duplicatesDeleted,
+          convertedToLevels,
+        },
         '🔄 SyncService: Hermes groups reconciled with platform',
       );
     }
@@ -467,7 +705,11 @@ export class SyncService {
    * compare equal), so healing survives em-dash vs hyphen differences.
    */
   private normalizeName(name: string): string {
-    return name.toLowerCase().replace(/\s*[—–-]+\s*/g, ' — ').replace(/\s+/g, ' ').trim();
+    return name
+      .toLowerCase()
+      .replace(/\s*[—–-]+\s*/g, ' — ')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   /**
@@ -486,33 +728,62 @@ export class SyncService {
     while ((m = sep.exec(rawName)) !== null) {
       const prefix = rawName.slice(0, m.index);
       const levelName = rawName.slice(m.index + m[0].length);
-      if (!prefix || !levelName) continue;
+      if (!prefix || !levelName) {
+        continue;
+      }
       const parent = parentByName.get(this.normalizeName(prefix));
-      if (parent) return { parent, levelName };
+      if (parent) {
+        return { parent, levelName };
+      }
     }
     return null;
   }
 
   /** Derive a level slug from its name, unique within the parent's levels. */
-  private uniqueLevelSlug(name: string, siblings: Array<{ slug: string }>): string {
+  private uniqueLevelSlug(
+    name: string,
+    siblings: Array<{ slug: string }>,
+  ): string {
     const taken = new Set(siblings.map(l => l.slug));
-    const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'level';
-    if (!taken.has(base)) return base;
+    const base =
+      name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '') || 'level';
+    if (!taken.has(base)) {
+      return base;
+    }
     for (let i = 2; ; i++) {
       const candidate = `${base}-${i}`;
-      if (!taken.has(candidate)) return candidate;
+      if (!taken.has(candidate)) {
+        return candidate;
+      }
     }
   }
 
   /** Derive a URL-safe slug from a platform group name, unique across all groups. */
-  private uniqueSlug(name: string, platform: string, taken: Set<string>): string {
-    const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'group';
-    if (!taken.has(base)) return base;
+  private uniqueSlug(
+    name: string,
+    platform: string,
+    taken: Set<string>,
+  ): string {
+    const base =
+      name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '') || 'group';
+    if (!taken.has(base)) {
+      return base;
+    }
     const platformed = `${platform}-${base}`;
-    if (!taken.has(platformed)) return platformed;
+    if (!taken.has(platformed)) {
+      return platformed;
+    }
     for (let i = 2; ; i++) {
       const candidate = `${platformed}-${i}`;
-      if (!taken.has(candidate)) return candidate;
+      if (!taken.has(candidate)) {
+        return candidate;
+      }
     }
   }
 
@@ -522,17 +793,29 @@ export class SyncService {
    * `syncSingleUser` hook. Returns false if the platform's adapter doesn't support
    * it or the user isn't there yet.
    */
-  async syncSingleUser(email: string, platform: string = config.platform.default): Promise<boolean> {
-    logger.info({ email, platform }, '🔄 SyncService: Fast-path single-user sync...');
+  async syncSingleUser(
+    email: string,
+    platform: string = config.platform.default,
+  ): Promise<boolean> {
+    logger.info(
+      { email, platform },
+      '🔄 SyncService: Fast-path single-user sync...',
+    );
     try {
       const adapter = provisioningRegistry.get(platform);
       if (!adapter.syncSingleUser) {
-        logger.warn({ platform }, '🔄 SyncService: adapter has no single-user sync; skipping');
+        logger.warn(
+          { platform },
+          '🔄 SyncService: adapter has no single-user sync; skipping',
+        );
         return false;
       }
       return await adapter.syncSingleUser(email);
     } catch (error: any) {
-      logger.error({ email, platform, error: error.message }, '🔄 SyncService: Single user sync failed');
+      logger.error(
+        { email, platform, error: error.message },
+        '🔄 SyncService: Single user sync failed',
+      );
       return false;
     }
   }

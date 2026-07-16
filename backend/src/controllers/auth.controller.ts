@@ -43,7 +43,10 @@ export class AuthController extends BaseController {
         };
       } catch (err: any) {
         // Don't fail /auth/me if the user-creation lookup blows up — log and continue.
-        logger.error({ err: err.message, userId: this.user.id }, 'ensureDraftForUser failed in /auth/me');
+        logger.error(
+          { err: err.message, userId: this.user.id },
+          'ensureDraftForUser failed in /auth/me',
+        );
       }
 
       // Resolve admin scopes (super / platform / group) so the frontend can gate
@@ -57,7 +60,10 @@ export class AuthController extends BaseController {
       try {
         adminScopes = await computeAdminScopes(this.user);
       } catch (err: any) {
-        logger.error({ err: err.message, userId: this.user.id }, 'computeAdminScopes failed in /auth/me');
+        logger.error(
+          { err: err.message, userId: this.user.id },
+          'computeAdminScopes failed in /auth/me',
+        );
       }
 
       // Whether to show the ZooKeeper Config page: gated on ZooKeeper group membership
@@ -69,10 +75,17 @@ export class AuthController extends BaseController {
       try {
         hasZookeeperAccess =
           (await prisma.userAccess.count({
-            where: { userId: this.user.id, isActive: true, group: { platform: 'zookeeper' } },
+            where: {
+              userId: this.user.id,
+              isActive: true,
+              group: { platform: 'zookeeper' },
+            },
           })) > 0;
       } catch (err: any) {
-        logger.error({ err: err.message, userId: this.user.id }, 'hasZookeeperAccess check failed in /auth/me');
+        logger.error(
+          { err: err.message, userId: this.user.id },
+          'hasZookeeperAccess check failed in /auth/me',
+        );
       }
 
       // Show the Secret Ingestion page when the user has a real secrets grant OR when

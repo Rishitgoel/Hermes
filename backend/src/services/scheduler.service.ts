@@ -39,7 +39,7 @@ export class SchedulerService {
   private secretDriftScanJob: ScheduledTask | null = null;
   private notificationPruneJob: ScheduledTask | null = null;
 
-  // Starts all cron jobs (auto-revoke + expiry warnings + periodic platform sync + admin reconcile + ZK sweep + secret drift scan + notification prune)
+  // Starts all cron jobs (auto-revoke + periodic platform sync + admin reconcile + ZK sweep + secret drift scan + notification prune)
   start(): void {
     this.startExpiryJob();
     this.startExpiryWarningJob();
@@ -72,17 +72,23 @@ export class SchedulerService {
     if (this.adminReconcileJob) {
       void this.adminReconcileJob.stop();
       this.adminReconcileJob = null;
-      logger.info('⏰ Scheduler Service: Admin reconciliation cron job stopped.');
+      logger.info(
+        '⏰ Scheduler Service: Admin reconciliation cron job stopped.',
+      );
     }
     if (this.zkApplyingSweepJob) {
       void this.zkApplyingSweepJob.stop();
       this.zkApplyingSweepJob = null;
-      logger.info('⏰ Scheduler Service: ZooKeeper APPLYING sweep cron job stopped.');
+      logger.info(
+        '⏰ Scheduler Service: ZooKeeper APPLYING sweep cron job stopped.',
+      );
     }
     if (this.secretIngestionSweepJob) {
       void this.secretIngestionSweepJob.stop();
       this.secretIngestionSweepJob = null;
-      logger.info('⏰ Scheduler Service: Secret Ingestion APPLYING sweep cron job stopped.');
+      logger.info(
+        '⏰ Scheduler Service: Secret Ingestion APPLYING sweep cron job stopped.',
+      );
     }
     if (this.secretDriftScanJob) {
       void this.secretDriftScanJob.stop();
@@ -99,10 +105,14 @@ export class SchedulerService {
   private startExpiryJob(): void {
     // Hourly in prod, every 5 minutes in dev for faster feedback.
     const pattern = config.isDev ? '*/5 * * * *' : '0 * * * *';
-    logger.info(`⏰ Scheduler Service: Starting auto-revocation cron job (pattern: ${pattern}).`);
+    logger.info(
+      `⏰ Scheduler Service: Starting auto-revocation cron job (pattern: ${pattern}).`,
+    );
 
     this.expiryJob = cron.schedule(pattern, async () => {
-      logger.info('⏰ Scheduler Service: Checking for expired access grants...');
+      logger.info(
+        '⏰ Scheduler Service: Checking for expired access grants...',
+      );
       await this.checkAndRevokeExpiredAccess();
     });
   }
@@ -112,10 +122,14 @@ export class SchedulerService {
     // without waiting a day. This is a heads-up, not a time-critical action, so
     // unlike the expiry job itself it doesn't need a tight cadence.
     const pattern = config.isDev ? '0 * * * *' : '0 9 * * *';
-    logger.info(`⏰ Scheduler Service: Starting expiry-warning cron job (pattern: ${pattern}).`);
+    logger.info(
+      `⏰ Scheduler Service: Starting expiry-warning cron job (pattern: ${pattern}).`,
+    );
 
     this.expiryWarningJob = cron.schedule(pattern, async () => {
-      logger.info('⏰ Scheduler Service: Checking for soon-to-expire access grants...');
+      logger.info(
+        '⏰ Scheduler Service: Checking for soon-to-expire access grants...',
+      );
       await this.checkAndWarnExpiringAccess();
     });
   }
@@ -123,7 +137,9 @@ export class SchedulerService {
   private startPlatformSyncJob(): void {
     // Every 15 minutes in prod, every 5 minutes in dev.
     const pattern = config.isDev ? '*/5 * * * *' : '*/15 * * * *';
-    logger.info(`⏰ Scheduler Service: Starting periodic platform sync (pattern: ${pattern}).`);
+    logger.info(
+      `⏰ Scheduler Service: Starting periodic platform sync (pattern: ${pattern}).`,
+    );
 
     this.platformSyncJob = cron.schedule(pattern, async () => {
       try {
@@ -134,7 +150,9 @@ export class SchedulerService {
       } catch (err: any) {
         // Never throw out of the cron handler — a transient platform hiccup
         // shouldn't tear down the scheduler.
-        logger.warn(`⏰ Scheduler Service: Periodic platform sync failed: ${err.message}`);
+        logger.warn(
+          `⏰ Scheduler Service: Periodic platform sync failed: ${err.message}`,
+        );
       }
     });
   }
@@ -143,14 +161,18 @@ export class SchedulerService {
     // Every 30 minutes in prod, every 10 minutes in dev. Repairs Keycloak↔mirror
     // drift for platform/group admins. No-op when Keycloak isn't live.
     const pattern = config.isDev ? '*/10 * * * *' : '*/30 * * * *';
-    logger.info(`⏰ Scheduler Service: Starting admin reconciliation (pattern: ${pattern}).`);
+    logger.info(
+      `⏰ Scheduler Service: Starting admin reconciliation (pattern: ${pattern}).`,
+    );
 
     this.adminReconcileJob = cron.schedule(pattern, async () => {
       try {
         await adminReconciliationService.reconcileAll();
       } catch (err: any) {
         // Never throw out of the cron handler.
-        logger.warn(`⏰ Scheduler Service: Admin reconciliation failed: ${err.message}`);
+        logger.warn(
+          `⏰ Scheduler Service: Admin reconciliation failed: ${err.message}`,
+        );
       }
     });
   }
@@ -160,17 +182,23 @@ export class SchedulerService {
     // orphaned in the transient APPLYING state by a process crash/redeploy mid-apply —
     // flips them to APPLY_FAILED (retryable) so they re-surface for review.
     const pattern = config.isDev ? '*/5 * * * *' : '*/10 * * * *';
-    logger.info(`⏰ Scheduler Service: Starting ZooKeeper APPLYING sweep (pattern: ${pattern}).`);
+    logger.info(
+      `⏰ Scheduler Service: Starting ZooKeeper APPLYING sweep (pattern: ${pattern}).`,
+    );
 
     this.zkApplyingSweepJob = cron.schedule(pattern, async () => {
       try {
         const recovered = await zookeeperConfigService.sweepStuckApplying();
         if (recovered > 0) {
-          logger.warn(`⏰ Scheduler Service: Recovered ${recovered} stuck ZooKeeper change request(s).`);
+          logger.warn(
+            `⏰ Scheduler Service: Recovered ${recovered} stuck ZooKeeper change request(s).`,
+          );
         }
       } catch (err: any) {
         // Never throw out of the cron handler.
-        logger.warn(`⏰ Scheduler Service: ZooKeeper APPLYING sweep failed: ${err.message}`);
+        logger.warn(
+          `⏰ Scheduler Service: ZooKeeper APPLYING sweep failed: ${err.message}`,
+        );
       }
     });
   }
@@ -180,21 +208,29 @@ export class SchedulerService {
     // orphaned in the transient APPLYING state by a process crash/redeploy mid-apply —
     // flips them to APPLY_FAILED (retryable) so they re-surface for review.
     const pattern = config.isDev ? '*/5 * * * *' : '*/10 * * * *';
-    logger.info(`⏰ Scheduler Service: Starting Secret Ingestion APPLYING sweep (pattern: ${pattern}).`);
+    logger.info(
+      `⏰ Scheduler Service: Starting Secret Ingestion APPLYING sweep (pattern: ${pattern}).`,
+    );
 
     this.secretIngestionSweepJob = cron.schedule(pattern, async () => {
       try {
         const recovered = await secretIngestionService.sweepStuckApplying();
         if (recovered > 0) {
-          logger.warn(`⏰ Scheduler Service: Recovered ${recovered} stuck Secret Ingestion change request(s).`);
+          logger.warn(
+            `⏰ Scheduler Service: Recovered ${recovered} stuck Secret Ingestion change request(s).`,
+          );
         }
         const synced = await secretIngestionService.syncOpenDeploymentPRs();
         if (synced > 0) {
-          logger.info(`⏰ Scheduler Service: Synced ${synced} open Secret Ingestion deployment PR(s).`);
+          logger.info(
+            `⏰ Scheduler Service: Synced ${synced} open Secret Ingestion deployment PR(s).`,
+          );
         }
       } catch (err: any) {
         // Never throw out of the cron handler.
-        logger.warn(`⏰ Scheduler Service: Secret Ingestion APPLYING sweep failed: ${err.message}`);
+        logger.warn(
+          `⏰ Scheduler Service: Secret Ingestion APPLYING sweep failed: ${err.message}`,
+        );
       }
     });
   }
@@ -204,14 +240,18 @@ export class SchedulerService {
     // scan reads AWS + GitHub, so run it sparingly: every 3 hours in prod, every 15 min in dev so
     // the behaviour is observable. Notifies admins only about NEW drift (deduped via audit rows).
     const pattern = config.isDev ? '*/15 * * * *' : '0 */3 * * *';
-    logger.info(`⏰ Scheduler Service: Starting secret drift scan (pattern: ${pattern}).`);
+    logger.info(
+      `⏰ Scheduler Service: Starting secret drift scan (pattern: ${pattern}).`,
+    );
 
     this.secretDriftScanJob = cron.schedule(pattern, async () => {
       try {
         await secretDriftService.scanAllAndNotify();
       } catch (err: any) {
         // Never throw out of the cron handler.
-        logger.warn(`⏰ Scheduler Service: Secret drift scan failed: ${err.message}`);
+        logger.warn(
+          `⏰ Scheduler Service: Secret drift scan failed: ${err.message}`,
+        );
       }
     });
   }
@@ -220,17 +260,23 @@ export class SchedulerService {
     // Daily at 03:15 in prod; hourly in dev so the behaviour is observable without
     // waiting a day. Keeps the notifications table from growing unbounded.
     const pattern = config.isDev ? '15 * * * *' : '15 3 * * *';
-    logger.info(`⏰ Scheduler Service: Starting notification prune (pattern: ${pattern}).`);
+    logger.info(
+      `⏰ Scheduler Service: Starting notification prune (pattern: ${pattern}).`,
+    );
 
     this.notificationPruneJob = cron.schedule(pattern, async () => {
       try {
         const removed = await this.pruneOldNotifications();
         if (removed > 0) {
-          logger.info(`⏰ Scheduler Service: Pruned ${removed} old notification(s).`);
+          logger.info(
+            `⏰ Scheduler Service: Pruned ${removed} old notification(s).`,
+          );
         }
       } catch (err: any) {
         // Never throw out of the cron handler.
-        logger.warn(`⏰ Scheduler Service: Notification prune failed: ${err.message}`);
+        logger.warn(
+          `⏰ Scheduler Service: Notification prune failed: ${err.message}`,
+        );
       }
     });
   }
@@ -240,8 +286,12 @@ export class SchedulerService {
   // Returns the number of rows removed.
   async pruneOldNotifications(): Promise<number> {
     const now = Date.now();
-    const readCutoff = new Date(now - NOTIFICATION_READ_RETENTION_DAYS * DAY_MS);
-    const hardCutoff = new Date(now - NOTIFICATION_HARD_RETENTION_DAYS * DAY_MS);
+    const readCutoff = new Date(
+      now - NOTIFICATION_READ_RETENTION_DAYS * DAY_MS,
+    );
+    const hardCutoff = new Date(
+      now - NOTIFICATION_HARD_RETENTION_DAYS * DAY_MS,
+    );
 
     const result = await prisma.notification.deleteMany({
       where: {
@@ -272,7 +322,9 @@ export class SchedulerService {
         return;
       }
 
-      logger.info(`⏰ Scheduler Service: Found ${expiredGrants.length} expired access grants. Starting revocation...`);
+      logger.info(
+        `⏰ Scheduler Service: Found ${expiredGrants.length} expired access grants. Starting revocation...`,
+      );
 
       // Revoke concurrently in bounded batches — one slow platform call shouldn't
       // hold up the rest, but a big backlog must not fan out into hundreds of
@@ -293,9 +345,14 @@ export class SchedulerService {
         });
       }
 
-      logger.info('⏰ Scheduler Service: Completed processing expired access grants.');
+      logger.info(
+        '⏰ Scheduler Service: Completed processing expired access grants.',
+      );
     } catch (error: any) {
-      logger.error('⏰ Scheduler Service: Fatal error during expiry scan:', error.message);
+      logger.error(
+        '⏰ Scheduler Service: Fatal error during expiry scan:',
+        error.message,
+      );
     }
   }
 
@@ -303,7 +360,9 @@ export class SchedulerService {
   async checkAndWarnExpiringAccess(): Promise<void> {
     try {
       const now = new Date();
-      const warningWindowEnd = new Date(now.getTime() + EXPIRY_WARNING_DAYS * DAY_MS);
+      const warningWindowEnd = new Date(
+        now.getTime() + EXPIRY_WARNING_DAYS * DAY_MS,
+      );
       const soonToExpire = await prisma.userAccess.findMany({
         where: {
           isActive: true,
@@ -316,16 +375,26 @@ export class SchedulerService {
       });
 
       if (soonToExpire.length === 0) {
-        logger.info('⏰ Scheduler Service: No soon-to-expire access grants found.');
+        logger.info(
+          '⏰ Scheduler Service: No soon-to-expire access grants found.',
+        );
         return;
       }
 
-      logger.info(`⏰ Scheduler Service: Found ${soonToExpire.length} soon-to-expire access grant(s). Sending warnings...`);
+      logger.info(
+        `⏰ Scheduler Service: Found ${soonToExpire.length} soon-to-expire access grant(s). Sending warnings...`,
+      );
 
-      for (let i = 0; i < soonToExpire.length; i += EXPIRY_WARNING_CONCURRENCY) {
+      for (
+        let i = 0;
+        i < soonToExpire.length;
+        i += EXPIRY_WARNING_CONCURRENCY
+      ) {
         const batch = soonToExpire.slice(i, i + EXPIRY_WARNING_CONCURRENCY);
         const results = await Promise.allSettled(
-          batch.map(grant => accessWorkflowService.warnExpiringAccess(grant.id)),
+          batch.map(grant =>
+            accessWorkflowService.warnExpiringAccess(grant.id),
+          ),
         );
         results.forEach((result, j) => {
           if (result.status === 'rejected') {
@@ -337,9 +406,14 @@ export class SchedulerService {
         });
       }
 
-      logger.info('⏰ Scheduler Service: Completed processing expiry warnings.');
+      logger.info(
+        '⏰ Scheduler Service: Completed processing expiry warnings.',
+      );
     } catch (error: any) {
-      logger.error('⏰ Scheduler Service: Fatal error during expiry-warning scan:', error.message);
+      logger.error(
+        '⏰ Scheduler Service: Fatal error during expiry-warning scan:',
+        error.message,
+      );
     }
   }
 }

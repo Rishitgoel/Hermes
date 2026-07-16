@@ -166,7 +166,7 @@ export class SecretsManagerService {
   }
 
   private ensureSimSeeded(): void {
-    if (this.sim.seeded) return;
+    if (this.sim.seeded) {return;}
     this.sim.seeded = true;
     if (this.instance.key === 'secrets-sandbox') {
       this.sim.secrets.set('sandbox/service-a', {
@@ -199,7 +199,7 @@ export class SecretsManagerService {
   }
 
   private getClient(): SecretsManagerClient {
-    if (this.client) return this.client;
+    if (this.client) {return this.client;}
     const region = this.instance.region;
     if (!region) {
       throw new ExternalServiceError('AWS region for Secrets Manager is not configured');
@@ -337,7 +337,7 @@ export class SecretsManagerService {
    * JSON — it has no listable keys and cannot be merged into.
    */
   async listSecretKeys(
-    name: string
+    name: string,
   ): Promise<{ exists: boolean; keys: string[]; keyValueFormat?: boolean }> {
     if (this.isSimulation) {
       this.ensureSimSeeded();
@@ -404,7 +404,7 @@ export class SecretsManagerService {
     const data = this.parseKeyValueSecret(secretString);
     if (data === null) {
       throw new ValidationError(
-        `Secret ${name} does not contain key-value JSON — cannot read it as a map.`
+        `Secret ${name} does not contain key-value JSON — cannot read it as a map.`,
       );
     }
     return data;
@@ -416,7 +416,7 @@ export class SecretsManagerService {
   async putSecretKeyValues(
     name: string,
     kv: Record<string, string>,
-    opts: { createIfMissing: boolean }
+    opts: { createIfMissing: boolean },
   ): Promise<void> {
     if (this.isSimulation) {
       this.ensureSimSeeded();
@@ -463,7 +463,7 @@ export class SecretsManagerService {
       const parsed = this.parseKeyValueSecret(currentRaw);
       if (parsed === null) {
         throw new ValidationError(
-          `Secret ${name} does not contain key-value JSON — refusing to merge keys into it (that would destroy its current format).`
+          `Secret ${name} does not contain key-value JSON — refusing to merge keys into it (that would destroy its current format).`,
         );
       }
       currentMap = parsed;
@@ -579,7 +579,7 @@ const serviceInstances = new Map<string, SecretsManagerService>();
 export function getSecretsManagerService(platform: string): SecretsManagerService {
   const key = platform.toLowerCase();
   const cached = serviceInstances.get(key);
-  if (cached) return cached;
+  if (cached) {return cached;}
   const cfg = config.secretsInstances.find((i) => i.key === key);
   if (!cfg) {
     throw new ExternalServiceError(

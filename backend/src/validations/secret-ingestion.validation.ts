@@ -11,7 +11,11 @@ const entrySchema = z.object({
 
 // A manifest file the requester chose to include in the infra-deployment PR.
 const selectedTargetSchema = z.object({
-  path: z.string().trim().min(1, 'File path cannot be empty').max(400, 'File path is too long'),
+  path: z
+    .string()
+    .trim()
+    .min(1, 'File path cannot be empty')
+    .max(400, 'File path is too long'),
   manifestRef: z.string().trim().max(512).optional(),
   format: z.enum(['helm-values', 'spc']).optional(),
   // Exact keys the requester wants applied to THIS file — a subset of what the scan found
@@ -47,11 +51,14 @@ export const submitIngestionSchema = z.object({
     // and silently last-write-win on apply, so reject them up front.
     .refine(
       entries => new Set(entries.map(e => e.key)).size === entries.length,
-      'Duplicate keys are not allowed in a single request'
+      'Duplicate keys are not allowed in a single request',
     ),
   // The requester's chosen infra-deployment manifest files (from the compose preview).
   // Omitted ⇒ the PR falls back to the live auto-resolved consumer set.
-  infraTargets: z.array(selectedTargetSchema).max(50, 'Too many target files').optional(),
+  infraTargets: z
+    .array(selectedTargetSchema)
+    .max(50, 'Too many target files')
+    .optional(),
 });
 
 // Compose-screen preview: which manifests would change for a secret + a set of keys.
@@ -82,7 +89,11 @@ export const resolveDriftSchema = z.object({
 // Ignore/unignore one missingInAws (dangling) drift key so it stops counting toward scheduled
 // drift notifications.
 export const driftKeySchema = resolveDriftSchema.extend({
-  key: z.string().trim().min(1, 'Key cannot be empty').max(512, 'Key is too long'),
+  key: z
+    .string()
+    .trim()
+    .min(1, 'Key cannot be empty')
+    .max(512, 'Key is too long'),
 });
 
 export const reviewIngestionSchema = z.object({
@@ -91,11 +102,16 @@ export const reviewIngestionSchema = z.object({
       z.object({
         key: z.string().min(1, 'Key name cannot be empty'),
         decision: z.enum(['APPROVED', 'REJECTED'], {
-          errorMap: () => ({ message: 'decision must be APPROVED or REJECTED' }),
+          errorMap: () => ({
+            message: 'decision must be APPROVED or REJECTED',
+          }),
         }),
-      })
+      }),
     )
     .min(1, 'At least one decision is required')
     .max(200, 'Too many decisions'),
-  note: z.string().max(250, 'Review notes must not exceed 250 characters').optional(),
+  note: z
+    .string()
+    .max(250, 'Review notes must not exceed 250 characters')
+    .optional(),
 });

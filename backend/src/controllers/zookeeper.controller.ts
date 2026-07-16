@@ -3,7 +3,10 @@ import BaseController from './base.controller';
 import prisma from '../config/prisma';
 import zookeeperConfigService from '../services/zookeeper-config.service';
 import { AuthorizationError, NotFoundError } from '../utils/errors';
-import { submitZkChangeSchema, reviewZkChangeSchema } from '../validations/zookeeper.validation';
+import {
+  submitZkChangeSchema,
+  reviewZkChangeSchema,
+} from '../validations/zookeeper.validation';
 
 /**
  * Approval-based ZooKeeper config management. All routes are `authenticateToken`;
@@ -13,10 +16,14 @@ import { submitZkChangeSchema, reviewZkChangeSchema } from '../validations/zooke
  */
 export class ZookeeperController extends BaseController {
   // GET /api/zookeeper/scope — the user's active ZK groups + paths (seeds the UI).
-  async getScope(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async getScope(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {return;}
       const scope = await zookeeperConfigService.getUserScope(userId);
       this.sendResponse(scope, 'ZooKeeper scope retrieved');
     } catch (error) {
@@ -25,10 +32,14 @@ export class ZookeeperController extends BaseController {
   }
 
   // GET /api/zookeeper/nodes?path=/hermes/credit-card
-  async browseNode(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async browseNode(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {return;}
       const path = ((this.req.query.path as string) || '/').trim();
       const result = await zookeeperConfigService.browseNode(userId, path);
       this.sendResponse(result, 'ZooKeeper node retrieved');
@@ -38,10 +49,14 @@ export class ZookeeperController extends BaseController {
   }
 
   // GET /api/zookeeper/export?path=/hermes
-  async exportSubtree(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async exportSubtree(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {return;}
       const path = ((this.req.query.path as string) || '').trim();
       const content = await zookeeperConfigService.exportSubtree(userId, path);
       this.sendResponse({ path, content }, 'ZooKeeper subtree exported');
@@ -51,13 +66,24 @@ export class ZookeeperController extends BaseController {
   }
 
   // POST /api/zookeeper/requests
-  async submitChangeRequest(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async submitChangeRequest(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
-      const validated = this.validateWithZod(submitZkChangeSchema, this.req.body);
-      if (!validated.success) return;
+      const validated = this.validateWithZod(
+        submitZkChangeSchema,
+        this.req.body,
+      );
+      if (!validated.success) {return;}
       const userId = this.getUserId();
-      if (!userId) return;
-      const requester = { id: userId, username: this.user!.username, email: this.user!.email };
+      if (!userId) {return;}
+      const requester = {
+        id: userId,
+        username: this.user!.username,
+        email: this.user!.email,
+      };
       const rows = await zookeeperConfigService.createChangeRequest({
         requester,
         changes: validated.data.changes,
@@ -70,12 +96,19 @@ export class ZookeeperController extends BaseController {
   }
 
   // GET /api/zookeeper/requests?scope=mine|review
-  async listRequests(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async listRequests(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {return;}
       const scope = this.req.query.scope === 'review' ? 'review' : 'mine';
-      const rows = await zookeeperConfigService.listChangeRequests(this.user!, scope);
+      const rows = await zookeeperConfigService.listChangeRequests(
+        this.user!,
+        scope,
+      );
       this.sendResponse(rows, 'Change requests retrieved');
     } catch (error) {
       this.handleError(error, 'Failed to list change requests');
@@ -83,20 +116,32 @@ export class ZookeeperController extends BaseController {
   }
 
   // PUT /api/zookeeper/requests/:id/review
-  async reviewRequest(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async reviewRequest(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
     try {
-      const validated = this.validateWithZod(reviewZkChangeSchema, this.req.body);
-      if (!validated.success) return;
+      const validated = this.validateWithZod(
+        reviewZkChangeSchema,
+        this.req.body,
+      );
+      if (!validated.success) {return;}
       const userId = this.getUserId();
-      if (!userId) return;
+      if (!userId) {return;}
       const id = this.req.params.id as string;
 
       // Authorize: super / ZooKeeper platform admin / group admin of ANY group the
       // request touches (a request can span several groups → reviewable by all involved).
-      const row = await prisma.zookeeperChangeRequest.findUnique({ where: { id }, select: { groupIds: true } });
-      if (!row) throw new NotFoundError('Change request not found');
+      const row = await prisma.zookeeperChangeRequest.findUnique({
+        where: { id },
+        select: { groupIds: true },
+      });
+      if (!row) {throw new NotFoundError('Change request not found');}
       if (!(await zookeeperConfigService.canReview(this.user!, row))) {
-        throw new AuthorizationError('You do not have permission to review this change request.');
+        throw new AuthorizationError(
+          'You do not have permission to review this change request.',
+        );
       }
 
       const reviewer = { id: userId, username: this.user!.username };

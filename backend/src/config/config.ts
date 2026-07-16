@@ -26,7 +26,7 @@ function validateGithubApiUrl(raw: string, envName: string): string {
       );
     }
   } catch (err: any) {
-    if (err.message.startsWith(envName)) throw err;
+    if (err.message.startsWith(envName)) {throw err;}
     throw new Error(`${envName} is not a valid URL: ${raw}`);
   }
   return raw;
@@ -118,7 +118,7 @@ export const config = {
         this.apiKey === 'dummy-key-for-development'
       );
     },
-  },
+  },    
 
   // Every registered Redash instance (prod + any additional environments like QA),
   // keyed by its provisioning-registry platform key. `redash` (prod) is sourced
@@ -314,6 +314,18 @@ export const config = {
     // override so ingested secrets are always encrypted in transit.
     get endpoint() {
       return process.env.SECRETS_INGESTION_ENDPOINT;
+    },
+    get accessKeyId() {
+      return (
+        process.env.SECRETS_INGESTION_AWS_ACCESS_KEY_ID ||
+        process.env.SECRETS_INGESTION_ACCESS_KEY_ID
+      );
+    },
+    get secretAccessKey() {
+      return (
+        process.env.SECRETS_INGESTION_AWS_SECRET_ACCESS_KEY ||
+        process.env.SECRETS_INGESTION_SECRET_ACCESS_KEY
+      );
     },
     get isSimulation() {
       return process.env.SECRETS_INGESTION_SIMULATION === 'true' || !this.region;
