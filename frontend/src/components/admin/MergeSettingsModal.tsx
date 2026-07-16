@@ -81,6 +81,11 @@ export const MergeSettingsModal: React.FC<MergeSettingsModalProps> = ({ onClose 
           <p style={{ margin: '0 0 20px', fontSize: '13px', color: 'var(--text-muted)', lineHeight: '1.5' }}>
             Choose whether approved key additions are squash-merged automatically by Hermes or left open as draft PRs for manual review on GitHub.
           </p>
+          <p style={{ margin: '-10px 0 20px', fontSize: '12px', color: 'var(--text-muted)', lineHeight: '1.5' }}>
+            This applies to Secret Ingestion approvals only. Secret Drift always opens a draft PR
+            and waits for you to review it and click <strong>Merge PR</strong> — a drift PR is
+            raised by a scan rather than proposed by someone, so it never merges unattended.
+          </p>
 
           {isLoading ? (
             <div style={{ display: 'flex', justifyContent: 'center', padding: '30px 0' }}>

@@ -3,7 +3,6 @@ import { getSecretsManagerService } from './secrets-manager.service';
 import {
   DriftManifest,
   getInfraRepoSyncService,
-  isInfraAutoMergeEnabled,
   isInfraRepoEnabled,
 } from './infra-repo-sync.service';
 import {
@@ -64,6 +63,12 @@ export interface SecretDrift {
   manifests: DriftManifestView[];
   /** True when there is at least one AWS key a draft PR could register (missingInManifest). */
   fixable: boolean;
+  /**
+   * The already-open reconciliation PR for this secret, when a previous "Solve drift" left one
+   * behind. Populated live (there's no DB row for a drift PR), best-effort, and only for fixable
+   * drifts. Absent means "none known" — not proof there is none, since the lookup may have failed.
+   */
+  openPr?: { number: number; url: string; isDraft: boolean };
 }
 
 /** A secret whose drift check threw — its true state is UNKNOWN, not "in sync". */
@@ -253,6 +258,35 @@ export class SecretDriftService {
   }
 
   /**
+   * Fills in `openPr` for the fixable drifts — one live PR lookup each, so the UI can offer
+   * "Merge PR" for a secret solved in an earlier session instead of only right after a click.
+   *
+   * Only fixable drifts are looked up (a drift with no registerable key has no PR to open), which
+   * keeps this to a handful of calls even on a wildcard-all scan of hundreds of secrets. Failures
+   * are swallowed by findDriftPr: a missing Merge button is a far better outcome than failing a
+   * drift report over a rate limit.
+   */
+  private async attachOpenPrs(platform: string, drifts: SecretDrift[]): Promise<void> {
+    const fixable = drifts.filter((d) => d.fixable);
+    if (fixable.length === 0) {
+      return;
+    }
+    const infra = getInfraRepoSyncService(platform);
+    const CONCURRENCY = 4;
+    let next = 0;
+    const workers = Array.from({ length: Math.min(CONCURRENCY, fixable.length) }, async () => {
+      while (next < fixable.length) {
+        const drift = fixable[next++];
+        const pr = await infra.findDriftPr(drift.secretName);
+        if (pr) {
+          drift.openPr = pr;
+        }
+      }
+    });
+    await Promise.all(workers);
+  }
+
+  /**
    * Currently-ignored missingInAws keys for a platform, keyed by secretName. Persisted as
    * audit rows (SECRET_DRIFT_KEY_IGNORED / _UNIGNORED) rather than a dedicated table — same
    * "replay the audit trail" pattern scanAndNotify already uses for fingerprint dedup. Latest
@@ -294,8 +328,18 @@ export class SecretDriftService {
     return ignored;
   }
 
-  /** Core scan: compute drift across a set of owning groups on one platform. */
-  private async computeDrift(platform: string, groups: OwningGroup[]): Promise<DriftReport> {
+  /**
+   * Core scan: compute drift across a set of owning groups on one platform.
+   *
+   * `withOpenPrs` costs one live GitHub lookup per fixable drift, so only the interactive report
+   * asks for it — the scheduled scan has no Merge button to render and shouldn't spend rate limit
+   * (or wall-clock) on state nothing reads.
+   */
+  private async computeDrift(
+    platform: string,
+    groups: OwningGroup[],
+    opts: { withOpenPrs?: boolean } = {},
+  ): Promise<DriftReport> {
     const infraEnabled = isInfraRepoEnabled(platform);
     const base: DriftReport = {
       platform,
@@ -363,6 +407,10 @@ export class SecretDriftService {
         'Secret drift scan could not check every secret — report is incomplete',
       );
     }
+    if (opts.withOpenPrs) {
+      await this.attachOpenPrs(platform, drifts);
+    }
+
     drifts.sort((a, b) => a.secretName.localeCompare(b.secretName));
     failed.sort((a, b) => a.secretName.localeCompare(b.secretName));
     return {
@@ -394,7 +442,7 @@ export class SecretDriftService {
       };
     }
     const groups = await this.groupsForScope(key, scope);
-    return this.computeDrift(key, groups);
+    return this.computeDrift(key, groups, { withOpenPrs: true });
   }
 
   /**
@@ -432,8 +480,16 @@ export class SecretDriftService {
 
   /**
    * Opens a DRAFT infra-deployment PR that registers the keys currently in AWS but missing from
-   * the manifests for `secretName`. When auto-merge is off (default), a human reviews + merges it
-   * manually on GitHub. When auto-merge is on, Hermes merges immediately after opening.
+   * the manifests for `secretName`, and stops there. Merging is always a separate, deliberate
+   * step (mergeDrift, via the panel's "Merge PR" button).
+   *
+   * ⚠ This deliberately IGNORES the auto-merge toggle, unlike the ingestion-approval flow which
+   * still honors it. Drift is discovered by a scan rather than proposed by a person, so nobody
+   * has looked at the manifest edit before this runs — chaining a merge here would land a diff
+   * on the infra repo that no human ever saw. The toggle stays meaningful for ingestion, where a
+   * reviewer has already approved the specific keys. Don't "restore" the auto-merge branch here:
+   * it was removed on purpose (asked and confirmed).
+   *
    * Authorization: the caller must manage a secrets group whose scope covers the secret.
    */
   async resolveDrift(user: AuthenticatedUser, secretName: string, platform: string = PLATFORM) {
@@ -480,46 +536,77 @@ export class SecretDriftService {
       },
     });
 
-    // Auto-merge ON: immediately merge the just-opened PR so "Solve drift" is a one-click
-    // full resolution. When off (default), the PR stays open for a human to review and merge
-    // manually on GitHub (the existing two-step flow).
-    if (result.state === 'OPEN' && (await isInfraAutoMergeEnabled(key))) {
-      const mergeResult = await getInfraRepoSyncService(key).mergeDriftPr(
-        secretName,
-        drift.missingInManifest,
-      );
-      await prisma.auditEntry.create({
-        data: {
-          action: 'SECRET_DRIFT_MERGED',
-          performerId: user.id,
-          performerName: user.username,
-          groupId: owner.id,
-          details: {
-            platform: key,
-            secretName,
-            keys: drift.missingInManifest,
-            prNumber: mergeResult.prNumber ?? null,
-            prUrl: mergeResult.prUrl ?? null,
-            prState: mergeResult.state,
-            note: mergeResult.note ?? null,
-          } as any,
-        },
-      });
-      return {
-        state: mergeResult.state,
-        secretName,
-        keys: drift.missingInManifest,
-        prNumber: mergeResult.prNumber ?? null,
-        prUrl: mergeResult.prUrl ?? null,
-        branch: result.branch ?? null,
-        note: mergeResult.note ?? null,
-      };
-    }
-
     return {
       state: result.state,
       secretName,
       keys: drift.missingInManifest,
+      prNumber: result.prNumber ?? null,
+      prUrl: result.prUrl ?? null,
+      branch: result.branch ?? null,
+      note: result.note ?? null,
+    };
+  }
+
+  /**
+   * Merges the draft PR that `resolveDrift` opened for `secretName`, after a human has reviewed
+   * it on GitHub. This is the manual counterpart to auto-merge — and it is deliberately available
+   * whether or not auto-merge is enabled: the toggle governs whether Hermes merges *by itself*,
+   * not whether an admin may merge from Hermes at all. (With auto-merge on, resolveDrift already
+   * returns MERGED, so there is normally no open PR left for this to act on.)
+   *
+   * The missing keys are recomputed here rather than carried over from the scan that produced the
+   * card: minutes or days of review sit between Solve and Merge, and AWS may have moved on. The
+   * PR gets whatever is *currently* missing.
+   *
+   * Never throws on a GitHub refusal — mergeDriftPr returns FAILED with GitHub's own reason (a
+   * token without merge rights, branch protection, an outstanding check), which the caller shows
+   * alongside a link to merge it by hand. Only authorization and config problems throw.
+   */
+  async mergeDrift(user: AuthenticatedUser, secretName: string, platform: string = PLATFORM) {
+    const key = assertSecretsPlatform(platform);
+    if (!isInfraRepoEnabled(key)) {
+      throw new ValidationError(
+        `The "${key}" Secret Ingestion instance has no infra-deployment repo configured, so there is no PR to merge.`,
+      );
+    }
+    const owner = await this.resolveOwnerGroup(key, user, secretName);
+
+    const drift = await this.driftForSecret(key, secretName, owner);
+    const missingKeys = drift?.missingInManifest ?? [];
+    if (missingKeys.length === 0) {
+      // Someone merged the PR on GitHub, or the keys landed another way, between the scan and
+      // this click. Merging an empty change would be a no-op at best — report it as already done.
+      return {
+        state: 'SKIPPED' as const,
+        secretName,
+        note: 'Nothing is missing from the manifests any more — the PR may already have been merged on GitHub.',
+      };
+    }
+
+    const result = await getInfraRepoSyncService(key).mergeDriftPr(secretName, missingKeys);
+
+    await prisma.auditEntry.create({
+      data: {
+        action: 'SECRET_DRIFT_MERGED',
+        performerId: user.id,
+        performerName: user.username,
+        groupId: owner.id,
+        details: {
+          platform: key,
+          secretName,
+          keys: missingKeys,
+          prNumber: result.prNumber ?? null,
+          prUrl: result.prUrl ?? null,
+          prState: result.state,
+          note: result.note ?? null,
+        } as any,
+      },
+    });
+
+    return {
+      state: result.state,
+      secretName,
+      keys: missingKeys,
       prNumber: result.prNumber ?? null,
       prUrl: result.prUrl ?? null,
       branch: result.branch ?? null,

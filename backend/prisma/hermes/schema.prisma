@@ -515,12 +515,19 @@ model SecretIngestionRequest {
   // Null = fall back to the live auto-resolved consumer set at PR time.
   infraTargets   Json?                 @map("infra_targets")
 
+  // Ties together the N per-secret requests produced by one multi-secret cart checkout so the
+  // requester's "My Requests" list can group them. Null = a solo submit (single-secret) or any
+  // row created before the cart existed. Each request in a batch is still fully independent —
+  // its own approval, PR, and status; batchId is purely a display grouping.
+  batchId        String?               @map("batch_id")
+
   group          Group?                @relation(fields: [groupId], references: [id], onDelete: SetNull)
 
   @@index([status])
   @@index([requesterId])
   @@index([groupId])
   @@index([platform])
+  @@index([batchId])
   @@map("secret_ingestion_requests")
 }
 

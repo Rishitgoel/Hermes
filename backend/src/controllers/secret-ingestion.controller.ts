@@ -13,6 +13,7 @@ import {
 } from '../utils/errors';
 import {
   submitIngestionSchema,
+  submitIngestionBulkSchema,
   reviewIngestionSchema,
   infraPreviewSchema,
   resolveDriftSchema,
@@ -160,6 +161,36 @@ export class SecretIngestionController extends BaseController {
     }
   }
 
+  // POST /api/secrets/requests/bulk — multi-secret cart checkout. Fans out to one request per
+  // secret sharing a batchId; partial success comes back as { submitted, failed }.
+  async submitRequestsBulk(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      const validated = this.validateWithZod(
+        submitIngestionBulkSchema,
+        this.req.body,
+      );
+      if (!validated.success) {
+        return;
+      }
+      const userId = this.getUserId();
+      if (!userId) {
+        return;
+      }
+      const result = await secretIngestionService.createIngestionRequestsBulk({
+        requester: this.user!,
+        platform: validated.data.platform,
+        secrets: validated.data.secrets,
+      });
+      this.sendResponse(result, 'Secret ingestion requests submitted', 201);
+    } catch (error) {
+      this.handleError(error, 'Failed to submit secret ingestion requests');
+    }
+  }
+
   // GET /api/secrets/requests?scope=mine|review
   async listRequests(
     req: Request,
@@ -224,6 +255,40 @@ export class SecretIngestionController extends BaseController {
       this.sendResponse(result, 'Drift reconciliation PR opened');
     } catch (error) {
       this.handleError(error, 'Failed to reconcile secret drift');
+    }
+  }
+
+  // POST /api/secrets/drift/merge — merge the draft PR opened by resolveDrift, after a human
+  // reviewed it on GitHub. Available regardless of the auto-merge toggle: that setting decides
+  // whether Hermes merges unattended, not whether an admin may merge from here.
+  async mergeDrift(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      const validated = this.validateWithZod(resolveDriftSchema, this.req.body);
+      if (!validated.success) {
+        return;
+      }
+      const platform = validated.data.platform
+        ? assertSecretsPlatform(validated.data.platform)
+        : undefined;
+      const result = await secretDriftService.mergeDrift(
+        this.user!,
+        validated.data.secretName,
+        platform ?? 'secrets',
+      );
+      // A GitHub refusal comes back as a FAILED result, not a thrown error — the response is
+      // still a 200 carrying the reason, so the UI can offer the merge-on-GitHub fallback.
+      this.sendResponse(
+        result,
+        result.state === 'MERGED'
+          ? 'Drift reconciliation PR merged'
+          : 'Drift reconciliation PR merge attempted',
+      );
+    } catch (error) {
+      this.handleError(error, 'Failed to merge secret drift PR');
     }
   }
 

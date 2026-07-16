@@ -8,6 +8,7 @@ import { isInfraAutoMergeEnabled } from './infra-repo-sync.service';
 import { secretsManagerService } from './secrets-manager.service';
 import { secretsProvisioner } from './secrets.provisioner';
 import { AuthorizationError } from '../utils/errors';
+import eventBus from './event-bus';
 
 describe('SecretIngestionService (simulation)', () => {
   const USER = { id: 'usr-secrets-1', username: 'Bob', email: 'bob@bachatt.app' };
@@ -106,6 +107,45 @@ describe('SecretIngestionService (simulation)', () => {
 
     const dbRow = await prisma.secretIngestionRequest.findUnique({ where: { id: request.id } });
     expect(dbRow).not.toBeNull();
+  });
+
+  it('createIngestionRequestsBulk fans out to one request per secret, sharing a batchId, with partial success', async () => {
+    // Grant covers payment/gateway + payment/webhook; other/secret is out of scope.
+    await setupGrant();
+    const emitSpy = vi.spyOn(eventBus, 'emitAccessEvent');
+
+    const result = await secretIngestionService.createIngestionRequestsBulk({
+      requester: { id: USER.id, username: USER.username, email: USER.email, roles: [] } as any,
+      platform: 'secrets',
+      secrets: [
+        { secretName: 'payment/gateway', entries: [{ key: 'API_KEY', value: 'v1' }] },
+        { secretName: 'payment/webhook', entries: [{ key: 'HOOK_URL', value: 'v2' }] },
+        { secretName: 'other/secret', entries: [{ key: 'NOPE', value: 'v3' }] },
+      ],
+    });
+
+    // Partial success: two valid secrets submitted, the out-of-scope one reported as failed.
+    expect(result.submitted).toHaveLength(2);
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0].secretName).toBe('other/secret');
+    expect(result.submitted.map(r => r.secretName).sort()).toEqual(['payment/gateway', 'payment/webhook']);
+
+    // All submitted requests share the batch's id.
+    expect(result.batchId).toBeTruthy();
+    for (const row of result.submitted) {
+      expect(row.batchId).toBe(result.batchId);
+    }
+    const dbRows = await prisma.secretIngestionRequest.findMany({
+      where: { id: { in: result.submitted.map(r => r.id) } },
+    });
+    expect(dbRows.every(r => r.batchId === result.batchId)).toBe(true);
+
+    // One submitted-event per successfully-created request (the failed one emits nothing).
+    const submittedEvents = emitSpy.mock.calls.filter(
+      ([evt]) => (evt as any)?.type === 'secret-ingestion.submitted',
+    );
+    expect(submittedEvents).toHaveLength(2);
+    emitSpy.mockRestore();
   });
 
   it('createIngestionRequest throws AuthorizationError for out-of-scope secrets', async () => {

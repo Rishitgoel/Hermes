@@ -1,4 +1,5 @@
 import { AxiosInstance } from 'axios';
+import { createHash } from 'crypto';
 import { createHttpClient } from '../utils/http-client';
 import config from '../config/config';
 import logger from '../utils/logger';
@@ -959,7 +960,12 @@ export class InfraRepoSyncService {
    */
   private async findOpenPullByBranch(
     branch: string,
-  ): Promise<{ number: number; url: string; nodeId: string } | null> {
+  ): Promise<{
+    number: number;
+    url: string;
+    nodeId: string;
+    isDraft: boolean;
+  } | null> {
     const res = await this.gh().get(this.repoPath('/pulls'), {
       params: {
         head: `${this.cfg.owner}:${branch}`,
@@ -971,7 +977,12 @@ export class InfraRepoSyncService {
     if (!pr) {
       return null;
     }
-    return { number: pr.number, url: pr.html_url, nodeId: pr.node_id };
+    return {
+      number: pr.number,
+      url: pr.html_url,
+      nodeId: pr.node_id,
+      isDraft: !!pr.draft,
+    };
   }
 
   /**
@@ -1034,6 +1045,27 @@ export class InfraRepoSyncService {
     }
 
     const status = lastError.response?.status;
+    if (status === 422) {
+      // 422 means "Pull Request is closed" — the PR was either already merged or manually closed
+      // by a human in the window between markReady() and this call. Check the live state so we
+      // can distinguish "already merged (goal achieved, don't throw)" from any other 422 cause.
+      const liveState = await this.getPrState(number).catch(() => null);
+      if (liveState === 'MERGED') {
+        logger.info(
+          { pr: number },
+          'infra-repo-sync: mergePull: PR was already merged on GitHub — treating as success',
+        );
+        return;
+      }
+      // Not merged — the 422 is something else (e.g. PR closed by a human without merging).
+      // Fall through to a descriptive error so the caller records FAILED with a useful note.
+      const ghMessage = lastError.response?.data?.message;
+      throw new Error(
+        `PR #${number} could not be merged (422)` +
+        (ghMessage ? ` — GitHub said: "${ghMessage}"` : '') +
+        `. Live state: ${liveState ?? 'unknown'}. The PR may have been manually closed — reopen it on GitHub or dismiss this request.`,
+      );
+    }
     if (status === 405) {
       // 405 is GitHub's answer to every "not mergeable right now": still a draft, a required
       // review/check outstanding, branch protection blocking a bot merge, or a conflict. Only
@@ -1049,13 +1081,38 @@ export class InfraRepoSyncService {
       logger.error({ pr: number, status, githubMessage: ghMessage }, msg);
       throw new Error(msg);
     }
+    if (status === 403 || status === 404) {
+      // The token cannot merge: either it lacks write/maintain on the repo (403), or the repo
+      // is private and the token can't see it at all (404 — GitHub hides existence rather than
+      // admitting a permission gap). Unlike a 405 this never clears on retry, so the message
+      // has to point at the credential, not the PR. It reaches an admin verbatim as the FAILED
+      // note, so say plainly that merging must happen on GitHub until the token is fixed.
+      const ghMessage = lastError.response?.data?.message;
+      const msg =
+        `PR #${number} could not be merged — the GitHub token is not allowed to merge it (${status})` +
+        (ghMessage ? ` — GitHub said: "${ghMessage}"` : '') +
+        '. The PR itself is fine: merge it on GitHub, or grant the token write access to the repo.';
+      logger.error({ pr: number, status, githubMessage: ghMessage }, msg);
+      throw new Error(msg);
+    }
     throw lastError;
   }
 
   private async closePull(number: number): Promise<void> {
-    await this.gh().patch(this.repoPath(`/pulls/${number}`), {
-      state: 'closed',
-    });
+    try {
+      await this.gh().patch(this.repoPath(`/pulls/${number}`), { state: 'closed' });
+    } catch (err: any) {
+      // 422 = the PR is already closed or was merged by a human — the goal (no open PR) is
+      // achieved either way, so treat this as a successful no-op rather than a failure.
+      if (err.response?.status === 422) {
+        logger.info(
+          { pr: number },
+          'infra-repo-sync: closePull: PR already closed/merged on GitHub — no-op',
+        );
+        return;
+      }
+      throw err;
+    }
   }
 
   private async reopenPull(number: number): Promise<void> {
@@ -1341,7 +1398,12 @@ export class InfraRepoSyncService {
 
   private branchName(secretName: string, requestId: string): string {
     const safe = secretName.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
-    return `hermes/secret-keys/${safe}-${requestId}`;
+    // Sanitizing strips characters that don't survive in a branch name, so two distinct
+    // secret names (e.g. "invest/prod" vs "invest-prod") can collide on the same `safe`
+    // slug. A short hash of the RAW name disambiguates them without breaking determinism —
+    // same secretName always yields the same branch, different names (almost) never collide.
+    const disambiguator = createHash('sha256').update(secretName).digest('hex').slice(0, 8);
+    return `hermes/secret-keys/${safe}-${disambiguator}-${requestId}`;
   }
 
   // --- public lifecycle ---
@@ -1801,9 +1863,43 @@ export class InfraRepoSyncService {
       try {
         await this.reopenPull(prNumber);
       } catch (reopenErr: any) {
+        // reopenPull throws when GitHub rejects the state transition — most commonly because the
+        // PR is already open (no-op), but also when a human has already merged or closed it.
+        // Check live state here so we don't proceed to merge an already-terminal PR (which would
+        // produce an opaque 422 from mergePull) or incorrectly mark it FAILED when the goal is
+        // already achieved. Best-effort: if getPrState itself fails, fall through and let
+        // mergePull produce its own error.
+        const liveState = await this.getPrState(prNumber).catch(() => null);
+        if (liveState === 'MERGED') {
+          logger.info(
+            { requestId: request.id, pr: prNumber },
+            'infra-repo-sync: PR was already merged on GitHub — recording as MERGED',
+          );
+          return {
+            state: 'MERGED' as const,
+            prNumber,
+            keysAdded: approvedKeys,
+            note: 'PR was merged manually on GitHub before Hermes could auto-merge',
+          };
+        }
+        if (liveState === 'CLOSED') {
+          // The human closed the PR without merging — the keys are in AWS but not in the
+          // manifest. Surface as FAILED with a clear note so the admin can reopen or dismiss.
+          logger.warn(
+            { requestId: request.id, pr: prNumber },
+            'infra-repo-sync: PR was manually closed on GitHub without merging — recording as FAILED',
+          );
+          return {
+            state: 'FAILED' as const,
+            prNumber,
+            note: 'PR was manually closed on GitHub without being merged. Reopen the PR and merge it, or dismiss this request.',
+          };
+        }
+        // PR appears to still be open (or state is unknown) — the reopen was a no-op error.
+        // Proceed to merge; if it fails for another reason mergePull will throw its own error.
         logger.info(
           { pr: prNumber, err: reopenErr.message },
-          'Failed to reopen PR (already open, merged, or permission issue) — proceeding to merge anyway',
+          'Failed to reopen PR (already open or permission issue) — proceeding to merge anyway',
         );
       }
       if (request.infraPrNodeId) {
@@ -1918,9 +2014,38 @@ export class InfraRepoSyncService {
     try {
       await this.reopenPull(prNumber);
     } catch (reopenErr: any) {
+      // Same live-state check as mergePrForRequest: a failed reopen may mean the PR is
+      // already merged or was closed by a human. Detect these cases early so markReady
+      // doesn't throw an opaque error against a terminal PR.
+      const liveState = await this.getPrState(prNumber).catch(() => null);
+      if (liveState === 'MERGED') {
+        logger.info(
+          { requestId: request.id, pr: prNumber },
+          'infra-repo-sync: PR was already merged on GitHub — recording as MERGED',
+        );
+        return {
+          state: 'MERGED' as const,
+          prNumber,
+          keysAdded: approvedKeys,
+          note: 'PR was merged manually on GitHub before Hermes could mark it ready',
+        };
+      }
+      if (liveState === 'CLOSED') {
+        // PR was closed without merging — keys are in AWS but not in the manifest.
+        logger.warn(
+          { requestId: request.id, pr: prNumber },
+          'infra-repo-sync: PR was manually closed on GitHub without merging — recording as FAILED',
+        );
+        return {
+          state: 'FAILED' as const,
+          prNumber,
+          note: 'PR was manually closed on GitHub without being merged. Reopen the PR and merge it, or dismiss this request.',
+        };
+      }
+      // PR is still open (or state is unknown) — the reopen was a no-op. Proceed to markReady.
       logger.info(
         { pr: prNumber, err: reopenErr.message },
-        'Failed to reopen PR (already open, merged, or permission issue) — proceeding anyway',
+        'Failed to reopen PR (already open or permission issue) — proceeding anyway',
       );
     }
 
@@ -1965,6 +2090,38 @@ export class InfraRepoSyncService {
           ? `ready for review — merge manually. ${unmatchedPaths.length} manifest(s) could not be auto-edited (unrecognized structure): ${unmatchedPaths.join(', ')}`
           : 'ready for review — merge the PR to register the approved key(s)',
     };
+  }
+
+  /**
+   * The open drift PR for a secret, if one exists. A drift PR has no DB row carrying its number
+   * (unlike an ingestion request), so "has this secret already been solved?" can only be answered
+   * by looking the deterministic branch up live. The drift report uses this to keep the Merge
+   * button available across reloads and re-scans — solving and merging are deliberately separated
+   * by a human review on GitHub, so they rarely happen in the same session.
+   *
+   * Best-effort by contract: returns null rather than throwing, since a failed lookup here means
+   * "we don't know of a PR", which is exactly the no-PR rendering. Callers must not treat null as
+   * proof that no PR exists — mergeDrift re-checks live before merging.
+   */
+  async findDriftPr(
+    secretName: string,
+  ): Promise<{ number: number; url: string; isDraft: boolean } | null> {
+    // Simulation has no PR to find: openPrForRequest invents a number without persisting
+    // anything. Returning null keeps the in-session Solve→Merge demo working off the frontend's
+    // own state without inventing a PR that would survive a reload it can't actually merge.
+    if (this.isSimulation) {
+      return null;
+    }
+    try {
+      const pr = await this.findOpenPullByBranch(this.branchName(secretName, 'drift'));
+      return pr ? { number: pr.number, url: pr.url, isDraft: pr.isDraft } : null;
+    } catch (err: any) {
+      logger.warn(
+        { secretName, err: err.message },
+        'infra-repo-sync: could not look up the open drift PR — reporting none',
+      );
+      return null;
+    }
   }
 
   /**
@@ -2283,9 +2440,14 @@ export function isInfraRepoEnabled(platform: string): boolean {
 
 /**
  * Whether auto-merge is enabled for a given Secret Ingestion instance's infra-deployment PRs.
- * When true, both the ingestion-approval and drift-resolve flows merge the PR automatically the
- * moment it's ready. When false (default), the PR is opened and left for a human to review and
- * merge manually on GitHub. Controlled by INFRA_REPO_AUTO_MERGE / SECRETS_SANDBOX_INFRA_REPO_AUTO_MERGE.
+ * When true, an approved ingestion request's PR is merged automatically the moment it's ready.
+ * When false (default), it's opened and left for a human to review and merge on GitHub.
+ * Controlled by INFRA_REPO_AUTO_MERGE / SECRETS_SANDBOX_INFRA_REPO_AUTO_MERGE.
+ *
+ * ⚠ Scope is INGESTION ONLY. The Secret Drift flow deliberately ignores this and always waits for
+ * an explicit "Merge PR" click (see secret-drift.service.ts resolveDrift for why) — a drift PR is
+ * raised by a scan, so no human has reviewed the diff at the point it's opened. Callers here are
+ * the ingestion paths only; adding a drift caller back would undo that decision.
  */
 export async function isInfraAutoMergeEnabled(platform: string): Promise<boolean> {
   const key = `secrets:auto_merge:${(platform || '').toLowerCase()}`;

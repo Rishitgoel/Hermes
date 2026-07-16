@@ -11,7 +11,7 @@ import {
   getSecretScope,
   listSecretKeys,
   listIngestionRequests,
-  submitIngestionRequest,
+  submitIngestionRequestsBulk,
   previewInfraTargets,
   listSecretsInstances,
   type SecretIngestionRequest,
@@ -20,6 +20,8 @@ import {
 
 /** Stable empty-set reference for the "no keys excluded for this path yet" default. */
 const EMPTY_KEY_SET: ReadonlySet<string> = new Set();
+/** Stable empty (never-mutated) Set default for a secret with no excluded target paths yet. */
+const EMPTY_PATH_SET: Set<string> = new Set();
 
 const STATUS_BADGE: Record<SecretIngestionRequest['status'], string> = {
   PENDING: 'badge-pending',
@@ -34,6 +36,14 @@ const STATUS_BADGE: Record<SecretIngestionRequest['status'], string> = {
 interface DraftEntry {
   key: string;
   value: string;
+}
+
+/** What a SecretCartGroup reports up to the page: the deployment targets it will submit for its
+ *  secret (undefined ⇒ let the backend auto-resolve), plus whether its infra preview is still
+ *  in flight (so the page can disable the batch submit until every secret has resolved). */
+interface ResolvedTargets {
+  infraTargets?: InfraTargetSelection[];
+  loading: boolean;
 }
 
 /** A secret value shown masked by default, with an eye toggle to reveal (truncated). */
@@ -75,6 +85,414 @@ const InfraPrCell: React.FC<{ request: SecretIngestionRequest }> = ({ request })
   );
 };
 
+interface SecretCartGroupProps {
+  secretName: string;
+  platform: string;
+  entries: DraftEntry[];
+  onRemoveEntry: (key: string) => void;
+  onDiscard: () => void;
+  // This secret's slice of the page's per-secret deployment-target selection state.
+  excludedTargetPaths: Set<string>;
+  onToggleTarget: (path: string) => void;
+  excludedKeysByPath: Record<string, Set<string>>;
+  onToggleKeyForPath: (path: string, key: string) => void;
+  manualTargets: { path: string }[];
+  onAddManualTarget: (path: string) => void;
+  onRemoveManualTarget: (path: string) => void;
+  // Reports the resolved deployment targets + preview-loading state up to the page.
+  onResolved: (value: ResolvedTargets) => void;
+}
+
+/**
+ * One secret's basket inside the multi-secret cart: its staged key-value entries plus the
+ * deployment-PR file/key picker, driven by that secret's slice of the page's per-secret state.
+ * Owns its own "existing keys" and "infra preview" queries (React Query dedupes them against the
+ * page's own queries by key), and reports the deployment targets it will submit back up via
+ * `onResolved` so the page can build the bulk payload and gate the batch submit on preview loading.
+ */
+const SecretCartGroup: React.FC<SecretCartGroupProps> = ({
+  secretName,
+  platform,
+  entries,
+  onRemoveEntry,
+  onDiscard,
+  excludedTargetPaths,
+  onToggleTarget,
+  excludedKeysByPath,
+  onToggleKeyForPath,
+  manualTargets,
+  onAddManualTarget,
+  onRemoveManualTarget,
+  onResolved,
+}) => {
+  const toast = useToast();
+  const [manualPath, setManualPath] = useState('');
+  const [showAddFile, setShowAddFile] = useState(false);
+
+  const draftKeys = useMemo(() => entries.map((d) => d.key), [entries]);
+
+  // Existing AWS keys for this secret — powers the ADD vs UPDATE badge. Same query key the page's
+  // Existing-Keys panel uses, so it's one shared cache entry (no duplicate request).
+  const { data: existingKeysData } = useQuery({
+    queryKey: queryKeys.secretKeys(platform, secretName),
+    queryFn: () => listSecretKeys(secretName, platform),
+    enabled: !!secretName,
+  });
+
+  const { data: infraPreview, isFetching: infraLoading } = useQuery({
+    queryKey: queryKeys.secretInfraPreview(platform, secretName, draftKeys),
+    queryFn: () => previewInfraTargets(secretName, draftKeys, platform),
+    enabled: !!secretName && draftKeys.length > 0,
+  });
+
+  const previewTargets = useMemo(() => infraPreview?.targets ?? [], [infraPreview]);
+  // A file only needs the PR when it's MISSING one of the keys (a new key name). A file that
+  // already lists every key just takes the value update in AWS — no manifest change.
+  const newTargets = useMemo(() => previewTargets.filter((t) => t.keysToAdd.length > 0), [previewTargets]);
+  // Referenced the secret but the scan couldn't recognize its structure — the key was NOT
+  // registered here. Must never be shown as "up to date".
+  const unmatchedTargets = useMemo(() => previewTargets.filter((t) => t.unmatched), [previewTargets]);
+  const upToDateTargets = useMemo(
+    () => previewTargets.filter((t) => t.keysToAdd.length === 0 && !t.unmatched),
+    [previewTargets],
+  );
+
+  // The candidate key list offered for a manually-added file — no live diff for an arbitrary
+  // path, so offer every key the scan found missing anywhere, falling back to every drafted key.
+  const allCandidateKeys = useMemo(() => {
+    const fromScan = [...new Set(newTargets.flatMap((t) => t.keysToAdd))];
+    return fromScan.length > 0 ? fromScan : draftKeys;
+  }, [newTargets, draftKeys]);
+
+  // The final file selection this secret will submit: auto-detected files kept, plus any added
+  // by hand (de-duped by path). Empty ⇒ let the backend auto-resolve at PR time.
+  const selectedInfraTargets: InfraTargetSelection[] = useMemo(() => {
+    const byPath = new Map<string, InfraTargetSelection>();
+    for (const t of newTargets) {
+      if (excludedTargetPaths.has(t.path)) continue;
+      const excluded = excludedKeysByPath[t.path];
+      const keys = excluded && excluded.size > 0 ? t.keysToAdd.filter((k) => !excluded.has(k)) : undefined;
+      if (keys && keys.length === 0) continue; // every key unticked ⇒ same as excluding the file
+      byPath.set(t.path, { path: t.path, manifestRef: t.manifestRef, format: t.format, keys, env: t.env });
+    }
+    for (const m of manualTargets) {
+      if (byPath.has(m.path)) continue;
+      const excluded = excludedKeysByPath[m.path];
+      const keys = excluded && excluded.size > 0 ? allCandidateKeys.filter((k) => !excluded.has(k)) : undefined;
+      if (keys && keys.length === 0) continue;
+      byPath.set(m.path, { path: m.path, keys, env: envOf(m.path) });
+    }
+    return [...byPath.values()];
+  }, [newTargets, excludedTargetPaths, excludedKeysByPath, manualTargets, allCandidateKeys]);
+
+  // What the page should send for this secret. An explicit [] means "no files → no PR" and is
+  // honored — EXCEPT when it's empty only because every consumer was unmatched: sending []
+  // would produce a false "no manifest changes" note, so send undefined to let the backend
+  // auto-resolve and report the real "register manually" note.
+  const finalTargets =
+    infraPreview
+      ? selectedInfraTargets.length === 0 && unmatchedTargets.length > 0
+        ? undefined
+        : selectedInfraTargets
+      : undefined;
+
+  // Report the resolved targets + loading state up. Keyed on a stable signature so this fires
+  // only on a real change; the page's setter also guards equality, so no update loop.
+  const resolvedSig = JSON.stringify(finalTargets ?? null);
+  const onResolvedRef = React.useRef(onResolved);
+  onResolvedRef.current = onResolved;
+  React.useEffect(() => {
+    onResolvedRef.current({ infraTargets: finalTargets, loading: infraLoading });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resolvedSig, infraLoading]);
+
+  const addManual = () => {
+    const p = manualPath.trim();
+    if (!p) return;
+    if (previewTargets.some((t) => t.path === p) || manualTargets.some((m) => m.path === p)) {
+      toast.error('That file is already in the list.');
+      return;
+    }
+    onAddManualTarget(p);
+    setManualPath('');
+  };
+
+  return (
+    <div className="bulk-request-panel" style={{ marginTop: 20 }}>
+      <div className="bulk-request-header">
+        <div className="bulk-request-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Icons.ListChecks size={18} style={{ color: 'var(--primary)' }} />
+          {entries.length} staged entry/entries for <code>{secretName}</code>
+        </div>
+        <button type="button" className="btn btn-outline btn-sm" onClick={onDiscard}>
+          Remove secret
+        </button>
+      </div>
+
+      <div style={{ padding: '0 4px' }}>
+        {entries.map((d) => {
+          const overwrites = existingKeysData?.keys.includes(d.key) || false;
+          const kind = overwrites ? 'UPDATE' : 'ADD';
+          const kindBg = overwrites ? '#d97706' : '#16a34a';
+          return (
+            <div key={d.key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
+              <span
+                className="badge badge-sm"
+                style={{ textTransform: 'uppercase', fontSize: 10, fontWeight: 700, background: kindBg, color: '#fff' }}
+              >
+                {kind}
+              </span>
+              <code style={{ fontSize: 12, color: 'var(--text-main)', fontWeight: 600 }}>{d.key}</code>
+              {overwrites && (
+                <span className="badge badge-danger badge-sm" style={{ fontSize: 9, textTransform: 'uppercase' }}>
+                  Overwrites existing key
+                </span>
+              )}
+              {d.value === '' && (
+                <span className="badge badge-warning badge-sm" style={{ fontSize: 9, textTransform: 'uppercase' }} title="This entry will set the key to an empty string">
+                  Empty value
+                </span>
+              )}
+              <span style={{ color: 'var(--text-muted)', fontSize: 12, marginLeft: 12, overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: 300, display: 'inline-flex' }}>
+                =&nbsp;<MaskedValue value={d.value} maxLen={40} />
+              </span>
+              <div style={{ flex: 1 }} />
+              <button type="button" className="btn btn-outline btn-sm" onClick={() => onRemoveEntry(d.key)} title="Remove" style={{ flexShrink: 0 }}>
+                <Icons.X size={13} />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Deployment changes — which infra-deployment manifests the PR will edit */}
+      <div style={{ marginTop: 18, border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 14px', background: 'var(--bg-card)', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+          <Icons.GitPullRequestArrow size={15} style={{ color: 'var(--primary)' }} />
+          <span style={{ fontWeight: 600, fontSize: 13 }}>Deployment changes</span>
+          {previewTargets.some((t) => formatTargetPath(t.path).simulated) && (
+            <span className="badge badge-sm" style={{ fontSize: 9, fontWeight: 700, background: '#6b7280', color: '#fff', letterSpacing: '.03em' }}>SIMULATED</span>
+          )}
+          {!infraLoading && unmatchedTargets.length > 0 && (
+            <span
+              className="badge badge-sm"
+              title="These files reference the secret but Hermes couldn't recognize their structure — the key was not registered there"
+              style={{ fontSize: 9, fontWeight: 700, background: '#dc2626', color: '#fff', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+            >
+              <Icons.AlertTriangle size={10} /> {unmatchedTargets.length} need{unmatchedTargets.length === 1 ? 's' : ''} manual registration
+            </span>
+          )}
+          <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            {infraLoading ? (
+              <><Icons.Loader size={12} style={{ animation: 'spin 1s linear infinite' }} /> resolving…</>
+            ) : selectedInfraTargets.length > 0 ? (
+              <><Icons.GitPullRequest size={12} /> opens 1 PR · {selectedInfraTargets.length} file{selectedInfraTargets.length > 1 ? 's' : ''}</>
+            ) : upToDateTargets.length > 0 ? (
+              <><Icons.Check size={12} /> no new keys · no PR needed</>
+            ) : unmatchedTargets.length === 0 ? (
+              <><Icons.Check size={12} /> no PR needed</>
+            ) : null}
+          </span>
+        </div>
+
+        <div style={{ padding: '12px 14px' }}>
+          <p style={{ margin: '0 0 12px', fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+            A <strong>new</strong> key name must be registered in the deployment manifests so it syncs to the pods — that's what the PR does. An existing key just takes its value update in AWS, so it needs no manifest change. Untick any file you don't want in the PR, or click a key chip to drop just that key from one file.
+          </p>
+
+          {infraLoading ? null : previewTargets.length === 0 && manualTargets.length === 0 ? (
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', display: 'flex', alignItems: 'flex-start', gap: 8, padding: '9px 11px', border: '1px dashed var(--border)', borderRadius: 6 }}>
+              <Icons.Info size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+              <span>No manifest in <code>infra-deployment</code> references this secret — keys will be written to AWS only. If a service should consume it, add its file below.</span>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+              {newTargets.map((t) => {
+                const included = !excludedTargetPaths.has(t.path);
+                const { display, simulated } = formatTargetPath(t.path);
+                const excludedKeys = excludedKeysByPath[t.path] || EMPTY_KEY_SET;
+                const effectiveCount = t.keysToAdd.filter((k) => !excludedKeys.has(k)).length;
+                return (
+                  <div
+                    key={t.path}
+                    style={{
+                      display: 'flex', flexDirection: 'column', gap: 6, padding: '7px 10px', borderRadius: 6,
+                      border: '1px solid', borderColor: included ? 'var(--border)' : 'transparent',
+                      background: included ? 'var(--bg-card)' : 'transparent',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }} onClick={() => onToggleTarget(t.path)}>
+                      <input
+                        type="checkbox"
+                        checked={included}
+                        onChange={() => onToggleTarget(t.path)}
+                        onClick={(e) => e.stopPropagation()}
+                        style={{ flexShrink: 0 }}
+                      />
+                      <span className="badge badge-sm" style={{ textTransform: 'uppercase', fontSize: 9, fontWeight: 700, background: envBg(t.env), color: '#fff', flexShrink: 0 }}>{t.env}</span>
+                      <span className="badge badge-sm" style={{ fontSize: 9, flexShrink: 0 }}>{t.format === 'spc' ? 'SPC' : 'values'}</span>
+                      <code style={{ fontSize: 11.5, textDecoration: included ? 'none' : 'line-through', color: included ? 'var(--text-main)' : 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{display}</code>
+                      {simulated && <span className="badge badge-sm" style={{ fontSize: 8, background: '#6b7280', color: '#fff', flexShrink: 0 }}>SIM</span>}
+                      <span style={{ marginLeft: 'auto', flexShrink: 0 }}>
+                        {included ? (
+                          <span className="badge badge-sm" title={`Adds: ${t.keysToAdd.filter((k) => !excludedKeys.has(k)).join(', ') || 'none'}`} style={{ fontSize: 9, fontWeight: 700, background: effectiveCount > 0 ? '#16a34a' : '#6b7280', color: '#fff' }}>
+                            +{effectiveCount} new key{effectiveCount !== 1 ? 's' : ''}
+                          </span>
+                        ) : (
+                          <span style={{ fontSize: 10, color: 'var(--text-muted)', fontStyle: 'italic' }}>skipped</span>
+                        )}
+                      </span>
+                    </div>
+                    {included && t.keysToAdd.length > 1 && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, paddingLeft: 24 }}>
+                        {t.keysToAdd.map((k) => {
+                          const keyExcluded = excludedKeys.has(k);
+                          return (
+                            <button
+                              type="button"
+                              key={k}
+                              onClick={(e) => { e.stopPropagation(); onToggleKeyForPath(t.path, k); }}
+                              title={keyExcluded ? 'Excluded from this file — click to include it here' : 'Included in this file — click to exclude it from just this file'}
+                              style={{
+                                fontFamily: 'monospace', fontSize: 10.5, fontWeight: 600, cursor: 'pointer',
+                                background: keyExcluded ? 'transparent' : 'rgba(22, 163, 74, 0.08)',
+                                border: '1px solid ' + (keyExcluded ? 'var(--border)' : 'rgba(22, 163, 74, 0.35)'),
+                                color: keyExcluded ? 'var(--text-muted)' : 'var(--text-main)',
+                                textDecoration: keyExcluded ? 'line-through' : 'none',
+                                opacity: keyExcluded ? 0.6 : 1,
+                                borderRadius: 4, padding: '1px 6px',
+                              }}
+                            >
+                              {k}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+              {manualTargets.map((m) => {
+                const { display } = formatTargetPath(m.path);
+                const excludedKeys = excludedKeysByPath[m.path] || EMPTY_KEY_SET;
+                const effectiveCount = allCandidateKeys.filter((k) => !excludedKeys.has(k)).length;
+                return (
+                  <div key={m.path} style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '7px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <Icons.FilePlus2 size={14} style={{ color: 'var(--primary)', flexShrink: 0 }} />
+                      <span className="badge badge-sm" style={{ fontSize: 9, flexShrink: 0 }}>added by you</span>
+                      <code style={{ fontSize: 11.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{display}</code>
+                      <span className="badge badge-sm" style={{ fontSize: 9, fontWeight: 700, background: effectiveCount > 0 ? '#16a34a' : '#6b7280', color: '#fff', flexShrink: 0 }}>
+                        +{effectiveCount} key{effectiveCount !== 1 ? 's' : ''}
+                      </span>
+                      <button type="button" className="btn btn-outline btn-sm" style={{ marginLeft: 'auto', flexShrink: 0 }} onClick={() => onRemoveManualTarget(m.path)} title="Remove file">
+                        <Icons.X size={12} />
+                      </button>
+                    </div>
+                    {allCandidateKeys.length > 1 && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, paddingLeft: 24 }}>
+                        {allCandidateKeys.map((k) => {
+                          const keyExcluded = excludedKeys.has(k);
+                          return (
+                            <button
+                              type="button"
+                              key={k}
+                              onClick={() => onToggleKeyForPath(m.path, k)}
+                              title={keyExcluded ? 'Excluded from this file — click to include it here' : 'Included in this file — click to exclude it from just this file'}
+                              style={{
+                                fontFamily: 'monospace', fontSize: 10.5, fontWeight: 600, cursor: 'pointer',
+                                background: keyExcluded ? 'transparent' : 'rgba(22, 163, 74, 0.08)',
+                                border: '1px solid ' + (keyExcluded ? 'var(--border)' : 'rgba(22, 163, 74, 0.35)'),
+                                color: keyExcluded ? 'var(--text-muted)' : 'var(--text-main)',
+                                textDecoration: keyExcluded ? 'line-through' : 'none',
+                                opacity: keyExcluded ? 0.6 : 1,
+                                borderRadius: 4, padding: '1px 6px',
+                              }}
+                            >
+                              {k}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+              {unmatchedTargets.map((t) => {
+                const { display } = formatTargetPath(t.path);
+                return (
+                  <div
+                    key={t.path}
+                    style={{
+                      display: 'flex', alignItems: 'flex-start', gap: 10, padding: '7px 10px',
+                      borderRadius: 6, border: '1px dashed #dc2626', background: 'rgba(220, 38, 38, 0.05)',
+                    }}
+                  >
+                    <Icons.AlertTriangle size={14} style={{ color: '#dc2626', flexShrink: 0, marginTop: 2 }} />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <span className="badge badge-sm" style={{ textTransform: 'uppercase', fontSize: 9, fontWeight: 700, background: envBg(t.env), color: '#fff', flexShrink: 0 }}>{t.env}</span>
+                        <span className="badge badge-sm" style={{ fontSize: 9, flexShrink: 0 }}>{t.format === 'spc' ? 'SPC' : 'values'}</span>
+                        <code style={{ fontSize: 11.5, color: 'var(--text-main)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{display}</code>
+                      </div>
+                      <span style={{ fontSize: 11, color: '#dc2626' }}>
+                        References this secret, but Hermes couldn't recognize its structure — the key will NOT be registered here automatically. Register it manually in this file.
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {upToDateTargets.map((t) => {
+                const { display } = formatTargetPath(t.path);
+                return (
+                  <div key={t.path} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px', fontSize: 12, color: 'var(--text-muted)' }}>
+                    <Icons.Check size={14} style={{ color: '#16a34a', flexShrink: 0 }} />
+                    <span className="badge badge-sm" style={{ textTransform: 'uppercase', fontSize: 9, fontWeight: 700, background: envBg(t.env), color: '#fff', opacity: 0.65, flexShrink: 0 }}>{t.env}</span>
+                    <span className="badge badge-sm" style={{ fontSize: 9, flexShrink: 0 }}>{t.format === 'spc' ? 'SPC' : 'values'}</span>
+                    <code style={{ fontSize: 11.5, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{display}</code>
+                    <span style={{ marginLeft: 'auto', fontSize: 10, flexShrink: 0, fontStyle: 'italic' }}>already lists these keys · no change</span>
+                  </div>
+                );
+              })}
+
+              {newTargets.length === 0 && manualTargets.length === 0 && unmatchedTargets.length === 0 && (
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', display: 'flex', alignItems: 'flex-start', gap: 8, padding: '6px 2px' }}>
+                  <Icons.Info size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+                  <span>Every key here already exists in the manifest{upToDateTargets.length > 1 ? 's' : ''} — nothing to change there. Values update in AWS on approval; <strong>no PR needed</strong>.</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* add-a-file — secondary action, collapsed by default */}
+          {showAddFile ? (
+            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+              <input
+                className="form-input"
+                placeholder="path/to/values-prod.yaml the scan missed"
+                value={manualPath}
+                onChange={(e) => setManualPath(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addManual(); } }}
+                autoFocus
+                style={{ flex: 1, height: 32, fontSize: 12, fontFamily: 'monospace', maxWidth: 460 }}
+              />
+              <button type="button" className="btn btn-outline btn-sm" onClick={addManual} disabled={!manualPath.trim()}>Add</button>
+              <button type="button" className="btn btn-outline btn-sm" onClick={() => { setShowAddFile(false); setManualPath(''); }}>Cancel</button>
+            </div>
+          ) : (
+            <button type="button" onClick={() => setShowAddFile(true)} style={{ marginTop: 10, background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 5, padding: 0 }}>
+              <Icons.Plus size={13} /> Add a file the scan missed
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export const SecretIngestion: React.FC = () => {
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -85,26 +503,27 @@ export const SecretIngestion: React.FC = () => {
   const [selectedPlatform, setSelectedPlatform] = useState<string>('secrets');
 
   const [selectedSecret, setSelectedSecret] = useState<string>('');
-  // In-memory only — these hold real, unsubmitted secret values, so they are
-  // deliberately NOT persisted to localStorage (would sit there in plaintext
-  // indefinitely, unscoped by user). Lost on refresh/navigation by design.
+  // In-memory only — these hold real, unsubmitted secret values, so they are deliberately NOT
+  // persisted to localStorage (would sit there in plaintext indefinitely, unscoped by user). The
+  // whole cart (values + per-secret deployment selections) is lost on refresh/navigation by design.
   const [drafts, setDrafts] = useState<Record<string, DraftEntry[]>>({});
 
   const [newKey, setNewKey] = useState('');
   const [newValue, setNewValue] = useState('');
-  const [justification, setJustification] = useState('');
+  // One justification for the whole cart checkout (applied to every fanned-out request).
+  const [batchJustification, setBatchJustification] = useState('');
   const [keySearch, setKeySearch] = useState('');
   const [secretPrefix, setSecretPrefix] = useState('');
-  // infra-deployment target selection (per-request): files the requester un-ticks, and
-  // extra files they add by path for a name-mismatch the auto-scan couldn't find.
-  const [excludedTargetPaths, setExcludedTargetPaths] = useState<Set<string>>(new Set());
-  const [manualTargets, setManualTargets] = useState<{ path: string }[]>([]);
-  const [manualPath, setManualPath] = useState('');
-  const [showAddFile, setShowAddFile] = useState(false);
-  // Per-file key narrowing: path -> set of keys the requester excluded from THAT file only
-  // (the rest of the request is unaffected). Lets them keep a file in the PR while dropping
-  // one of its keys, instead of the whole file being all-or-nothing.
-  const [excludedKeysByPath, setExcludedKeysByPath] = useState<Record<string, Set<string>>>({});
+
+  // Per-secret deployment-target selection (keyed by secret name, same as `drafts`): files the
+  // requester un-ticks, extra files added by path, and per-file key narrowing — all scoped to a
+  // secret so the cart can hold independent selections for each.
+  const [excludedTargetsBySecret, setExcludedTargetsBySecret] = useState<Record<string, Set<string>>>({});
+  const [manualTargetsBySecret, setManualTargetsBySecret] = useState<Record<string, { path: string }[]>>({});
+  const [excludedKeysBySecret, setExcludedKeysBySecret] = useState<Record<string, Record<string, Set<string>>>>({});
+  // Reported up by each SecretCartGroup: the deployment targets it will submit + its preview
+  // loading state. Read at submit to build the payload and to gate the batch button.
+  const [resolvedBySecret, setResolvedBySecret] = useState<Record<string, ResolvedTargets>>({});
 
   // ── Queries ───────────────────────────────────────────────────────────────────
   // The configured instances (prod + any sandbox). The chooser only renders when >1.
@@ -121,12 +540,17 @@ export const SecretIngestion: React.FC = () => {
     }
   }, [instances, selectedPlatform]);
 
-  // Switching instance = a different AWS account: drop the selected secret, prefix filter, and
-  // any unsubmitted drafts (their values belong to the previous account and must not carry over).
+  // Switching instance = a different AWS account: drop the selected secret, prefix filter, and the
+  // entire cart (values + per-secret selections belong to the previous account and must not carry over).
   React.useEffect(() => {
     setSelectedSecret('');
     setSecretPrefix('');
     setDrafts({});
+    setExcludedTargetsBySecret({});
+    setManualTargetsBySecret({});
+    setExcludedKeysBySecret({});
+    setResolvedBySecret({});
+    setBatchJustification('');
   }, [selectedPlatform]);
 
   const { data: scope = [], isLoading: scopeLoading } = useQuery({
@@ -148,41 +572,6 @@ export const SecretIngestion: React.FC = () => {
     refetchInterval: 12000,
   });
 
-  // ── Mutations ─────────────────────────────────────────────────────────────────
-  const submitMutation = useMutation({
-    mutationFn: () =>
-      submitIngestionRequest({
-        platform: selectedPlatform,
-        secretName: selectedSecret,
-        justification: justification.trim() || undefined,
-        entries: currentDrafts,
-        // Send the selection verbatim once the preview has resolved — an empty array means
-        // "no files → no PR" (update-only) and must be honored, not fall back to auto-resolve.
-        // EXCEPTION: if the selection is empty only because every consumer was unmatched (the
-        // scan found the secret referenced but couldn't parse the file's key-list structure),
-        // sending [] would tell the backend "requester chose no files" and produce a false
-        // "no manifest changes" note — send undefined instead so the backend auto-resolves and
-        // reports the real "register manually" note for those files.
-        infraTargets: infraPreview
-          ? (selectedInfraTargets.length === 0 && unmatchedTargets.length > 0 ? undefined : selectedInfraTargets)
-          : undefined,
-      }),
-    onSuccess: () => {
-      toast.success('Request submitted. A deployment PR will appear under “My Ingestion Requests”.');
-      setDrafts((prev) => {
-        const copy = { ...prev };
-        delete copy[selectedSecret];
-        return copy;
-      });
-      setJustification('');
-      setExcludedTargetPaths(new Set());
-      setManualTargets([]);
-      setExcludedKeysByPath({});
-      queryClient.invalidateQueries({ queryKey: queryKeys.secretIngestionRequests('mine', selectedPlatform) });
-    },
-    onError: (err: any) => toast.error(err?.message || 'Failed to submit request.'),
-  });
-
   // ── Derived ───────────────────────────────────────────────────────────────────
   const secretOptions = useMemo(() => {
     const list: { secretName: string; groupName: string }[] = [];
@@ -194,19 +583,14 @@ export const SecretIngestion: React.FC = () => {
     return list.sort((a, b) => a.secretName.localeCompare(b.secretName));
   }, [scope]);
 
-  // Stage 1 (pre-filter): keep only secrets whose name STARTS WITH the prefix. This is the
-  // exact set handed to the selector — a prefix like "prod" must strictly exclude everything
-  // else (e.g. payment/stripe), even the currently-selected secret.
+  // Stage 1 (pre-filter): keep only secrets whose name STARTS WITH the prefix.
   const prefixFilteredOptions = useMemo(() => {
     const p = secretPrefix.trim().toLowerCase();
     if (!p) return secretOptions;
     return secretOptions.filter((o) => o.secretName.toLowerCase().startsWith(p));
   }, [secretOptions, secretPrefix]);
 
-  // Keep the selection inside the (possibly prefix-filtered) option set: default to the
-  // first option, and reselect when the prefix filter excludes the current selection —
-  // otherwise the form below keeps silently operating on a secret the selector no longer
-  // shows. Clears when the filter matches nothing.
+  // Keep the selection inside the (possibly prefix-filtered) option set.
   React.useEffect(() => {
     if (prefixFilteredOptions.some((o) => o.secretName === selectedSecret)) return;
     setSelectedSecret(prefixFilteredOptions[0]?.secretName ?? '');
@@ -218,94 +602,67 @@ export const SecretIngestion: React.FC = () => {
   }, [selectedSecret]);
 
   const currentDrafts = useMemo(() => drafts[selectedSecret] || [], [drafts, selectedSecret]);
-  const draftKeys = useMemo(() => currentDrafts.map((d) => d.key), [currentDrafts]);
 
-  // ── infra-deployment target preview ────────────────────────────────────────────
-  const { data: infraPreview, isFetching: infraLoading } = useQuery({
-    queryKey: queryKeys.secretInfraPreview(selectedPlatform, selectedSecret, draftKeys),
-    queryFn: () => previewInfraTargets(selectedSecret, draftKeys, selectedPlatform),
-    enabled: !!selectedSecret && draftKeys.length > 0,
-  });
-  const previewTargets = useMemo(() => infraPreview?.targets ?? [], [infraPreview]);
-  // A file only needs the PR when it's MISSING one of the keys (a new key name). A file that
-  // already lists every key just takes the value update in AWS — no manifest change.
-  const newTargets = useMemo(() => previewTargets.filter((t) => t.keysToAdd.length > 0), [previewTargets]);
-  // Referenced the secret but the scan couldn't recognize its structure — the key was NOT
-  // registered here. Must never be shown as "up to date" (that's the exact bug this fixes):
-  // the requester needs to know this file still needs manual attention.
-  const unmatchedTargets = useMemo(() => previewTargets.filter((t) => t.unmatched), [previewTargets]);
-  const upToDateTargets = useMemo(
-    () => previewTargets.filter((t) => t.keysToAdd.length === 0 && !t.unmatched),
-    [previewTargets],
+  // Secrets with a non-empty basket — the cart. Sorted for a stable render order.
+  const cartSecrets = useMemo(
+    () => Object.keys(drafts).filter((s) => (drafts[s]?.length ?? 0) > 0).sort((a, b) => a.localeCompare(b)),
+    [drafts],
+  );
+  const totalCartKeys = useMemo(
+    () => cartSecrets.reduce((n, s) => n + (drafts[s]?.length ?? 0), 0),
+    [cartSecrets, drafts],
   );
 
-  // Reset the file selection whenever the secret changes.
-  React.useEffect(() => {
-    setExcludedTargetPaths(new Set());
-    setManualTargets([]);
-    setManualPath('');
-    setShowAddFile(false);
-    setExcludedKeysByPath({});
-  }, [selectedSecret]);
+  // A secret is still "resolving" until its group reports back (undefined) or reports loading.
+  const anyResolving = useMemo(
+    () => cartSecrets.some((s) => !resolvedBySecret[s] || resolvedBySecret[s].loading),
+    [cartSecrets, resolvedBySecret],
+  );
 
-  // The candidate key list offered for a manually-added file — we have no live diff for an
-  // arbitrary path, so offer every key the scan found missing anywhere, falling back to
-  // every drafted key if the scan found nothing (e.g. this secret matches no manifest at all).
-  const allCandidateKeys = useMemo(() => {
-    const fromScan = [...new Set(newTargets.flatMap((t) => t.keysToAdd))];
-    return fromScan.length > 0 ? fromScan : draftKeys;
-  }, [newTargets, draftKeys]);
+  // ── Per-secret selection updaters (passed down to each SecretCartGroup) ─────────
+  const handleResolved = React.useCallback((secret: string, value: ResolvedTargets) => {
+    setResolvedBySecret((prev) => {
+      const cur = prev[secret];
+      if (
+        cur &&
+        cur.loading === value.loading &&
+        JSON.stringify(cur.infraTargets ?? null) === JSON.stringify(value.infraTargets ?? null)
+      ) {
+        return prev; // unchanged — avoid a needless re-render / update loop
+      }
+      return { ...prev, [secret]: value };
+    });
+  }, []);
 
-  // The requester's final selection sent on submit: auto-detected files they kept, plus any
-  // they added by hand (de-duped by path). Empty ⇒ let the backend auto-resolve at PR time.
-  const selectedInfraTargets: InfraTargetSelection[] = useMemo(() => {
-    const byPath = new Map<string, InfraTargetSelection>();
-    // Only files that actually gain a new key count toward the PR.
-    for (const t of newTargets) {
-      if (excludedTargetPaths.has(t.path)) continue;
-      const excluded = excludedKeysByPath[t.path];
-      const keys = excluded && excluded.size > 0 ? t.keysToAdd.filter((k) => !excluded.has(k)) : undefined;
-      if (keys && keys.length === 0) continue; // every key unticked ⇒ same as excluding the file
-      byPath.set(t.path, { path: t.path, manifestRef: t.manifestRef, format: t.format, keys, env: t.env });
-    }
-    for (const m of manualTargets) {
-      if (byPath.has(m.path)) continue;
-      const excluded = excludedKeysByPath[m.path];
-      const keys = excluded && excluded.size > 0 ? allCandidateKeys.filter((k) => !excluded.has(k)) : undefined;
-      if (keys && keys.length === 0) continue;
-      // No backend-resolved env for a hand-added path (the scan never saw it) — derive it
-      // client-side with the same shared envOf() the review queue uses as its fallback.
-      byPath.set(m.path, { path: m.path, keys, env: envOf(m.path) });
-    }
-    return [...byPath.values()];
-  }, [newTargets, excludedTargetPaths, excludedKeysByPath, manualTargets, allCandidateKeys]);
-
-  const toggleTarget = (path: string) =>
-    setExcludedTargetPaths((prev) => {
-      const next = new Set(prev);
+  const toggleTarget = (secret: string, path: string) =>
+    setExcludedTargetsBySecret((prev) => {
+      const next = new Set(prev[secret] || []);
       if (next.has(path)) next.delete(path);
       else next.add(path);
-      return next;
+      return { ...prev, [secret]: next };
     });
 
-  const toggleKeyForPath = (path: string, key: string) =>
-    setExcludedKeysByPath((prev) => {
-      const set = new Set(prev[path] || []);
+  const toggleKeyForPath = (secret: string, path: string, key: string) =>
+    setExcludedKeysBySecret((prev) => {
+      const forSecret = { ...(prev[secret] || {}) };
+      const set = new Set(forSecret[path] || []);
       if (set.has(key)) set.delete(key);
       else set.add(key);
-      return { ...prev, [path]: set };
+      forSecret[path] = set;
+      return { ...prev, [secret]: forSecret };
     });
 
-  const addManualTarget = () => {
-    const p = manualPath.trim();
-    if (!p) return;
-    if (previewTargets.some((t) => t.path === p) || manualTargets.some((m) => m.path === p)) {
-      toast.error('That file is already in the list.');
-      return;
-    }
-    setManualTargets((prev) => [...prev, { path: p }]);
-    setManualPath('');
-  };
+  const addManualTarget = (secret: string, path: string) =>
+    setManualTargetsBySecret((prev) => ({
+      ...prev,
+      [secret]: [...(prev[secret] || []), { path }],
+    }));
+
+  const removeManualTarget = (secret: string, path: string) =>
+    setManualTargetsBySecret((prev) => ({
+      ...prev,
+      [secret]: (prev[secret] || []).filter((m) => m.path !== path),
+    }));
 
   const handleAddDraft = (e: React.FormEvent) => {
     e.preventDefault();
@@ -327,23 +684,79 @@ export const SecretIngestion: React.FC = () => {
     setNewValue('');
   };
 
-  const handleRemoveDraft = (keyToRemove: string) => {
-    setDrafts((prev) => {
-      const items = (prev[selectedSecret] || []).filter((d) => d.key !== keyToRemove);
-      return {
-        ...prev,
-        [selectedSecret]: items,
-      };
-    });
+  const handleRemoveDraft = (secret: string, keyToRemove: string) => {
+    setDrafts((prev) => ({
+      ...prev,
+      [secret]: (prev[secret] || []).filter((d) => d.key !== keyToRemove),
+    }));
   };
 
-  const handleDiscardAll = () => {
+  // Drop one secret from the cart entirely — its entries and all its per-secret selections.
+  const handleDiscardSecret = (secret: string) => {
     setDrafts((prev) => {
       const copy = { ...prev };
-      delete copy[selectedSecret];
+      delete copy[secret];
+      return copy;
+    });
+    setExcludedTargetsBySecret((prev) => {
+      const copy = { ...prev };
+      delete copy[secret];
+      return copy;
+    });
+    setManualTargetsBySecret((prev) => {
+      const copy = { ...prev };
+      delete copy[secret];
+      return copy;
+    });
+    setExcludedKeysBySecret((prev) => {
+      const copy = { ...prev };
+      delete copy[secret];
+      return copy;
+    });
+    setResolvedBySecret((prev) => {
+      const copy = { ...prev };
+      delete copy[secret];
       return copy;
     });
   };
+
+  // ── Mutation — multi-secret cart checkout ──────────────────────────────────────
+  const submitMutation = useMutation({
+    mutationFn: () =>
+      submitIngestionRequestsBulk({
+        platform: selectedPlatform,
+        secrets: cartSecrets.map((s) => ({
+          secretName: s,
+          justification: batchJustification.trim() || undefined,
+          entries: (drafts[s] || []).map((d) => ({ key: d.key, value: d.value })),
+          infraTargets: resolvedBySecret[s]?.infraTargets,
+        })),
+      }),
+    onSuccess: (result) => {
+      const ok = result.submitted.length;
+      const bad = result.failed.length;
+      if (bad === 0) {
+        toast.success(
+          ok === 1
+            ? 'Request submitted. A deployment PR will appear under “My Ingestion Requests”.'
+            : `${ok} requests submitted. Deployment PRs will appear under “My Ingestion Requests”.`,
+        );
+      } else if (ok === 0) {
+        toast.error(`All ${bad} secret(s) failed: ${result.failed.map((f) => `${f.secretName} (${f.error})`).join('; ')}`);
+      } else {
+        toast.error(`${ok} submitted, ${bad} failed: ${result.failed.map((f) => `${f.secretName} (${f.error})`).join('; ')}`);
+      }
+      // Clear the whole cart on any partial success; secrets that failed are reported in the toast.
+      setDrafts({});
+      setExcludedTargetsBySecret({});
+      setManualTargetsBySecret({});
+      setExcludedKeysBySecret({});
+      setResolvedBySecret({});
+      setBatchJustification('');
+      queryClient.invalidateQueries({ queryKey: queryKeys.secretIngestionRequests('mine', selectedPlatform) });
+    },
+    onError: (err: any) => toast.error(err?.message || 'Failed to submit requests.'),
+  });
 
   // Instance chooser (prod vs sandbox) — only shown when more than one instance is configured.
   const platformChooser = instances.length > 1 && (
@@ -376,6 +789,18 @@ export const SecretIngestion: React.FC = () => {
     </div>
   );
 
+  // Small cart summary shown by the header once anything is staged.
+  const cartBadge = cartSecrets.length > 0 && (
+    <span
+      className="badge badge-sm"
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--primary)', color: '#fff', fontWeight: 700 }}
+      title="Staged across all secrets — submit them together below"
+    >
+      <Icons.ShoppingCart size={12} />
+      Cart · {cartSecrets.length} secret{cartSecrets.length > 1 ? 's' : ''} · {totalCartKeys} key{totalCartKeys > 1 ? 's' : ''}
+    </span>
+  );
+
   if (scopeLoading) {
     return (
       <div>
@@ -396,6 +821,7 @@ export const SecretIngestion: React.FC = () => {
         title="Secret Ingestion"
         icon={<Icons.KeyRound size={18} />}
         meta="Propose secret key-value pairs to merge into AWS Secrets Manager"
+        actions={cartBadge || undefined}
       />
 
       {platformChooser}
@@ -560,9 +986,15 @@ export const SecretIngestion: React.FC = () => {
                       />
                     </div>
                     <button type="submit" className="btn btn-outline btn-sm" style={{ alignSelf: 'flex-end', marginTop: 4 }}>
-                      Stage Entry
+                      Add to cart
                     </button>
                   </form>
+                  {cartSecrets.length > 0 && (
+                    <p style={{ marginTop: 10, fontSize: 12, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <Icons.Info size={13} style={{ flexShrink: 0 }} />
+                      Stage entries for as many secrets as you like — switch the Target AWS Secret above to add another. Review and submit them all together below.
+                    </p>
+                  )}
                 </div>
               </div>
             )}
@@ -570,318 +1002,64 @@ export const SecretIngestion: React.FC = () => {
         </div>
       )}
 
-      {/* Draft cart + submission */}
-      {selectedSecret && currentDrafts.length > 0 && (
-        <div className="bulk-request-panel" style={{ marginTop: 28 }}>
-          <div className="bulk-request-header">
-            <div className="bulk-request-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Icons.ListChecks size={18} style={{ color: 'var(--primary)' }} />
-              {currentDrafts.length} staged entry/entries for <code>{selectedSecret}</code>
+      {/* Review Cart — every secret with a non-empty basket, each with its own deployment picker */}
+      {cartSecrets.length > 0 && (
+        <div style={{ marginTop: 28 }}>
+          <SectionHeader
+            title="Review Cart"
+            icon={<Icons.ShoppingCart size={18} />}
+            meta={`${cartSecrets.length} secret${cartSecrets.length > 1 ? 's' : ''} · ${totalCartKeys} key${totalCartKeys > 1 ? 's' : ''}`}
+          />
+
+          {cartSecrets.map((s) => (
+            <SecretCartGroup
+              key={s}
+              secretName={s}
+              platform={selectedPlatform}
+              entries={drafts[s] || []}
+              onRemoveEntry={(key) => handleRemoveDraft(s, key)}
+              onDiscard={() => handleDiscardSecret(s)}
+              excludedTargetPaths={excludedTargetsBySecret[s] || EMPTY_PATH_SET}
+              onToggleTarget={(path) => toggleTarget(s, path)}
+              excludedKeysByPath={excludedKeysBySecret[s] || {}}
+              onToggleKeyForPath={(path, key) => toggleKeyForPath(s, path, key)}
+              manualTargets={manualTargetsBySecret[s] || []}
+              onAddManualTarget={(path) => addManualTarget(s, path)}
+              onRemoveManualTarget={(path) => removeManualTarget(s, path)}
+              onResolved={(value) => handleResolved(s, value)}
+            />
+          ))}
+
+          <div className="bulk-request-panel" style={{ marginTop: 16 }}>
+            <div className="bulk-request-body" style={{ gridTemplateColumns: '1fr', gap: 12 }}>
+              <div className="form-group form-row" style={{ marginBottom: 0 }}>
+                <label className="form-label">Justification</label>
+                <textarea
+                  className="form-textarea"
+                  placeholder="Why is this ingestion needed? Applies to every secret in this cart (optional)"
+                  value={batchJustification}
+                  onChange={(e) => setBatchJustification(e.target.value)}
+                />
+              </div>
             </div>
-            <button type="button" className="btn btn-outline btn-sm" onClick={handleDiscardAll}>
-              Discard all
-            </button>
-          </div>
 
-          <div style={{ padding: '0 4px' }}>
-            {currentDrafts.map((d) => {
-              const overwrites = existingKeysData?.keys.includes(d.key) || false;
-              const kind = overwrites ? 'UPDATE' : 'ADD';
-              const kindBg = overwrites ? '#d97706' : '#16a34a';
-              return (
-                <div key={d.key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
-                  <span
-                    className="badge badge-sm"
-                    style={{
-                      textTransform: 'uppercase',
-                      fontSize: 10,
-                      fontWeight: 700,
-                      background: kindBg,
-                      color: '#fff',
-                    }}
-                  >
-                    {kind}
-                  </span>
-                  <code style={{ fontSize: 12, color: 'var(--text-main)', fontWeight: 600 }}>
-                    {d.key}
-                  </code>
-                  {overwrites && (
-                    <span className="badge badge-danger badge-sm" style={{ fontSize: 9, textTransform: 'uppercase' }}>
-                      Overwrites existing key
-                    </span>
-                  )}
-                  {d.value === '' && (
-                    <span className="badge badge-warning badge-sm" style={{ fontSize: 9, textTransform: 'uppercase' }} title="This entry will set the key to an empty string">
-                      Empty value
-                    </span>
-                  )}
-                  <span style={{ color: 'var(--text-muted)', fontSize: 12, marginLeft: 12, overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: 300, display: 'inline-flex' }}>
-                    =&nbsp;<MaskedValue value={d.value} maxLen={40} />
-                  </span>
-                  <div style={{ flex: 1 }} />
-                  <button type="button" className="btn btn-outline btn-sm" onClick={() => handleRemoveDraft(d.key)} title="Remove" style={{ flexShrink: 0 }}>
-                    <Icons.X size={13} />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Deployment changes — which infra-deployment manifests the PR will edit */}
-          <div style={{ marginTop: 18, border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-            {/* header bar */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 14px', background: 'var(--bg-card)', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
-              <Icons.GitPullRequestArrow size={15} style={{ color: 'var(--primary)' }} />
-              <span style={{ fontWeight: 600, fontSize: 13 }}>Deployment changes</span>
-              {previewTargets.some((t) => formatTargetPath(t.path).simulated) && (
-                <span className="badge badge-sm" style={{ fontSize: 9, fontWeight: 700, background: '#6b7280', color: '#fff', letterSpacing: '.03em' }}>SIMULATED</span>
-              )}
-              {!infraLoading && unmatchedTargets.length > 0 && (
-                <span
-                  className="badge badge-sm"
-                  title="These files reference the secret but Hermes couldn't recognize their structure — the key was not registered there"
-                  style={{ fontSize: 9, fontWeight: 700, background: '#dc2626', color: '#fff', display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                >
-                  <Icons.AlertTriangle size={10} /> {unmatchedTargets.length} need{unmatchedTargets.length === 1 ? 's' : ''} manual registration
-                </span>
-              )}
-              <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                {infraLoading ? (
-                  <><Icons.Loader size={12} style={{ animation: 'spin 1s linear infinite' }} /> resolving…</>
-                ) : selectedInfraTargets.length > 0 ? (
-                  <><Icons.GitPullRequest size={12} /> opens 1 PR · {selectedInfraTargets.length} file{selectedInfraTargets.length > 1 ? 's' : ''}</>
-                ) : upToDateTargets.length > 0 ? (
-                  <><Icons.Check size={12} /> no new keys · no PR needed</>
-                ) : unmatchedTargets.length === 0 ? (
-                  <><Icons.Check size={12} /> no PR needed</>
-                ) : null}
+            <div className="bulk-request-footer">
+              <span style={{ marginRight: 'auto', fontSize: 13, color: 'var(--text-muted)' }}>
+                Submits one request per secret. Requires admin approval; merges approved keys, leaves unmentioned keys intact.
               </span>
+              <button
+                type="button"
+                className="btn btn-primary"
+                style={{ gap: 6 }}
+                disabled={submitMutation.isPending || anyResolving}
+                onClick={() => submitMutation.mutate()}
+              >
+                {submitMutation.isPending || anyResolving ? <Icons.Loader size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <Icons.Send size={16} />}
+                {anyResolving
+                  ? 'Resolving deployment targets…'
+                  : `Submit ${cartSecrets.length} Ingestion Request${cartSecrets.length > 1 ? 's' : ''}`}
+              </button>
             </div>
-
-            <div style={{ padding: '12px 14px' }}>
-              <p style={{ margin: '0 0 12px', fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-                A <strong>new</strong> key name must be registered in the deployment manifests so it syncs to the pods — that's what the PR does. An existing key just takes its value update in AWS, so it needs no manifest change. Untick any file you don't want in the PR, or click a key chip to drop just that key from one file.
-              </p>
-
-              {infraLoading ? null : previewTargets.length === 0 && manualTargets.length === 0 ? (
-                <div style={{ fontSize: 12, color: 'var(--text-muted)', display: 'flex', alignItems: 'flex-start', gap: 8, padding: '9px 11px', border: '1px dashed var(--border)', borderRadius: 6 }}>
-                  <Icons.Info size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-                  <span>No manifest in <code>infra-deployment</code> references this secret — keys will be written to AWS only. If a service should consume it, add its file below.</span>
-                </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                  {newTargets.map((t) => {
-                    const included = !excludedTargetPaths.has(t.path);
-                    const { display, simulated } = formatTargetPath(t.path);
-                    const excludedKeys = excludedKeysByPath[t.path] || EMPTY_KEY_SET;
-                    const effectiveCount = t.keysToAdd.filter((k) => !excludedKeys.has(k)).length;
-                    return (
-                      <div
-                        key={t.path}
-                        style={{
-                          display: 'flex', flexDirection: 'column', gap: 6, padding: '7px 10px', borderRadius: 6,
-                          border: '1px solid', borderColor: included ? 'var(--border)' : 'transparent',
-                          background: included ? 'var(--bg-card)' : 'transparent',
-                        }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }} onClick={() => toggleTarget(t.path)}>
-                          <input
-                            type="checkbox"
-                            checked={included}
-                            onChange={() => toggleTarget(t.path)}
-                            onClick={(e) => e.stopPropagation()}
-                            style={{ flexShrink: 0 }}
-                          />
-                          <span className="badge badge-sm" style={{ textTransform: 'uppercase', fontSize: 9, fontWeight: 700, background: envBg(t.env), color: '#fff', flexShrink: 0 }}>{t.env}</span>
-                          <span className="badge badge-sm" style={{ fontSize: 9, flexShrink: 0 }}>{t.format === 'spc' ? 'SPC' : 'values'}</span>
-                          <code style={{ fontSize: 11.5, textDecoration: included ? 'none' : 'line-through', color: included ? 'var(--text-main)' : 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{display}</code>
-                          {simulated && <span className="badge badge-sm" style={{ fontSize: 8, background: '#6b7280', color: '#fff', flexShrink: 0 }}>SIM</span>}
-                          <span style={{ marginLeft: 'auto', flexShrink: 0 }}>
-                            {included ? (
-                              <span className="badge badge-sm" title={`Adds: ${t.keysToAdd.filter((k) => !excludedKeys.has(k)).join(', ') || 'none'}`} style={{ fontSize: 9, fontWeight: 700, background: effectiveCount > 0 ? '#16a34a' : '#6b7280', color: '#fff' }}>
-                                +{effectiveCount} new key{effectiveCount !== 1 ? 's' : ''}
-                              </span>
-                            ) : (
-                              <span style={{ fontSize: 10, color: 'var(--text-muted)', fontStyle: 'italic' }}>skipped</span>
-                            )}
-                          </span>
-                        </div>
-                        {included && t.keysToAdd.length > 1 && (
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, paddingLeft: 24 }}>
-                            {t.keysToAdd.map((k) => {
-                              const keyExcluded = excludedKeys.has(k);
-                              return (
-                                <button
-                                  type="button"
-                                  key={k}
-                                  onClick={(e) => { e.stopPropagation(); toggleKeyForPath(t.path, k); }}
-                                  title={keyExcluded ? 'Excluded from this file — click to include it here' : 'Included in this file — click to exclude it from just this file'}
-                                  style={{
-                                    fontFamily: 'monospace', fontSize: 10.5, fontWeight: 600, cursor: 'pointer',
-                                    background: keyExcluded ? 'transparent' : 'rgba(22, 163, 74, 0.08)',
-                                    border: '1px solid ' + (keyExcluded ? 'var(--border)' : 'rgba(22, 163, 74, 0.35)'),
-                                    color: keyExcluded ? 'var(--text-muted)' : 'var(--text-main)',
-                                    textDecoration: keyExcluded ? 'line-through' : 'none',
-                                    opacity: keyExcluded ? 0.6 : 1,
-                                    borderRadius: 4, padding: '1px 6px',
-                                  }}
-                                >
-                                  {k}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-
-                  {manualTargets.map((m) => {
-                    const { display } = formatTargetPath(m.path);
-                    const excludedKeys = excludedKeysByPath[m.path] || EMPTY_KEY_SET;
-                    const effectiveCount = allCandidateKeys.filter((k) => !excludedKeys.has(k)).length;
-                    return (
-                      <div key={m.path} style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '7px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                          <Icons.FilePlus2 size={14} style={{ color: 'var(--primary)', flexShrink: 0 }} />
-                          <span className="badge badge-sm" style={{ fontSize: 9, flexShrink: 0 }}>added by you</span>
-                          <code style={{ fontSize: 11.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{display}</code>
-                          <span className="badge badge-sm" style={{ fontSize: 9, fontWeight: 700, background: effectiveCount > 0 ? '#16a34a' : '#6b7280', color: '#fff', flexShrink: 0 }}>
-                            +{effectiveCount} key{effectiveCount !== 1 ? 's' : ''}
-                          </span>
-                          <button type="button" className="btn btn-outline btn-sm" style={{ marginLeft: 'auto', flexShrink: 0 }} onClick={() => setManualTargets((prev) => prev.filter((x) => x.path !== m.path))} title="Remove file">
-                            <Icons.X size={12} />
-                          </button>
-                        </div>
-                        {allCandidateKeys.length > 1 && (
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, paddingLeft: 24 }}>
-                            {allCandidateKeys.map((k) => {
-                              const keyExcluded = excludedKeys.has(k);
-                              return (
-                                <button
-                                  type="button"
-                                  key={k}
-                                  onClick={() => toggleKeyForPath(m.path, k)}
-                                  title={keyExcluded ? 'Excluded from this file — click to include it here' : 'Included in this file — click to exclude it from just this file'}
-                                  style={{
-                                    fontFamily: 'monospace', fontSize: 10.5, fontWeight: 600, cursor: 'pointer',
-                                    background: keyExcluded ? 'transparent' : 'rgba(22, 163, 74, 0.08)',
-                                    border: '1px solid ' + (keyExcluded ? 'var(--border)' : 'rgba(22, 163, 74, 0.35)'),
-                                    color: keyExcluded ? 'var(--text-muted)' : 'var(--text-main)',
-                                    textDecoration: keyExcluded ? 'line-through' : 'none',
-                                    opacity: keyExcluded ? 0.6 : 1,
-                                    borderRadius: 4, padding: '1px 6px',
-                                  }}
-                                >
-                                  {k}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-
-                  {/* References the secret but the scan couldn't recognize its structure — the
-                      key was NOT registered here, unlike the "up to date" files below. */}
-                  {unmatchedTargets.map((t) => {
-                    const { display } = formatTargetPath(t.path);
-                    return (
-                      <div
-                        key={t.path}
-                        style={{
-                          display: 'flex', alignItems: 'flex-start', gap: 10, padding: '7px 10px',
-                          borderRadius: 6, border: '1px dashed #dc2626', background: 'rgba(220, 38, 38, 0.05)',
-                        }}
-                      >
-                        <Icons.AlertTriangle size={14} style={{ color: '#dc2626', flexShrink: 0, marginTop: 2 }} />
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                            <span className="badge badge-sm" style={{ textTransform: 'uppercase', fontSize: 9, fontWeight: 700, background: envBg(t.env), color: '#fff', flexShrink: 0 }}>{t.env}</span>
-                            <span className="badge badge-sm" style={{ fontSize: 9, flexShrink: 0 }}>{t.format === 'spc' ? 'SPC' : 'values'}</span>
-                            <code style={{ fontSize: 11.5, color: 'var(--text-main)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{display}</code>
-                          </div>
-                          <span style={{ fontSize: 11, color: '#dc2626' }}>
-                            References this secret, but Hermes couldn't recognize its structure — the key will NOT be registered here automatically. Register it manually in this file.
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })}
-
-                  {/* Files that already list every requested key — shown for reassurance, not part of the PR. */}
-                  {upToDateTargets.map((t) => {
-                    const { display } = formatTargetPath(t.path);
-                    return (
-                      <div key={t.path} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px', fontSize: 12, color: 'var(--text-muted)' }}>
-                        <Icons.Check size={14} style={{ color: '#16a34a', flexShrink: 0 }} />
-                        <span className="badge badge-sm" style={{ textTransform: 'uppercase', fontSize: 9, fontWeight: 700, background: envBg(t.env), color: '#fff', opacity: 0.65, flexShrink: 0 }}>{t.env}</span>
-                        <span className="badge badge-sm" style={{ fontSize: 9, flexShrink: 0 }}>{t.format === 'spc' ? 'SPC' : 'values'}</span>
-                        <code style={{ fontSize: 11.5, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{display}</code>
-                        <span style={{ marginLeft: 'auto', fontSize: 10, flexShrink: 0, fontStyle: 'italic' }}>already lists these keys · no change</span>
-                      </div>
-                    );
-                  })}
-
-                  {newTargets.length === 0 && manualTargets.length === 0 && unmatchedTargets.length === 0 && (
-                    <div style={{ fontSize: 12, color: 'var(--text-muted)', display: 'flex', alignItems: 'flex-start', gap: 8, padding: '6px 2px' }}>
-                      <Icons.Info size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-                      <span>Every key here already exists in the manifest{upToDateTargets.length > 1 ? 's' : ''} — nothing to change there. Values update in AWS on approval; <strong>no PR needed</strong>.</span>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* add-a-file — secondary action, collapsed by default */}
-              {showAddFile ? (
-                <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                  <input
-                    className="form-input"
-                    placeholder="path/to/values-prod.yaml the scan missed"
-                    value={manualPath}
-                    onChange={(e) => setManualPath(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addManualTarget(); } }}
-                    autoFocus
-                    style={{ flex: 1, height: 32, fontSize: 12, fontFamily: 'monospace', maxWidth: 460 }}
-                  />
-                  <button type="button" className="btn btn-outline btn-sm" onClick={addManualTarget} disabled={!manualPath.trim()}>Add</button>
-                  <button type="button" className="btn btn-outline btn-sm" onClick={() => { setShowAddFile(false); setManualPath(''); }}>Cancel</button>
-                </div>
-              ) : (
-                <button type="button" onClick={() => setShowAddFile(true)} style={{ marginTop: 10, background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 5, padding: 0 }}>
-                  <Icons.Plus size={13} /> Add a file the scan missed
-                </button>
-              )}
-            </div>
-          </div>
-
-          <div className="bulk-request-body" style={{ gridTemplateColumns: '1fr', gap: 12, marginTop: 12 }}>
-            <div className="form-group form-row" style={{ marginBottom: 0 }}>
-              <label className="form-label">Justification</label>
-              <textarea
-                className="form-textarea"
-                placeholder="Why is this ingestion request needed? (optional)"
-                value={justification}
-                onChange={(e) => setJustification(e.target.value)}
-              />
-            </div>
-          </div>
-
-          <div className="bulk-request-footer">
-            <span style={{ marginRight: 'auto', fontSize: 13, color: 'var(--text-muted)' }}>
-              Requires admin approval. Merges approved keys; leaves unmentioned keys intact.
-            </span>
-            <button
-              type="button"
-              className="btn btn-primary"
-              style={{ gap: 6 }}
-              disabled={submitMutation.isPending || infraLoading}
-              onClick={() => submitMutation.mutate()}
-            >
-              {submitMutation.isPending || infraLoading ? <Icons.Loader size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <Icons.Send size={16} />}
-              {infraLoading ? 'Resolving deployment targets…' : 'Submit Ingestion Request'}
-            </button>
           </div>
         </div>
       )}
@@ -908,75 +1086,96 @@ export const SecretIngestion: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {myRequests.map((r) => (
-                  <tr key={r.id}>
-                    <td style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 13, color: 'var(--primary)' }}>
-                      {r.requestNumber !== undefined ? `#${r.requestNumber}` : '—'}
-                    </td>
-                    <td style={{ fontWeight: 600, fontFamily: 'monospace', fontSize: 13 }}>{r.secretName}</td>
-                    <td>
-                      <details>
-                        <summary style={{ cursor: 'pointer', color: 'var(--text-muted)', fontSize: 13 }}>
-                          {r.entries.length} key(s)
-                        </summary>
-                        <div style={{ marginTop: 8 }}>
-                          {r.entries.map((entry, idx) => (
-                            <div key={idx} style={{ fontSize: 12, padding: '4px 0', display: 'flex', alignItems: 'center', gap: 8 }}>
-                              {entry.decision === 'APPROVED' && entry.applied && (
-                                <Icons.Check size={12} style={{ color: '#16a34a' }} />
+                {myRequests.map((r, idx) => {
+                  // Group header before the first row of a batch (a multi-secret cart checkout).
+                  // Rows without a batchId, or the second+ member of a batch, render no header.
+                  const prev = idx > 0 ? myRequests[idx - 1] : undefined;
+                  const isBatchStart = !!r.batchId && r.batchId !== prev?.batchId;
+                  const batchSize = isBatchStart
+                    ? myRequests.filter((x) => x.batchId === r.batchId).length
+                    : 0;
+                  return (
+                    <React.Fragment key={r.id}>
+                      {isBatchStart && batchSize > 1 && (
+                        <tr>
+                          <td colSpan={6} style={{ background: 'var(--bg-card)', padding: '6px 12px', borderTop: '2px solid var(--border)' }}>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: 'var(--text-muted)' }}>
+                              <Icons.ShoppingCart size={13} style={{ color: 'var(--primary)' }} />
+                              Batch of {batchSize} · submitted {new Date(r.createdAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          </td>
+                        </tr>
+                      )}
+                      <tr>
+                        <td style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 13, color: 'var(--primary)' }}>
+                          {r.requestNumber !== undefined ? `#${r.requestNumber}` : '—'}
+                        </td>
+                        <td style={{ fontWeight: 600, fontFamily: 'monospace', fontSize: 13 }}>{r.secretName}</td>
+                        <td>
+                          <details>
+                            <summary style={{ cursor: 'pointer', color: 'var(--text-muted)', fontSize: 13 }}>
+                              {r.entries.length} key(s)
+                            </summary>
+                            <div style={{ marginTop: 8 }}>
+                              {r.entries.map((entry, i) => (
+                                <div key={i} style={{ fontSize: 12, padding: '4px 0', display: 'flex', alignItems: 'center', gap: 8 }}>
+                                  {entry.decision === 'APPROVED' && entry.applied && (
+                                    <Icons.Check size={12} style={{ color: '#16a34a' }} />
+                                  )}
+                                  {entry.decision === 'APPROVED' && !entry.applied && (
+                                    <Icons.AlertTriangle size={12} style={{ color: '#dc2626' }} />
+                                  )}
+                                  {entry.decision === 'REJECTED' && (
+                                    <Icons.X size={12} style={{ color: '#dc2626' }} />
+                                  )}
+                                  <code style={{ fontWeight: 600 }}>{entry.key}</code>
+                                  <span style={{ color: 'var(--text-light)', display: 'inline-flex' }}>
+                                    {entry.value === null || entry.value === undefined ? (
+                                      <span style={{ fontStyle: 'italic', color: 'var(--text-muted)' }}>(Redacted value)</span>
+                                    ) : (
+                                      <>=&nbsp;<MaskedValue value={entry.value} maxLen={20} /></>
+                                    )}
+                                  </span>
+                                  {entry.error && <span style={{ color: '#dc2626' }}>· Error: {entry.error}</span>}
+                                </div>
+                              ))}
+                              {r.justification && (
+                                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6, fontStyle: 'italic' }}>
+                                  "Justification: {r.justification}"
+                                </div>
                               )}
-                              {entry.decision === 'APPROVED' && !entry.applied && (
-                                <Icons.AlertTriangle size={12} style={{ color: '#dc2626' }} />
+                              {r.reviewerName && (
+                                <div style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 4 }}>
+                                  Reviewed by {r.reviewerName}
+                                  {r.reviewNote && ` with note: "${r.reviewNote}"`}
+                                </div>
                               )}
-                              {entry.decision === 'REJECTED' && (
-                                <Icons.X size={12} style={{ color: '#dc2626' }} />
+                              {r.applyError && (
+                                <div style={{ fontSize: 12, color: '#dc2626', marginTop: 4 }}>
+                                  Error: {r.applyError}
+                                </div>
                               )}
-                              <code style={{ fontWeight: 600 }}>{entry.key}</code>
-                              <span style={{ color: 'var(--text-light)', display: 'inline-flex' }}>
-                                {entry.value === null || entry.value === undefined ? (
-                                  <span style={{ fontStyle: 'italic', color: 'var(--text-muted)' }}>(Redacted value)</span>
-                                ) : (
-                                  <>=&nbsp;<MaskedValue value={entry.value} maxLen={20} /></>
-                                )}
-                              </span>
-                              {entry.error && <span style={{ color: '#dc2626' }}>· Error: {entry.error}</span>}
                             </div>
-                          ))}
-                          {r.justification && (
-                            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6, fontStyle: 'italic' }}>
-                              "Justification: {r.justification}"
-                            </div>
-                          )}
-                          {r.reviewerName && (
-                            <div style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 4 }}>
-                              Reviewed by {r.reviewerName}
-                              {r.reviewNote && ` with note: "${r.reviewNote}"`}
-                            </div>
-                          )}
-                          {r.applyError && (
-                            <div style={{ fontSize: 12, color: '#dc2626', marginTop: 4 }}>
-                              Error: {r.applyError}
-                            </div>
-                          )}
-                        </div>
-                      </details>
-                    </td>
-                    <td>
-                      <span className={`badge ${STATUS_BADGE[r.status]} badge-sm`}>{r.status}</span>
-                    </td>
-                    <td style={{ fontSize: 12 }}>
-                      <InfraPrCell request={r} />
-                    </td>
-                    <td style={{ color: 'var(--text-light)', fontSize: 13 }}>
-                      {new Date(r.createdAt).toLocaleString(undefined, {
-                        month: 'short',
-                        day: 'numeric',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}
-                    </td>
-                  </tr>
-                ))}
+                          </details>
+                        </td>
+                        <td>
+                          <span className={`badge ${STATUS_BADGE[r.status]} badge-sm`}>{r.status}</span>
+                        </td>
+                        <td style={{ fontSize: 12 }}>
+                          <InfraPrCell request={r} />
+                        </td>
+                        <td style={{ color: 'var(--text-light)', fontSize: 13 }}>
+                          {new Date(r.createdAt).toLocaleString(undefined, {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </td>
+                      </tr>
+                    </React.Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>

@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import prisma from '../config/prisma';
 import {
   SecretScopePattern,
@@ -404,6 +405,9 @@ export class SecretIngestionService {
     justification?: string;
     infraTargets?: SelectedTarget[];
     platform?: string;
+    // Set by createIngestionRequestsBulk to tie a multi-secret cart checkout together. Null/omitted
+    // for a solo submit. Purely a display grouping — each request is otherwise independent.
+    batchId?: string;
   }) {
     // Key/value shape (non-empty entries, length limits) is validated at the
     // controller boundary via submitIngestionSchema — this is the only caller.
@@ -461,6 +465,7 @@ export class SecretIngestionService {
         })) as any,
         justification: justification?.trim() || null,
         infraTargets: infraTargets as any,
+        batchId: opts.batchId ?? null,
       },
     });
 
@@ -476,6 +481,7 @@ export class SecretIngestionService {
           keyCount: entries.length,
           keys: entries.map(e => e.key.trim()),
           justification: row.justification,
+          batchId: row.batchId,
         } as any,
       },
     });
@@ -496,6 +502,64 @@ export class SecretIngestionService {
     });
 
     return this.decryptRow(row);
+  }
+
+  /**
+   * Multi-secret cart checkout: fans out to one createIngestionRequest per secret, all sharing a
+   * single batchId so the requester's "My Requests" list can group them. Partial success — one
+   * secret failing (authorization, unknown secret, etc.) never aborts the others; each request
+   * still independently emits its own `secret-ingestion.submitted` event (own PR + reviewer
+   * notification), so events are deliberately NOT consolidated here. Mirrors the shape of
+   * accessWorkflowService.createRequestsBulk.
+   */
+  async createIngestionRequestsBulk(opts: {
+    requester: AuthenticatedUser;
+    platform?: string;
+    secrets: {
+      secretName: string;
+      entries: { key: string; value: string }[];
+      justification?: string;
+      infraTargets?: SelectedTarget[];
+    }[];
+  }): Promise<{
+    batchId: string;
+    submitted: Awaited<
+      ReturnType<SecretIngestionService['createIngestionRequest']>
+    >[];
+    failed: { secretName: string; error: string }[];
+  }> {
+    const platform = assertSecretsPlatform(opts.platform ?? PLATFORM);
+    const batchId = randomUUID();
+
+    const submitted: Awaited<
+      ReturnType<SecretIngestionService['createIngestionRequest']>
+    >[] = [];
+    const failed: { secretName: string; error: string }[] = [];
+
+    // Sequential, not Promise.all — each createIngestionRequest resolves the secret's owning group
+    // and casing against live scope; running them concurrently gains little (a handful of secrets)
+    // and keeps failures cleanly attributable to their secret.
+    for (const item of opts.secrets) {
+      try {
+        const row = await this.createIngestionRequest({
+          requester: opts.requester,
+          secretName: item.secretName,
+          entries: item.entries,
+          justification: item.justification,
+          infraTargets: item.infraTargets,
+          platform,
+          batchId,
+        });
+        submitted.push(row);
+      } catch (err) {
+        failed.push({
+          secretName: item.secretName,
+          error: err instanceof Error ? err.message : 'Failed to submit',
+        });
+      }
+    }
+
+    return { batchId, submitted, failed };
   }
 
   /**

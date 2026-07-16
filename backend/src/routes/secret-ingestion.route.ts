@@ -46,6 +46,16 @@ router.post(
   },
 );
 
+router.post(
+  '/requests/bulk',
+  authenticateToken,
+  (req: Request, res: Response, next: NextFunction) => {
+    new SecretIngestionController(req, res, next)
+      .submitRequestsBulk(req, res, next)
+      .catch(next);
+  },
+);
+
 router.get(
   '/requests',
   authenticateToken,
@@ -104,6 +114,16 @@ router.post(
   (req: Request, res: Response, next: NextFunction) => {
     new SecretIngestionController(req, res, next)
       .resolveDrift(req, res, next)
+      .catch(next);
+  },
+);
+
+router.post(
+  '/drift/merge',
+  authenticateToken,
+  (req: Request, res: Response, next: NextFunction) => {
+    new SecretIngestionController(req, res, next)
+      .mergeDrift(req, res, next)
       .catch(next);
   },
 );

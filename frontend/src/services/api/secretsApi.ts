@@ -125,6 +125,24 @@ export interface SecretIngestionRequest {
   infraSyncState?: "OPEN" | "MERGED" | "CLOSED" | "SKIPPED" | "FAILED" | null;
   infraSyncNote?: string | null;
   infraTargets?: InfraTargetSelection[] | null;
+  /** Ties together the N requests from one multi-secret cart checkout so "My Requests" can group
+   *  them. Null = a solo (single-secret) submit or a row created before the cart existed. */
+  batchId?: string | null;
+}
+
+/** One secret's worth of a multi-secret cart checkout. */
+export interface IngestionCartItem {
+  secretName: string;
+  justification?: string;
+  entries: { key: string; value: string }[];
+  infraTargets?: InfraTargetSelection[];
+}
+
+/** Result of a bulk (cart) submit: the requests that went through, plus per-secret failures. */
+export interface IngestionBulkResult {
+  batchId: string;
+  submitted: SecretIngestionRequest[];
+  failed: { secretName: string; error: string }[];
 }
 
 // Every read/submit is scoped to one instance via `?platform=` / a body field. Omitting it
@@ -169,6 +187,17 @@ export const submitIngestionRequest = (payload: {
   platform?: string;
 }): Promise<SecretIngestionRequest> =>
   apiClient.post("/api/secrets/requests", payload).then((r) => r.data);
+
+/**
+ * Multi-secret cart checkout — one shared instance (AWS account), several secrets each with their
+ * own keys/justification/targets. Fans out server-side to one request per secret sharing a
+ * batchId; partial success comes back as { submitted, failed }.
+ */
+export const submitIngestionRequestsBulk = (payload: {
+  platform?: string;
+  secrets: IngestionCartItem[];
+}): Promise<IngestionBulkResult> =>
+  apiClient.post("/api/secrets/requests/bulk", payload).then((r) => r.data);
 
 export const listIngestionRequests = (
   scope: "mine" | "review",
@@ -239,6 +268,10 @@ export interface SecretDrift {
   unmatchedManifests: string[];
   manifests: DriftManifestView[];
   fixable: boolean;
+  /** An open reconciliation PR left by an earlier "Solve drift" — lets the Merge button survive a
+   * reload, since the review it waits on happens on GitHub. Absent = none known (the live lookup
+   * may also have failed), never proof that none exists. */
+  openPr?: { number: number; url: string; isDraft: boolean };
 }
 
 /** A secret whose drift check threw — its state is UNKNOWN, not "in sync". */
@@ -280,6 +313,25 @@ export const resolveSecretDrift = (
 ): Promise<DriftResolveResult> =>
   apiClient
     .post("/api/secrets/drift/resolve", {
+      secretName,
+      ...(platform ? { platform } : {}),
+    })
+    .then((r) => r.data);
+
+/**
+ * Merges the draft PR that `resolveSecretDrift` opened, once a human has reviewed it on GitHub.
+ * Offered regardless of the auto-merge setting — that governs unattended merges, not this one.
+ *
+ * A GitHub refusal (token without merge rights, branch protection, an outstanding check) resolves
+ * with `state: "FAILED"` and a `note` explaining why, rather than rejecting: the PR is untouched
+ * and still mergeable by hand, so callers should surface the note and keep the link.
+ */
+export const mergeSecretDrift = (
+  secretName: string,
+  platform?: string,
+): Promise<DriftResolveResult> =>
+  apiClient
+    .post("/api/secrets/drift/merge", {
       secretName,
       ...(platform ? { platform } : {}),
     })

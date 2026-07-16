@@ -31,8 +31,10 @@ const selectedTargetSchema = z.object({
 // family in the controller/service, not here.
 const platformSchema = z.string().trim().min(1).max(64).optional();
 
-export const submitIngestionSchema = z.object({
-  platform: platformSchema,
+// One secret's worth of an ingestion request — the shared shape used both by the single-secret
+// submit and by each item of a multi-secret cart checkout. `platform` is NOT here: it's shared
+// across a whole bulk batch (one AWS account) and lives on the outer schema.
+const ingestionItemSchema = z.object({
   secretName: z
     .string()
     .trim()
@@ -59,6 +61,28 @@ export const submitIngestionSchema = z.object({
     .array(selectedTargetSchema)
     .max(50, 'Too many target files')
     .optional(),
+});
+
+export const submitIngestionSchema = ingestionItemSchema.extend({
+  platform: platformSchema,
+});
+
+// Multi-secret cart checkout: one shared instance (AWS account), several secrets each with
+// their own keys/justification/targets. Fans out server-side to one request per secret.
+export const submitIngestionBulkSchema = z.object({
+  platform: platformSchema,
+  secrets: z
+    .array(ingestionItemSchema)
+    .min(1, 'At least one secret is required')
+    .max(25, 'Cannot submit more than 25 secrets in one batch')
+    // Each secret becomes its own request; the same secret twice in one checkout would race
+    // the per-secret auth/casing resolution, so require distinct names up front.
+    .refine(
+      secrets =>
+        new Set(secrets.map(s => s.secretName.trim().toLowerCase())).size ===
+        secrets.length,
+      'Each secret may only appear once per batch',
+    ),
 });
 
 // Compose-screen preview: which manifests would change for a secret + a set of keys.

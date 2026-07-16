@@ -680,6 +680,55 @@ export class ZookeeperConfigService {
     return set;
   }
 
+  private formatValueDifference(drafted: string, current: string): string {
+    try {
+      const dObj = JSON.parse(drafted);
+      const cObj = JSON.parse(current);
+
+      if (
+        typeof dObj === 'object' &&
+        dObj !== null &&
+        typeof cObj === 'object' &&
+        cObj !== null
+      ) {
+        const diffs: string[] = [];
+        const allKeys = new Set([...Object.keys(dObj), ...Object.keys(cObj)]);
+        const formatVal = (val: unknown) => {
+          const str = typeof val === 'object' && val !== null ? JSON.stringify(val) : String(val);
+          return str.length > 80 ? str.slice(0, 80) + '...' : str;
+        };
+
+        for (const key of allKeys) {
+          const dVal = dObj[key];
+          const cVal = cObj[key];
+
+          if (!(key in dObj)) {
+            diffs.push(`added field '${key}' (value: ${formatVal(cVal)})`);
+          } else if (!(key in cObj)) {
+            diffs.push(`deleted field '${key}' (expected: ${formatVal(dVal)})`);
+          } else if (JSON.stringify(dVal) !== JSON.stringify(cVal)) {
+            diffs.push(
+              `field '${key}' changed from ${formatVal(dVal)} to ${formatVal(cVal)}`,
+            );
+          }
+        }
+
+        if (diffs.length > 0) {
+          return `value changed since draft (${diffs.join(', ')})`;
+        }
+      }
+    } catch {
+      // If parsing fails, fall back to simple string comparison
+    }
+
+    const limit = 60;
+    const truncDrafted =
+      drafted.length > limit ? drafted.slice(0, limit) + '...' : drafted;
+    const truncCurrent =
+      current.length > limit ? current.slice(0, limit) + '...' : current;
+    return `value changed since draft (expected "${truncDrafted || '(empty)'}", found "${truncCurrent || '(empty)'}")`;
+  }
+
   /** Apply one approved change to ZooKeeper. Throws on failure (caller records per-change). */
   private async applyOne(c: ZkChange, backing: Set<string>): Promise<void> {
     switch (c.action) {
@@ -697,9 +746,7 @@ export class ZookeeperConfigService {
         const current = (await zookeeperService.getData(c.path)) ?? '';
         const drafted = c.oldValue ?? '';
         if (current !== drafted) {
-          throw new Error(
-            `value changed since draft (expected "${drafted}", found "${current}")`,
-          );
+          throw new Error(this.formatValueDifference(drafted, current));
         }
         await zookeeperService.setData(c.path, c.newValue ?? '');
         break;

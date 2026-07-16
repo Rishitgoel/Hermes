@@ -9,6 +9,7 @@ import {
   getSecretDrift,
   ignoreDriftKey,
   listSecretsInstances,
+  mergeSecretDrift,
   resolveSecretDrift,
   unignoreDriftKey,
   type DriftFailure,
@@ -111,22 +112,42 @@ const DriftCard: React.FC<{
   drift: SecretDrift;
   resolved?: DriftResolveResult;
   onSolve: () => void;
+  onMerge: () => void;
   onIgnoreKey: (key: string) => void;
   onUnignoreKey: (key: string) => void;
   solving: boolean;
+  merging: boolean;
   /** The single missingInAws key currently being ignored/un-ignored for this secret, if any. */
   mutatingKey: string | null;
 }> = ({
   drift,
   resolved,
   onSolve,
+  onMerge,
   onIgnoreKey,
   onUnignoreKey,
   solving,
+  merging,
   mutatingKey,
 }) => {
+  // `resolved` holds this secret's most recent action result — Solve or Merge — so the card walks
+  // OPEN → MERGED / FAILED as the admin works through it.
   const merged = resolved?.state === "MERGED";
-  const open = resolved?.state === "OPEN";
+  const mergeFailed = resolved?.state === "FAILED";
+  // SKIPPED (nothing left to register) and CLOSED (keys already on base, or no manifest could be
+  // edited) both mean the PR this card knew about is gone. Any `openPr` from the scan is stale in
+  // that case, so fall back to Solve — re-opening a PR is the real next action, not merging.
+  const prGone = resolved?.state === "SKIPPED" || resolved?.state === "CLOSED";
+  const prNumber = resolved?.prNumber ?? drift.openPr?.number ?? null;
+  const prUrl = resolved?.prUrl ?? drift.openPr?.url ?? null;
+  // Merging is offered whenever a PR is waiting — one we just opened, one a previous session left
+  // behind, or one whose merge failed and can be retried. Drift never merges itself, whatever the
+  // auto-merge setting says (see secret-drift.service.ts resolveDrift): a drift PR is raised by a
+  // scan, not proposed by a person, so it always waits here for someone to read the diff first.
+  const canMerge =
+    !merged &&
+    !prGone &&
+    (resolved?.state === "OPEN" || mergeFailed || !!drift.openPr);
   return (
     <div className="table-container" style={{ padding: 16 }}>
       <div
@@ -211,12 +232,35 @@ const DriftCard: React.FC<{
               >
                 <Icons.CheckCircle2 size={12} /> Merged
               </span>
+            ) : canMerge ? (
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                style={{ gap: 6 }}
+                disabled={merging}
+                onClick={onMerge}
+                title={
+                  mergeFailed
+                    ? "Retry merging the reconciliation PR"
+                    : "Merge the reconciliation PR — review it on GitHub first"
+                }
+              >
+                {merging ? (
+                  <Icons.Loader
+                    size={14}
+                    style={{ animation: "spin 1s linear infinite" }}
+                  />
+                ) : (
+                  <Icons.GitMerge size={14} />
+                )}
+                {mergeFailed ? "Retry merge" : "Merge PR"}
+              </button>
             ) : (
               <button
                 type="button"
                 className="btn btn-primary btn-sm"
                 style={{ gap: 6 }}
-                disabled={solving || open}
+                disabled={solving}
                 onClick={onSolve}
                 title="Open a draft infra-deployment PR registering the missing keys"
               >
@@ -228,7 +272,7 @@ const DriftCard: React.FC<{
                 ) : (
                   <Icons.GitPullRequestArrow size={14} />
                 )}
-                {open ? "PR opened" : "Solve drift"}
+                Solve drift
               </button>
             )}
           </div>
@@ -492,9 +536,46 @@ const DriftCard: React.FC<{
           </div>
         )}
 
-        {(open || merged) && resolved?.prUrl && (
+        {/* Hermes could not merge it. The PR is intact and still mergeable by hand, so quote
+            GitHub's reason and point at the PR rather than dead-ending on a toast the admin has
+            already dismissed. The button above stays live as a retry for transient causes. */}
+        {mergeFailed && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "flex-start",
+              gap: 8,
+              fontSize: 12,
+              padding: "8px 10px",
+              borderRadius: 6,
+              background: "rgba(220, 38, 38, 0.05)",
+              border: "1px solid rgba(220, 38, 38, 0.22)",
+            }}
+          >
+            <Icons.GitPullRequestClosed
+              size={14}
+              style={{ color: "#dc2626", flexShrink: 0, marginTop: 2 }}
+            />
+            <div style={{ minWidth: 0 }}>
+              <strong style={{ color: "#b91c1c" }}>
+                Hermes couldn't merge this PR
+              </strong>
+              {resolved?.note ? (
+                <div style={{ marginTop: 3, color: "var(--text-muted)" }}>
+                  {resolved.note}
+                </div>
+              ) : null}
+              <div style={{ marginTop: 3, color: "var(--text-muted)" }}>
+                The PR itself is fine — merge it on GitHub, or retry once the
+                blocker is cleared.
+              </div>
+            </div>
+          </div>
+        )}
+
+        {prUrl && (
           <a
-            href={resolved.prUrl}
+            href={prUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="btn btn-outline btn-sm"
@@ -507,8 +588,12 @@ const DriftCard: React.FC<{
             }}
           >
             <Icons.ExternalLink size={12} />
-            {merged ? "View merged PR" : "Review draft PR"}
-            {resolved.prNumber ? ` #${resolved.prNumber}` : ""}
+            {merged
+              ? "View merged PR"
+              : mergeFailed
+                ? "Merge on GitHub"
+                : "Review PR"}
+            {prNumber ? ` #${prNumber}` : ""}
           </a>
         )}
       </div>
@@ -549,7 +634,7 @@ export const SecretDriftPanel: React.FC = () => {
       setResolvedBySecret((prev) => ({ ...prev, [result.secretName]: result }));
       if (result.state === "OPEN") {
         toast.success(
-          `Draft PR opened${result.prNumber ? ` (#${result.prNumber})` : ""} — review and merge it on GitHub.`,
+          `Draft PR opened${result.prNumber ? ` (#${result.prNumber})` : ""} — review it on GitHub, then merge it from here or there.`,
         );
       } else if (result.state === "SKIPPED") {
         toast.info(result.note || "Nothing to reconcile.");
@@ -561,6 +646,30 @@ export const SecretDriftPanel: React.FC = () => {
     },
     onError: (err: any) =>
       toast.error(err?.message || "Failed to reconcile drift."),
+  });
+
+  const mergeMutation = useMutation({
+    mutationFn: (secretName: string) => mergeSecretDrift(secretName, platform),
+    onSuccess: (result) => {
+      setResolvedBySecret((prev) => ({ ...prev, [result.secretName]: result }));
+      if (result.state === "MERGED") {
+        toast.success(
+          `PR${result.prNumber ? ` #${result.prNumber}` : ""} merged — the missing keys are now registered in the manifests.`,
+        );
+      } else if (result.state === "FAILED") {
+        // GitHub refused (an unmergeable token, branch protection, a pending check). This
+        // resolves rather than throws, so surface the reason — the card keeps the PR link and
+        // the retry button alongside it.
+        toast.error(result.note || "GitHub refused the merge — see the PR.");
+      } else if (result.state === "SKIPPED") {
+        toast.info(result.note || "Nothing left to merge.");
+      } else {
+        toast.info(
+          `Merge ${result.state.toLowerCase()}.${result.note ? ` ${result.note}` : ""}`,
+        );
+      }
+    },
+    onError: (err: any) => toast.error(err?.message || "Failed to merge PR."),
   });
 
   // Ignoring/un-ignoring is a lightweight audit-only toggle (see backend) — patch the cached
@@ -770,6 +879,11 @@ export const SecretDriftPanel: React.FC = () => {
                 solveMutation.variables === d.secretName
               }
               onSolve={() => solveMutation.mutate(d.secretName)}
+              onMerge={() => mergeMutation.mutate(d.secretName)}
+              merging={
+                mergeMutation.isPending &&
+                mergeMutation.variables === d.secretName
+              }
               onIgnoreKey={(key) =>
                 ignoreMutation.mutate({ secretName: d.secretName, key })
               }
