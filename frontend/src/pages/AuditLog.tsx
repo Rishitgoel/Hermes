@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import apiClient from '../services/apiClient';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import SectionHeader from '../components/common/SectionHeader';
@@ -24,7 +24,6 @@ interface AuditResponse {
 }
 
 export const AuditLog: React.FC = () => {
-  const queryClient = useQueryClient();
   const toast = useToast();
 
   const [page, setPage] = useState(1);
@@ -94,17 +93,6 @@ export const AuditLog: React.FC = () => {
   // Background refetch (filter/page change) while stale data is still shown via placeholderData.
   const isRefetching = auditQuery.isFetching && !isLoading;
 
-  const syncMutation = useMutation({
-    mutationFn: () => apiClient.post('/api/admin/sync').then((r) => r.data),
-    onSuccess: (data: { usersSynced: number; groupsSynced: number }) => {
-      toast.success(`Sync success! Imported ${data.usersSynced} users and ${data.groupsSynced} groups.`);
-      queryClient.invalidateQueries({ queryKey: ['audit'] });
-    },
-    onError: (err: any) => {
-      toast.error(`Sync failed: ${err.message}`);
-    },
-  });
-
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setPage(1);
@@ -131,8 +119,6 @@ export const AuditLog: React.FC = () => {
   const formatParticipant = (name: string | null) =>
     name ? name.replace(/_/g, ' ') : 'Pending review';
 
-  const isSyncing = syncMutation.isPending;
-
   return (
     <div>
       {/* Page Header */}
@@ -158,20 +144,6 @@ export const AuditLog: React.FC = () => {
                 }}
               />
               {auditQuery.isFetching ? 'Refetching...' : 'Refresh Logs'}
-            </button>
-            <button
-              className="btn btn-primary btn-sm"
-              onClick={() => syncMutation.mutate()}
-              disabled={isSyncing}
-              style={{ gap: '8px' }}
-            >
-              <RefreshCw
-                size={16}
-                style={{
-                  animation: isSyncing ? 'spin 1.5s linear infinite' : 'none',
-                }}
-              />
-              {isSyncing ? 'Syncing...' : 'Sync Platform Cache'}
             </button>
           </div>
         }
