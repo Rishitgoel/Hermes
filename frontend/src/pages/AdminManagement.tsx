@@ -9,13 +9,17 @@ import SectionHeader from '../components/common/SectionHeader';
 import PlatformTabs from '../components/common/PlatformTabs';
 import { queryKeys } from '../lib/queryKeys';
 import { fetchPlatforms } from '../services/api/platforms';
+import { isSecretsPlatform } from '../lib/platforms';
 import { prettyPlatform, cleanName, groupIconName } from '../components/admin/adminUtils';
+
 import GroupDrawer from '../components/admin/GroupDrawer';
 import GroupFormModal from '../components/admin/GroupFormModal';
 import ConfirmModal from '../components/admin/ConfirmModal';
 import AssignAdminModal, { type AssignTarget } from '../components/admin/AssignAdminModal';
 import UserAccessModal from '../components/admin/UserAccessModal';
 import RedashResyncModal from '../components/admin/RedashResyncModal';
+import MergeSettingsModal from '../components/admin/MergeSettingsModal';
+
 import {
   listManageablePlatforms,
   listManageableGroups,
@@ -41,6 +45,8 @@ export const AdminManagement: React.FC = () => {
   const [showCreate, setShowCreate] = useState(false);
   const [showUserAccess, setShowUserAccess] = useState(false);
   const [showResync, setShowResync] = useState(false);
+  const [showMergeSettings, setShowMergeSettings] = useState(false);
+
   const [removePA, setRemovePA] = useState<PlatformAdminRow | null>(null);
   const [search, setSearch] = useState('');
   const [groupView, setGroupView] = useState<'active' | 'archived'>('active');
@@ -153,6 +159,8 @@ export const AdminManagement: React.FC = () => {
   }
 
   const platforms = platformsQuery.data ?? [];
+  const isSecretsFamily = activePlatform ? isSecretsPlatform(activePlatform) : false;
+
 
   if (platforms.length === 0) {
     return (
@@ -253,6 +261,11 @@ export const AdminManagement: React.FC = () => {
               <button type="button" className="btn btn-outline btn-sm" onClick={() => setShowUserAccess(true)}>
                 <Icons.UserMinus size={15} /> Revoke access
               </button>
+              {isSecretsFamily && (
+                <button type="button" className="btn btn-outline btn-sm" onClick={() => setShowMergeSettings(true)}>
+                  <Icons.Settings size={15} /> PR Merge Settings
+                </button>
+              )}
               {superAdmin && (activePlatform === 'redash' || activePlatform === 'redash-qa') && (
                 <button type="button" className="btn btn-outline btn-sm" onClick={() => setShowResync(true)}>
                   <Icons.RefreshCw size={15} /> Sync with {activePlatform === 'redash-qa' ? 'Redash QA' : 'Redash'}
@@ -467,8 +480,12 @@ export const AdminManagement: React.FC = () => {
       {/* Cross-platform user access: check/revoke everything a user holds */}
       {showUserAccess && <UserAccessModal onClose={() => setShowUserAccess(false)} />}
 
+      {/* PR Merge Settings toggle for Secrets platform */}
+      {showMergeSettings && <MergeSettingsModal onClose={() => setShowMergeSettings(false)} />}
+
       {/* Redash full resync: two-way reconciliation against live Redash membership */}
       {showResync && activePlatform && (
+
         <RedashResyncModal platform={activePlatform} onClose={() => setShowResync(false)} />
       )}
 

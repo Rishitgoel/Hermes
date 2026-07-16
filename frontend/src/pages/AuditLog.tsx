@@ -139,15 +139,41 @@ export const AuditLog: React.FC = () => {
       <SectionHeader
         title="Platform Audit Log"
         actions={
-          <button
-            className="btn btn-primary btn-sm"
-            onClick={() => syncMutation.mutate()}
-            disabled={isSyncing}
-            style={{ gap: '8px' }}
-          >
-            <RefreshCw size={16} style={{ animation: isSyncing ? 'spin 1.5s linear infinite' : 'none' }} />
-            {isSyncing ? 'Syncing...' : 'Sync Platform Cache'}
-          </button>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={() => {
+                auditQuery.refetch();
+                toast.success('Audit logs refreshed');
+              }}
+              disabled={auditQuery.isFetching}
+              style={{ gap: '8px' }}
+            >
+              <RefreshCw
+                size={16}
+                style={{
+                  animation: auditQuery.isFetching
+                    ? 'spin 1.5s linear infinite'
+                    : 'none',
+                }}
+              />
+              {auditQuery.isFetching ? 'Refetching...' : 'Refresh Logs'}
+            </button>
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={() => syncMutation.mutate()}
+              disabled={isSyncing}
+              style={{ gap: '8px' }}
+            >
+              <RefreshCw
+                size={16}
+                style={{
+                  animation: isSyncing ? 'spin 1.5s linear infinite' : 'none',
+                }}
+              />
+              {isSyncing ? 'Syncing...' : 'Sync Platform Cache'}
+            </button>
+          </div>
         }
       />
 

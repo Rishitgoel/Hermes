@@ -3,6 +3,7 @@ import { createHttpClient } from '../utils/http-client';
 import config from '../config/config';
 import logger from '../utils/logger';
 import { BaseError, ExternalServiceError } from '../utils/errors';
+import prisma from '../config/prisma';
 
 /**
  * infra-repo-sync.service — mirrors approved Secret Ingestion key ADDITIONS into the
@@ -2286,7 +2287,19 @@ export function isInfraRepoEnabled(platform: string): boolean {
  * moment it's ready. When false (default), the PR is opened and left for a human to review and
  * merge manually on GitHub. Controlled by INFRA_REPO_AUTO_MERGE / SECRETS_SANDBOX_INFRA_REPO_AUTO_MERGE.
  */
-export function isInfraAutoMergeEnabled(platform: string): boolean {
+export async function isInfraAutoMergeEnabled(platform: string): Promise<boolean> {
+  const key = `secrets:auto_merge:${(platform || '').toLowerCase()}`;
+  try {
+    const setting = await prisma.systemSetting.findUnique({
+      where: { key },
+    });
+    if (setting) {
+      return setting.value === 'true';
+    }
+  } catch (err: any) {
+    logger.warn({ key, err: err.message }, 'Failed to read auto-merge setting from database, falling back to config');
+  }
   const instance = config.secretsInstances.find((i) => i.key === (platform || '').toLowerCase());
   return !!instance?.infraRepo?.autoMergeEnabled;
 }
+

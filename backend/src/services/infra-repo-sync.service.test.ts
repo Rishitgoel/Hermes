@@ -728,4 +728,61 @@ describe('live-mode GitHub calls (axios mocked)', () => {
     expect(result.state).toBe('FAILED');
     expect(result.note).toMatch(/Draft pull requests cannot be merged/);
   });
+
+  // --- readyPrForRequest (manual review path) ---
+
+  const readyHarness = (opts: { graphql: any }) => {
+    mockGet.mockImplementation((url: string) => {
+      if (url.includes('/git/ref/heads/')) return Promise.resolve({ data: { object: { sha: 'base-commit-sha' } } });
+      if (url.includes('/git/commits/')) return Promise.resolve({ data: { tree: { sha: 'base-tree-sha' } } });
+      if (url.includes('/contents/')) {
+        return Promise.resolve({ data: { sha: 'base-sha', content: Buffer.from(VALUES, 'utf8').toString('base64') } });
+      }
+      return Promise.reject(new Error(`unexpected GET ${url}`));
+    });
+    mockPost.mockImplementation((url: string) => {
+      if (url.includes('/graphql')) return Promise.resolve({ data: opts.graphql });
+      if (url.includes('/git/blobs')) return Promise.resolve({ data: { sha: 'blob-sha' } });
+      if (url.includes('/git/trees')) return Promise.resolve({ data: { sha: 'tree-sha' } });
+      if (url.includes('/git/commits')) return Promise.resolve({ data: { sha: 'new-commit-sha' } });
+      return Promise.resolve({ data: {} }); // comment
+    });
+    mockPatch.mockResolvedValue({ data: {} }); // reopen + reset ref
+
+    return new InfraRepoSyncService().readyPrForRequest({
+      request: {
+        id: 'req-1',
+        secretName: 'Investment-Middleware-Secrets-Prod',
+        infraPrNumber: 42,
+        infraPrNodeId: 'PR_node',
+        infraBranch: 'hermes/secret-keys/investment-middleware-secrets-prod-req-1',
+      },
+      approvedKeys: ['NEW_KEY'],
+      targets: [{ path: 'svc/prod/values-prod.yaml', manifestRef: 'Investment-Middleware-Secrets-Prod', format: 'helm-values' }],
+    });
+  };
+
+  it('readyPrForRequest recomputes the branch, comments on the PR, reopens the PR, and flips it to ready', async () => {
+    const result = await readyHarness({ graphql: {} });
+
+    expect(result.state).toBe('OPEN');
+    expect(result.keysAdded).toEqual(['NEW_KEY']);
+    expect(mockPatch).toHaveBeenCalledWith(expect.stringContaining('/pulls/42'), { state: 'open' });
+    expect(mockPost).toHaveBeenCalledWith(expect.stringContaining('/issues/42/comments'), expect.objectContaining({
+      body: expect.stringContaining('Hermes: request reviewed')
+    }));
+    const gqlCall = mockPost.mock.calls.find(([url]) => url.includes('/graphql'));
+    expect(gqlCall).toBeDefined();
+    expect(gqlCall[1].variables.id).toBe('PR_node');
+  });
+
+  it('readyPrForRequest returns FAILED when markReady fails with GraphQL errors', async () => {
+    const result = await readyHarness({
+      graphql: { errors: [{ message: 'GraphQL write blocked' }] },
+    });
+
+    expect(result.state).toBe('FAILED');
+    expect(result.note).toMatch(/GraphQL write blocked/);
+  });
 });
+

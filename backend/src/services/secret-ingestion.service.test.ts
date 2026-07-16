@@ -3,6 +3,8 @@ process.env.SECRETS_INGESTION_SIMULATION = 'true';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import prisma from '../config/prisma';
 import { secretIngestionService } from './secret-ingestion.service';
+import { isInfraAutoMergeEnabled } from './infra-repo-sync.service';
+
 import { secretsManagerService } from './secrets-manager.service';
 import { secretsProvisioner } from './secrets.provisioner';
 import { AuthorizationError } from '../utils/errors';
@@ -297,4 +299,134 @@ describe('SecretIngestionService (simulation)', () => {
     const updated = await prisma.secretIngestionRequest.findUnique({ where: { id: request.id } });
     expect(updated?.applyError).toContain('recovered by sweep');
   });
+
+  it('encrypts secret values in DB but returns decrypted values via service', async () => {
+    const { group } = await setupGrant();
+    const request = await secretIngestionService.createIngestionRequest({
+      requester: { id: USER.id, username: USER.username, email: USER.email, roles: [] },
+      secretName: 'payment/gateway',
+      entries: [{ key: 'PASSWORD', value: 'super-secret-password-123' }],
+      justification: 'Testing encryption',
+    });
+
+    // 1. Direct DB lookup using Prisma Client bypasses service decryption and should show encrypted ciphertext
+    const rawDb = await prisma.secretIngestionRequest.findUnique({
+      where: { id: request.id },
+    });
+    const dbEntries = rawDb?.entries as any[];
+    expect(dbEntries[0].value).not.toBe('super-secret-password-123');
+    expect(dbEntries[0].value).toMatch(/^enc:aes256gcm:[0-9a-fA-F]+/);
+
+    // 2. Fetching via service getById should return the decrypted plaintext
+    const retrieved = await secretIngestionService.getById(request.id);
+    const retrievedEntries = retrieved?.entries as any[];
+    expect(retrievedEntries[0].value).toBe('super-secret-password-123');
+
+    // 3. Fetching via listIngestionRequests should also return decrypted plaintext
+    const list = await secretIngestionService.listIngestionRequests(
+      { id: USER.id, username: USER.username, email: USER.email, roles: [] } as any,
+      'mine'
+    );
+    const listRow = list.find(r => r.id === request.id);
+    const listEntries = listRow?.entries as any[];
+    expect(listEntries[0].value).toBe('super-secret-password-123');
+    
+    // 4. Test backward compatibility: insert a plaintext value directly in DB
+    const legacyRequest = await prisma.secretIngestionRequest.create({
+      data: {
+        requesterId: USER.id,
+        requesterName: USER.username,
+        requesterEmail: USER.email,
+        groupId: group.id,
+        secretName: 'payment/gateway',
+        entries: [{ key: 'LEGACY_KEY', value: 'legacy-plaintext-val' }] as any,
+        status: 'PENDING',
+      },
+    });
+    const retrievedLegacy = await secretIngestionService.getById(legacyRequest.id);
+    const retrievedLegacyEntries = retrievedLegacy?.entries as any[];
+    expect(retrievedLegacyEntries[0].value).toBe('legacy-plaintext-val');
+  });
+
+  it('retryInfraMerge immediately resolves to MERGED if the PR is already merged on GitHub', async () => {
+    const { group } = await setupGrant();
+    const request = await prisma.secretIngestionRequest.create({
+      data: {
+        requesterId: USER.id,
+        requesterName: USER.username,
+        requesterEmail: USER.email,
+        groupId: group.id,
+        secretName: 'payment/gateway',
+        entries: [{ key: 'KEY_1', value: 'encrypted-val' }] as any,
+        status: 'APPLIED',
+        infraSyncState: 'FAILED',
+        infraPrNumber: 123,
+        infraBranch: 'hermes/secret-keys/payment-gateway-req-123',
+      },
+    });
+
+    // In simulation mode, getPrState returns 'MERGED'
+    const result = await secretIngestionService.retryInfraMerge(request.id);
+    expect(result).toBeDefined();
+    expect(result?.infraSyncState).toBe('MERGED');
+    expect(result?.infraSyncNote).toContain('already merged');
+
+    const updatedDb = await prisma.secretIngestionRequest.findUnique({
+      where: { id: request.id },
+    });
+    expect(updatedDb?.infraSyncState).toBe('MERGED');
+  });
+
+  it('syncOpenDeploymentPRs sweeps and updates FAILED requests if they are merged on GitHub', async () => {
+    const { group } = await setupGrant();
+    const request = await prisma.secretIngestionRequest.create({
+      data: {
+        requesterId: USER.id,
+        requesterName: USER.username,
+        requesterEmail: USER.email,
+        groupId: group.id,
+        secretName: 'payment/gateway',
+        entries: [{ key: 'KEY_2', value: 'val' }] as any,
+        status: 'APPLIED',
+        infraSyncState: 'FAILED',
+        infraPrNumber: 456,
+      },
+    });
+
+    const count = await secretIngestionService.syncOpenDeploymentPRs();
+    expect(count).toBe(1);
+
+    const updatedDb = await prisma.secretIngestionRequest.findUnique({
+      where: { id: request.id },
+    });
+    expect(updatedDb?.infraSyncState).toBe('MERGED');
+  });
+
+  it('isInfraAutoMergeEnabled respects database overrides and env defaults', async () => {
+    // Clean up any stray settings first
+    await prisma.systemSetting.deleteMany({
+      where: { key: { in: ['secrets:auto_merge:secrets', 'secrets:auto_merge:secrets-sandbox'] } }
+    });
+
+    // Add overrides to DB
+    await prisma.systemSetting.create({
+      data: { key: 'secrets:auto_merge:secrets', value: 'false' }
+    });
+    await prisma.systemSetting.create({
+      data: { key: 'secrets:auto_merge:secrets-sandbox', value: 'true' }
+    });
+
+    const secretsOverride = await isInfraAutoMergeEnabled('secrets');
+    const sandboxOverride = await isInfraAutoMergeEnabled('secrets-sandbox');
+
+    expect(secretsOverride).toBe(false);
+    expect(sandboxOverride).toBe(true);
+
+    // Clean up
+    await prisma.systemSetting.deleteMany({
+      where: { key: { in: ['secrets:auto_merge:secrets', 'secrets:auto_merge:secrets-sandbox'] } }
+    });
+  });
 });
+
+

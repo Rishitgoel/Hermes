@@ -501,7 +501,7 @@ export function registerEventListeners(): void {
           requesterEmail: row.requesterEmail ?? undefined,
           reviewerName: row.reviewerName ?? undefined,
         };
-        const synced = isInfraAutoMergeEnabled(instance)
+        const synced = (await isInfraAutoMergeEnabled(instance))
           ? await infra.mergePrForRequest({
               request: req,
               approvedKeys,

@@ -497,3 +497,23 @@ export async function getAwsSecrets(platform?: string): Promise<string[]> {
   return res.data;
 }
 
+export interface SystemSettingRecord {
+  platformKey: string;
+  platformLabel: string;
+  autoMergeEnabled: boolean;
+}
+
+export async function getSystemSettings(): Promise<SystemSettingRecord[]> {
+  const res = await apiClient.get('/api/admin/settings');
+  return res.data;
+}
+
+export async function updateSystemSetting(
+  platformKey: string,
+  autoMergeEnabled: boolean,
+): Promise<SystemSettingRecord> {
+  const res = await apiClient.post('/api/admin/settings', { platformKey, autoMergeEnabled });
+  return res.data;
+}
+
+

@@ -98,6 +98,11 @@ router.post('/user-access/revoke', authenticateToken, adminMgmt('revokeUserAcces
 router.get('/user-platform-accounts', authenticateToken, adminMgmt('listUserPlatformAccounts'));
 router.post('/user-access/disable-accounts', authenticateToken, adminMgmt('disableUserAccounts'));
 
+// System / Platform Settings
+router.get('/settings', authenticateToken, adminMgmt('getSettings'));
+router.post('/settings', authenticateToken, adminMgmt('updateSettings'));
+
+
 // Platform admins (super admin only — enforced in controller)
 router.get(
   '/platform-admins',

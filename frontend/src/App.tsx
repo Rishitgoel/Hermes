@@ -28,7 +28,7 @@ export const App: React.FC = () => {
           <NotificationProvider>
             <ToastProvider>
             <Routes>
-              <Route path="/" element={<MainLayout />}>
+              <Route path="/hermes" element={<MainLayout />}>
                 <Route index element={<Dashboard />} />
 
                 <Route path="groups" element={<Groups />} />
@@ -93,7 +93,8 @@ export const App: React.FC = () => {
                 />
               </Route>
 
-              <Route path="*" element={<Navigate to="/" replace />} />
+              <Route path="/" element={<Navigate to="/hermes" replace />} />
+              <Route path="*" element={<Navigate to="/hermes" replace />} />
             </Routes>
             </ToastProvider>
           </NotificationProvider>

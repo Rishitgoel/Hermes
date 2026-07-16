@@ -483,7 +483,7 @@ export class SecretDriftService {
     // Auto-merge ON: immediately merge the just-opened PR so "Solve drift" is a one-click
     // full resolution. When off (default), the PR stays open for a human to review and merge
     // manually on GitHub (the existing two-step flow).
-    if (result.state === 'OPEN' && isInfraAutoMergeEnabled(key)) {
+    if (result.state === 'OPEN' && (await isInfraAutoMergeEnabled(key))) {
       const mergeResult = await getInfraRepoSyncService(key).mergeDriftPr(
         secretName,
         drift.missingInManifest,

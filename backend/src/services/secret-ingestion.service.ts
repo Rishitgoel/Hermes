@@ -13,6 +13,7 @@ import {
 import eventBus from './event-bus';
 import config from '../config/config';
 import logger from '../utils/logger';
+import { encrypt, decrypt } from '../utils/crypto';
 import { AuthenticatedUser } from '../middleware/auth.middleware';
 import { getManageableGroupIds } from '../utils/authz';
 import {
@@ -113,6 +114,28 @@ interface ScopedPattern {
 }
 
 export class SecretIngestionService {
+  private decryptRow<T extends { entries: unknown }>(row: T): T {
+    if (!row) return row;
+    const entries = ((row.entries as unknown as IngestionEntry[]) ?? []).map(
+      e => ({
+        ...e,
+        value: decrypt(e.value) ?? null,
+      })
+    );
+    return { ...row, entries: entries as any };
+  }
+
+  private decryptRows<T extends { entries: unknown }>(rows: T[]): T[] {
+    return rows.map(r => this.decryptRow(r));
+  }
+
+  private encryptEntries(entries: IngestionEntry[]): IngestionEntry[] {
+    return entries.map(e => ({
+      ...e,
+      value: encrypt(e.value) ?? null,
+    }));
+  }
+
   /**
    * Resolves the raw scope patterns (exact names and/or wildcards) from a user's active
    * secrets-platform grants. No AWS call — wildcards are expanded lazily by the callers below.
@@ -432,7 +455,7 @@ export class SecretIngestionService {
         status: 'PENDING',
         entries: entries.map(e => ({
           key: e.key.trim(),
-          value: e.value,
+          value: encrypt(e.value) ?? null,
           decision: null,
           applied: false,
         })) as any,
@@ -472,7 +495,7 @@ export class SecretIngestionService {
       timestamp: new Date(),
     });
 
-    return row;
+    return this.decryptRow(row);
   }
 
   /**
@@ -522,12 +545,13 @@ export class SecretIngestionService {
       } else {
         platforms = config.secretsInstances.map(i => i.key);
       }
-      return prisma.secretIngestionRequest.findMany({
+      const rows = await prisma.secretIngestionRequest.findMany({
         where: { requesterId: user.id, platform: { in: platforms } },
         orderBy: { createdAt: 'desc' },
         // Cap the personal history — long-lived users accumulate rows forever.
         take: 200,
       });
+      return this.decryptRows(rows);
     }
     // Review queue: only currently-enabled instances are actionable, so this intentionally
     // stays scoped to secretsFamilyPlatforms() (enabled-only) — reviewing a disabled instance's
@@ -584,7 +608,8 @@ export class SecretIngestionService {
       },
       orderBy: { createdAt: 'asc' },
     });
-    return this.attachPreviousValues(rows);
+    const decrypted = this.decryptRows(rows);
+    return this.attachPreviousValues(decrypted);
   }
 
   /**
@@ -638,7 +663,8 @@ export class SecretIngestionService {
   }
 
   async getById(id: string) {
-    return prisma.secretIngestionRequest.findUnique({ where: { id } });
+    const row = await prisma.secretIngestionRequest.findUnique({ where: { id } });
+    return row ? this.decryptRow(row) : null;
   }
 
   /**
@@ -680,15 +706,16 @@ export class SecretIngestionService {
     if (!row) {
       throw new NotFoundError('Secret Ingestion Request not found');
     }
-    if (row.status !== 'PENDING' && row.status !== 'APPLY_FAILED') {
+    const decryptedRow = this.decryptRow(row);
+    if (decryptedRow.status !== 'PENDING' && decryptedRow.status !== 'APPLY_FAILED') {
       throw new ValidationError(
-        `Request is not pending or retryable (status: ${row.status}).`,
+        `Request is not pending or retryable (status: ${decryptedRow.status}).`,
       );
     }
 
     // Resolve the AWS account this request targets from the row itself, so the read/apply
     // below hit the correct instance (prod vs sandbox) regardless of the caller.
-    const svc = getSecretsManagerService(row.platform);
+    const svc = getSecretsManagerService(decryptedRow.platform);
 
     const claim = await prisma.secretIngestionRequest.updateMany({
       where: { id: requestId, status: { in: ['PENDING', 'APPLY_FAILED'] } },
@@ -707,7 +734,7 @@ export class SecretIngestionService {
     }
 
     const decisionByKey = new Map(decisions.map(d => [d.key, d.decision]));
-    const entries = ((row.entries as unknown as IngestionEntry[]) ?? []).map(
+    const entries = ((decryptedRow.entries as unknown as IngestionEntry[]) ?? []).map(
       e => ({
         ...e,
       }),
@@ -720,7 +747,7 @@ export class SecretIngestionService {
     // computed live for display only — so this can't be recomputed later from the DB row.
     let currentMap: Record<string, string> | null = null;
     try {
-      currentMap = await svc.getSecretMap(row.secretName);
+      currentMap = await svc.getSecretMap(decryptedRow.secretName);
     } catch {
       currentMap = null;
     }
@@ -775,7 +802,7 @@ export class SecretIngestionService {
           }
         }
         logger.error(
-          { requestId, secretName: row.secretName, error: err.message },
+          { requestId, secretName: decryptedRow.secretName, error: err.message },
           'Failed to apply secret ingestion request',
         );
       }
@@ -797,11 +824,11 @@ export class SecretIngestionService {
     // would strand the request with no way to recover the entered values.
     const finalEntries =
       status === 'APPLY_FAILED'
-        ? entries
+        ? this.encryptEntries(entries)
         : entries.map(e => ({ ...e, value: null }));
 
     const updated = await prisma.secretIngestionRequest.update({
-      where: { id: row.id },
+      where: { id: decryptedRow.id },
       data: {
         status,
         entries: finalEntries as any,
@@ -827,11 +854,11 @@ export class SecretIngestionService {
         action: `SECRET_INGESTION_${status}`,
         performerId: reviewer.id,
         performerName: reviewer.username,
-        groupId: row.groupId,
+        groupId: decryptedRow.groupId,
         details: {
-          requestId: row.id,
-          secretName: row.secretName,
-          requesterName: row.requesterName,
+          requestId: decryptedRow.id,
+          secretName: decryptedRow.secretName,
+          requesterName: decryptedRow.requesterName,
           reviewerName: reviewer.username,
           approvedCount,
           rejectedCount,
@@ -847,9 +874,9 @@ export class SecretIngestionService {
     eventBus.emitAccessEvent({
       type: 'secret-ingestion.reviewed' as any,
       payload: {
-        requestId: row.id,
-        platform: row.platform,
-        secretName: row.secretName,
+        requestId: decryptedRow.id,
+        platform: decryptedRow.platform,
+        secretName: decryptedRow.secretName,
         status,
         reviewerName: reviewer.username,
         approvedCount,
@@ -860,7 +887,7 @@ export class SecretIngestionService {
       timestamp: new Date(),
     });
 
-    return updated;
+    return this.decryptRow(updated);
   }
 
   /**
@@ -878,18 +905,19 @@ export class SecretIngestionService {
     if (!row) {
       throw new NotFoundError('Secret Ingestion Request not found');
     }
-    if (row.infraSyncState !== 'FAILED') {
+    const decryptedRow = this.decryptRow(row);
+    if (decryptedRow.infraSyncState !== 'FAILED') {
       throw new ValidationError(
-        `Nothing to retry — deployment PR sync state is "${row.infraSyncState ?? 'none'}", not FAILED.`,
+        `Nothing to retry — deployment PR sync state is "${decryptedRow.infraSyncState ?? 'none'}", not FAILED.`,
       );
     }
-    if (!isInfraRepoEnabled(row.platform)) {
+    if (!isInfraRepoEnabled(decryptedRow.platform)) {
       throw new ValidationError(
-        `Deployment PR sync is not enabled for platform "${row.platform}".`,
+        `Deployment PR sync is not enabled for platform "${decryptedRow.platform}".`,
       );
     }
 
-    const entries = (row.entries as unknown as IngestionEntry[]) ?? [];
+    const entries = (decryptedRow.entries as unknown as IngestionEntry[]) ?? [];
     const approvedKeys = entries
       .filter(e => e.decision === 'APPROVED')
       .map(e => e.key)
@@ -899,13 +927,32 @@ export class SecretIngestionService {
         .filter(e => e.decision === 'REJECTED')
         .map(e => e.key)
         .filter(Boolean),
-      requesterName: row.requesterName ?? undefined,
-      requesterEmail: row.requesterEmail ?? undefined,
-      reviewerName: row.reviewerName ?? undefined,
+      requesterName: decryptedRow.requesterName ?? undefined,
+      requesterEmail: decryptedRow.requesterEmail ?? undefined,
+      reviewerName: decryptedRow.reviewerName ?? undefined,
     };
-    const targets = (row.infraTargets as SelectedTarget[] | null) || undefined;
+    const targets = (decryptedRow.infraTargets as SelectedTarget[] | null) || undefined;
 
     const infra = getInfraRepoSyncService(row.platform);
+
+    // If a PR is already merged or closed on GitHub, resolve the sync state immediately to avoid
+    // failing during branch recomputation/reset.
+    if (row.infraPrNumber) {
+      const liveState = await infra.getPrState(row.infraPrNumber);
+      if (liveState === 'MERGED' || liveState === 'CLOSED') {
+        await prisma.secretIngestionRequest.update({
+          where: { id: requestId },
+          data: {
+            infraSyncState: liveState,
+            infraSyncNote: `Sync state resolved to ${liveState.toLowerCase()} because PR was already ${liveState.toLowerCase()} on GitHub`,
+          },
+        });
+        const res = await prisma.secretIngestionRequest.findUnique({
+          where: { id: requestId },
+        });
+        return res ? this.decryptRow(res) : null;
+      }
+    }
 
     // A FAILED sync where no PR was ever recorded means the ORIGINAL open threw (not just the
     // merge) — e.g. GitHub was unreachable when the request was approved. Re-open the PR here so
@@ -926,9 +973,10 @@ export class SecretIngestionService {
       // Nothing to merge (no consumers, keys already present, or open failed again) — the
       // persisted state above already reflects the outcome, so stop here.
       if (opened.state !== 'OPEN') {
-        return prisma.secretIngestionRequest.findUnique({
+        const res = await prisma.secretIngestionRequest.findUnique({
           where: { id: requestId },
         });
+        return res ? this.decryptRow(res) : null;
       }
       req = {
         ...row,
@@ -941,7 +989,7 @@ export class SecretIngestionService {
     // Same split as the reviewed-event listener: auto-merge ON merges, OFF recomputes the
     // branch to the approved keys and marks it ready for a human to merge. The recompute is
     // not optional on the manual path — the branch still holds every key from submit time.
-    const synced = isInfraAutoMergeEnabled(row.platform)
+    const synced = (await isInfraAutoMergeEnabled(row.platform))
       ? await infra.mergePrForRequest({
           request: req,
           approvedKeys,
@@ -955,9 +1003,10 @@ export class SecretIngestionService {
           review,
         });
     await persistInfraResult(requestId, synced);
-    return prisma.secretIngestionRequest.findUnique({
+    const res = await prisma.secretIngestionRequest.findUnique({
       where: { id: requestId },
     });
+    return res ? this.decryptRow(res) : null;
   }
 
   /**
@@ -1002,7 +1051,7 @@ export class SecretIngestionService {
       },
     });
 
-    return updated;
+    return this.decryptRow(updated);
   }
 
   /**
@@ -1036,7 +1085,7 @@ export class SecretIngestionService {
     const openRequests = await prisma.secretIngestionRequest.findMany({
       where: {
         status: { in: ['APPLIED', 'PARTIALLY_APPLIED'] },
-        infraSyncState: 'OPEN',
+        infraSyncState: { in: ['OPEN', 'FAILED'] },
         infraPrNumber: { not: null },
       },
     });

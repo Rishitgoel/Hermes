@@ -36,6 +36,12 @@ export const config = {
   nodeEnv: process.env.NODE_ENV || 'development',
   port: parseInt(process.env.PORT || '8001', 10),
 
+  database: {
+    get encryptionKey() {
+      return process.env.DB_ENCRYPTION_KEY || 'hermes-default-development-encryption-key-32bytes';
+    }
+  },
+
   get isDev() {
     return this.nodeEnv === 'development' || this.nodeEnv === 'local';
   },

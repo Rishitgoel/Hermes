@@ -39,6 +39,7 @@ import logger from '../utils/logger';
 import { getSecretsManagerService } from '../services/secrets-manager.service';
 import { assertSecretsPlatform, isSecretsFamilyPlatform } from '../services/secret-ingestion.service';
 import { RequestStatus, UserCreationStatus } from '../../generated/hermes';
+import config from '../config/config';
 
 const PLATFORM_ADMIN_MARKER = 'hermes_platform_admin';
 const GROUP_ADMIN_MARKER = 'hermes_group_admin';
@@ -2622,6 +2623,107 @@ export class AdminManagementController extends BaseController {
       this.handleError(error, 'Failed to delete level');
     }
   }
+
+  async getSettings(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      if (!this.getUserId()) {
+        return;
+      }
+      const manageable = await getManageablePlatforms(this.user!);
+      const isSuper = isSuperAdmin(this.user!);
+
+      const secretsInstances = config.secretsInstances;
+      const visibleInstances = secretsInstances.filter(
+        (inst) => isSuper || manageable.includes(inst.key),
+      );
+
+      const keys = visibleInstances.map((inst) => `secrets:auto_merge:${inst.key}`);
+      const settings = await prisma.systemSetting.findMany({
+        where: { key: { in: keys } },
+      });
+      const settingByPlatform = new Map(
+        settings.map((s) => [s.key, s.value === 'true']),
+      );
+
+      const data = visibleInstances.map((inst) => {
+        const dbKey = `secrets:auto_merge:${inst.key}`;
+        const currentVal = settingByPlatform.has(dbKey)
+          ? settingByPlatform.get(dbKey)!
+          : !!inst.infraRepo?.autoMergeEnabled;
+
+        return {
+          platformKey: inst.key,
+          platformLabel: inst.label || inst.displayName,
+          autoMergeEnabled: currentVal,
+        };
+      });
+
+      this.sendResponse(data, 'Settings retrieved successfully');
+    } catch (error) {
+      this.handleError(error, 'Failed to retrieve settings');
+    }
+  }
+
+  async updateSettings(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      if (!this.getUserId()) {
+        return;
+      }
+      const { platformKey, autoMergeEnabled } = req.body;
+      if (!platformKey || typeof autoMergeEnabled !== 'boolean') {
+        throw new ValidationError('platformKey and autoMergeEnabled are required');
+      }
+
+      const manageable = await getManageablePlatforms(this.user!);
+      const isSuper = isSuperAdmin(this.user!);
+      if (!isSuper && !manageable.includes(platformKey)) {
+        throw new AuthorizationError('You do not administer this platform');
+      }
+
+      const inst = config.secretsInstances.find((i) => i.key === platformKey.toLowerCase());
+      if (!inst) {
+        throw new ValidationError(`Platform ${platformKey} is not a registered Secret Ingestion instance`);
+      }
+
+      const key = `secrets:auto_merge:${platformKey.toLowerCase()}`;
+      const value = autoMergeEnabled ? 'true' : 'false';
+
+      const setting = await prisma.systemSetting.upsert({
+        where: { key },
+        update: { value },
+        create: { key, value },
+      });
+
+      await prisma.auditEntry.create({
+        data: {
+          action: 'PLATFORM_SETTING_UPDATED',
+          performerId: this.user!.id,
+          performerName: this.user!.username,
+          details: {
+            settingKey: key,
+            settingValue: value,
+            platformKey,
+          },
+        },
+      });
+
+      this.sendResponse(
+        { platformKey, autoMergeEnabled: setting.value === 'true' },
+        'Setting updated successfully',
+      );
+    } catch (error) {
+      this.handleError(error, 'Failed to update setting');
+    }
+  }
 }
 
 export default AdminManagementController;
+
