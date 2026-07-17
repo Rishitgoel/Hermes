@@ -110,16 +110,6 @@ export const resolveDriftSchema = z.object({
     .max(512, 'Secret name is too long'),
 });
 
-// Ignore/unignore one missingInAws (dangling) drift key so it stops counting toward scheduled
-// drift notifications.
-export const driftKeySchema = resolveDriftSchema.extend({
-  key: z
-    .string()
-    .trim()
-    .min(1, 'Key cannot be empty')
-    .max(512, 'Key is too long'),
-});
-
 export const reviewIngestionSchema = z.object({
   decisions: z
     .array(

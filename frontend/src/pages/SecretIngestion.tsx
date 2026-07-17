@@ -222,7 +222,8 @@ const SecretCartGroup: React.FC<SecretCartGroupProps> = ({
       <div className="bulk-request-header">
         <div className="bulk-request-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <Icons.ListChecks size={18} style={{ color: 'var(--primary)' }} />
-          {entries.length} staged entry/entries for <code>{secretName}</code>
+          <code>{secretName}</code>
+          <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>· {entries.length} {entries.length === 1 ? 'entry' : 'entries'}</span>
         </div>
         <button type="button" className="btn btn-outline btn-sm" onClick={onDiscard}>
           Remove secret
@@ -297,7 +298,7 @@ const SecretCartGroup: React.FC<SecretCartGroupProps> = ({
 
         <div style={{ padding: '12px 14px' }}>
           <p style={{ margin: '0 0 12px', fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-            A <strong>new</strong> key name must be registered in the deployment manifests so it syncs to the pods — that's what the PR does. An existing key just takes its value update in AWS, so it needs no manifest change. Untick any file you don't want in the PR, or click a key chip to drop just that key from one file.
+            <strong>New</strong> key names need a manifest entry to reach the pods (the PR); existing keys just update in AWS. Untick a file, or a key chip, to exclude it.
           </p>
 
           {infraLoading ? null : previewTargets.length === 0 && manualTargets.length === 0 ? (
@@ -514,6 +515,11 @@ export const SecretIngestion: React.FC = () => {
   const [batchJustification, setBatchJustification] = useState('');
   const [keySearch, setKeySearch] = useState('');
   const [secretPrefix, setSecretPrefix] = useState('');
+  // Secrets ticked for broadcast: a key-value pair added while any are checked is staged into
+  // every checked secret at once (same value). Sticky — stays checked across adds until cleared,
+  // so several keys can be broadcast to the same set. Empty ⇒ the add-form targets the single
+  // focused `selectedSecret` (today's behavior). Dropped on instance switch.
+  const [checkedSecrets, setCheckedSecrets] = useState<Set<string>>(new Set());
 
   // Per-secret deployment-target selection (keyed by secret name, same as `drafts`): files the
   // requester un-ticks, extra files added by path, and per-file key narrowing — all scoped to a
@@ -551,6 +557,7 @@ export const SecretIngestion: React.FC = () => {
     setExcludedKeysBySecret({});
     setResolvedBySecret({});
     setBatchJustification('');
+    setCheckedSecrets(new Set());
   }, [selectedPlatform]);
 
   const { data: scope = [], isLoading: scopeLoading } = useQuery({
@@ -600,8 +607,6 @@ export const SecretIngestion: React.FC = () => {
   React.useEffect(() => {
     setKeySearch('');
   }, [selectedSecret]);
-
-  const currentDrafts = useMemo(() => drafts[selectedSecret] || [], [drafts, selectedSecret]);
 
   // Secrets with a non-empty basket — the cart. Sorted for a stable render order.
   const cartSecrets = useMemo(
@@ -664,6 +669,14 @@ export const SecretIngestion: React.FC = () => {
       [secret]: (prev[secret] || []).filter((m) => m.path !== path),
     }));
 
+  const toggleChecked = (name: string) =>
+    setCheckedSecrets((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+
   const handleAddDraft = (e: React.FormEvent) => {
     e.preventDefault();
     const keyTrimmed = newKey.trim();
@@ -671,15 +684,42 @@ export const SecretIngestion: React.FC = () => {
       toast.error('Key name cannot be empty');
       return;
     }
-    if (currentDrafts.some((d) => d.key === keyTrimmed)) {
-      toast.error('Key already exists in draft list');
+    // Broadcast to every checked secret when any are ticked; otherwise stage into the single
+    // focused secret (today's behavior). The same value is written to each target.
+    const targets =
+      checkedSecrets.size > 0 ? [...checkedSecrets] : selectedSecret ? [selectedSecret] : [];
+    if (targets.length === 0) {
+      toast.error('Select a secret first');
       return;
     }
+
+    // A secret that already has this key staged is skipped (its existing value is kept, not
+    // overwritten) — computed off the current drafts, not inside the setState updater.
+    const toAdd = targets.filter((s) => !(drafts[s] || []).some((d) => d.key === keyTrimmed));
+    const skippedCount = targets.length - toAdd.length;
+
+    if (toAdd.length === 0) {
+      toast.error(
+        targets.length === 1
+          ? 'Key already exists in draft list'
+          : `"${keyTrimmed}" is already staged in all ${targets.length} selected secrets`,
+      );
+      return;
+    }
+
     const newEntry: DraftEntry = { key: keyTrimmed, value: newValue };
-    setDrafts((prev) => ({
-      ...prev,
-      [selectedSecret]: [...(prev[selectedSecret] || []), newEntry],
-    }));
+    setDrafts((prev) => {
+      const next = { ...prev };
+      for (const s of toAdd) next[s] = [...(prev[s] || []), newEntry];
+      return next;
+    });
+
+    if (targets.length > 1) {
+      toast.success(
+        `Added "${keyTrimmed}" to ${toAdd.length} secret${toAdd.length > 1 ? 's' : ''}` +
+          (skippedCount ? ` · skipped ${skippedCount} already staged` : ''),
+      );
+    }
     setNewKey('');
     setNewValue('');
   };
@@ -834,7 +874,10 @@ export const SecretIngestion: React.FC = () => {
       ) : (
         <div className="table-container" style={{ padding: '20px' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <div className="form-group">
+            {/* Picker on the left; when secrets are checked for broadcast, a chip list of the
+                chosen secrets fills the space on the right. */}
+            <div style={{ display: 'grid', gridTemplateColumns: checkedSecrets.size > 0 ? '1fr 1fr' : '1fr', gap: 24, alignItems: 'start' }}>
+            <div className="form-group" style={{ marginBottom: 0 }}>
               <label className="form-label" style={{ fontWeight: 600 }}>Target AWS Secret</label>
               {/* Stage 1 — prefix pre-filter: narrows to secrets whose name starts with the text. */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', backgroundColor: 'var(--bg-card)', maxWidth: 400, marginBottom: 8 }}>
@@ -860,7 +903,9 @@ export const SecretIngestion: React.FC = () => {
                   </button>
                 )}
               </div>
-              {/* Stage 2 — the selector's own search does a substring match within the pre-filtered set. */}
+              {/* Stage 2 — the selector's own search does a substring match within the pre-filtered
+                  set. Tick the checkboxes to stage the same key-value pair into several secrets at
+                  once; leave them unticked to target the single focused secret. */}
               <SearchableSelect
                 options={prefixFilteredOptions.map((opt) => ({
                   value: opt.secretName,
@@ -870,7 +915,62 @@ export const SecretIngestion: React.FC = () => {
                 value={selectedSecret}
                 onChange={(val) => setSelectedSecret(val)}
                 style={{ maxWidth: 400 }}
+                selectedValues={checkedSecrets}
+                onToggleValue={toggleChecked}
+                onSelectAllFiltered={(vals) => setCheckedSecrets((prev) => new Set([...prev, ...vals]))}
+                onClearSelection={() => setCheckedSecrets(new Set())}
               />
+              {checkedSecrets.size > 0 && (
+                <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6, maxWidth: 400 }}>
+                  <Icons.Info size={11} style={{ verticalAlign: '-1px', marginRight: 4 }} />
+                  A key-value pair you add will be staged into all {checkedSecrets.size} checked secret{checkedSecrets.size > 1 ? 's' : ''} (same value). Selection stays until you clear it.
+                </p>
+              )}
+            </div>
+
+            {checkedSecrets.size > 0 && (
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                  <h4 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-main)', margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Icons.CheckSquare size={15} style={{ color: 'var(--primary)' }} />
+                    Selected for broadcast ({checkedSecrets.size})
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={() => setCheckedSecrets(new Set())}
+                    style={{ marginLeft: 'auto', background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12, padding: 0 }}
+                  >
+                    Clear all
+                  </button>
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: 12, border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', maxHeight: 200, overflowY: 'auto' }}>
+                  {[...checkedSecrets].sort((a, b) => a.localeCompare(b)).map((s) => {
+                    const staged = (drafts[s]?.length ?? 0) > 0;
+                    return (
+                      <span
+                        key={s}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 8px', background: 'rgba(37, 99, 235, 0.08)', border: '1px solid rgba(37, 99, 235, 0.35)', borderRadius: 999, fontSize: 12 }}
+                      >
+                        <code style={{ fontSize: 11.5, color: 'var(--text-main)' }}>{s}</code>
+                        {staged && (
+                          <span className="badge badge-sm" style={{ fontSize: 8, background: '#16a34a', color: '#fff' }} title="Already has staged entries in the cart">
+                            in cart
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => toggleChecked(s)}
+                          title="Remove from selection"
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 0, lineHeight: 1, display: 'flex' }}
+                        >
+                          <Icons.X size={12} />
+                        </button>
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             </div>
 
             {selectedSecret && (
@@ -986,7 +1086,9 @@ export const SecretIngestion: React.FC = () => {
                       />
                     </div>
                     <button type="submit" className="btn btn-outline btn-sm" style={{ alignSelf: 'flex-end', marginTop: 4 }}>
-                      Add to cart
+                      {checkedSecrets.size > 0
+                        ? `Add to ${checkedSecrets.size} secret${checkedSecrets.size > 1 ? 's' : ''}`
+                        : 'Add to cart'}
                     </button>
                   </form>
                   {cartSecrets.length > 0 && (

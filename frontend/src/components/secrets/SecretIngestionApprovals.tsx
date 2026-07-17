@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Icons from 'lucide-react';
 import SectionHeader from '../common/SectionHeader';
+import { ValuePreview } from '../common/ValuePreview';
 import { queryKeys } from '../../lib/queryKeys';
 import { envBg, envOf, formatTargetPath, INFRA_STATE_META } from '../../lib/infraTargetFormat';
 import { useToast } from '../../contexts/ToastContext';
@@ -474,20 +475,14 @@ export const SecretIngestionApprovals: React.FC = () => {
                           <td>
                             <code style={{ fontWeight: 600, fontSize: 12 }}>{entry.key}</code>
                           </td>
-                          <td style={{ fontFamily: 'monospace', fontSize: 12 }}>
-                            {entry.value === null || entry.value === undefined ? (
-                              <span style={{ fontStyle: 'italic', color: 'var(--text-muted)' }}>(Redacted)</span>
-                            ) : kind === 'UPDATE' ? (
-                              <>
-                                <span style={{ textDecoration: 'line-through', color: 'var(--text-muted)' }}>
-                                  {entry.previousValue}
-                                </span>
-                                <span style={{ margin: '0 6px', color: 'var(--text-muted)' }}>→</span>
-                                <span>{entry.value}</span>
-                              </>
-                            ) : (
-                              entry.value
-                            )}
+                          <td style={{ fontFamily: 'monospace', fontSize: 12, maxWidth: 340 }}>
+                            <ValuePreview
+                              value={entry.value}
+                              previousValue={kind === 'UPDATE' ? entry.previousValue : undefined}
+                              viewerTitle={entry.key}
+                              emptyLabel="(Redacted)"
+                              showTypeChip={false}
+                            />
                           </td>
                           <td style={{ textAlign: 'right' }}>
                             <AcceptReject

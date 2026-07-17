@@ -1,6 +1,7 @@
 import React from 'react';
 import * as Icons from 'lucide-react';
-import { ACTION_COLOR, ZK_ROW_FONT, previewValue, tooltipValue } from './zkFormat';
+import { ACTION_COLOR, ZK_ROW_FONT, previewValue, tooltipValue, isLargeValue } from './zkFormat';
+import { JsonViewerButton, type ViewerSection } from '../common/JsonValueViewer';
 import type { ZkChange, ZkChangeAction } from '../../services/api/zookeeperApi';
 
 /**
@@ -132,9 +133,23 @@ export const ZkDiff: React.FC<{ change: ZkChange }> = ({ change }) => {
   const arrow = <Icons.ArrowRight size={12} style={{ color: 'var(--text-light)', flexShrink: 0 }} />;
   const empty = <em style={{ color: 'var(--text-light)' }}>(empty)</em>;
 
+  // Offer the full-value viewer whenever either side is large (JSON / multi-line / long) — the
+  // inline chips ellipsize, so this is how a big value is actually read.
+  const large = isLargeValue(change.oldValue ?? null) || isLargeValue(change.newValue ?? null);
+  const viewerSections: ViewerSection[] =
+    change.action === 'CREATE'
+      ? [{ label: 'Value', value: change.newValue ?? null, tone: 'new' }]
+      : change.action === 'SET'
+        ? [
+            { label: 'Before', value: change.oldValue ?? null, tone: 'old' },
+            { label: 'After', value: change.newValue ?? null, tone: 'new' },
+          ]
+        : [{ label: 'Value', value: change.oldValue ?? null, tone: 'old' }];
+
   const wrap = (inner: React.ReactNode) => (
     <span style={{ fontFamily: 'monospace', fontSize: ZK_ROW_FONT, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6, minWidth: 0, maxWidth: '100%' }}>
       {inner}
+      {large && <JsonViewerButton title={change.path} sections={viewerSections} size={13} />}
     </span>
   );
 

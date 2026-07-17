@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import * as Icons from "lucide-react";
 import SectionHeader from "../common/SectionHeader";
 import { queryKeys } from "../../lib/queryKeys";
@@ -7,13 +7,10 @@ import { envBg, formatTargetPath } from "../../lib/infraTargetFormat";
 import { useToast } from "../../contexts/ToastContext";
 import {
   getSecretDrift,
-  ignoreDriftKey,
   listSecretsInstances,
   mergeSecretDrift,
   resolveSecretDrift,
-  unignoreDriftKey,
   type DriftFailure,
-  type DriftReport,
   type DriftResolveResult,
   type SecretDrift,
 } from "../../services/api/secretsApi";
@@ -113,23 +110,9 @@ const DriftCard: React.FC<{
   resolved?: DriftResolveResult;
   onSolve: () => void;
   onMerge: () => void;
-  onIgnoreKey: (key: string) => void;
-  onUnignoreKey: (key: string) => void;
   solving: boolean;
   merging: boolean;
-  /** The single missingInAws key currently being ignored/un-ignored for this secret, if any. */
-  mutatingKey: string | null;
-}> = ({
-  drift,
-  resolved,
-  onSolve,
-  onMerge,
-  onIgnoreKey,
-  onUnignoreKey,
-  solving,
-  merging,
-  mutatingKey,
-}) => {
+}> = ({ drift, resolved, onSolve, onMerge, solving, merging }) => {
   // `resolved` holds this secret's most recent action result — Solve or Merge — so the card walks
   // OPEN → MERGED / FAILED as the admin works through it.
   const merged = resolved?.state === "MERGED";
@@ -341,92 +324,9 @@ const DriftCard: React.FC<{
               </strong>{" "}
               — dangling references (add the value in AWS, or remove them from
               the manifest):
-              <div
-                style={{
-                  marginTop: 5,
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: 4,
-                }}
-              >
-                {drift.missingInAws.map((k) => {
-                  const ignored = drift.missingInAwsIgnored.includes(k);
-                  const pending = mutatingKey === k;
-                  return (
-                    <span
-                      key={k}
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: 2,
-                        background: "var(--bg-card)",
-                        border: "1px solid var(--border)",
-                        borderRadius: 4,
-                        padding: "1px 3px 1px 6px",
-                        opacity: ignored ? 0.55 : 1,
-                      }}
-                    >
-                      <code
-                        style={{
-                          fontSize: 11,
-                          fontWeight: 600,
-                          textDecoration: "line-through",
-                          color: "var(--text-main)",
-                        }}
-                      >
-                        {k}
-                      </code>
-                      <button
-                        type="button"
-                        disabled={pending}
-                        onClick={() =>
-                          ignored ? onUnignoreKey(k) : onIgnoreKey(k)
-                        }
-                        title={
-                          ignored
-                            ? "Un-ignore — resume drift notifications for this key"
-                            : "Ignore — stop drift notifications for this key (it stays listed here)"
-                        }
-                        style={{
-                          border: "none",
-                          background: "none",
-                          padding: 2,
-                          display: "inline-flex",
-                          alignItems: "center",
-                          cursor: pending ? "default" : "pointer",
-                          color: ignored
-                            ? "var(--primary)"
-                            : "var(--text-muted)",
-                        }}
-                      >
-                        {pending ? (
-                          <Icons.Loader
-                            size={11}
-                            style={{ animation: "spin 1s linear infinite" }}
-                          />
-                        ) : ignored ? (
-                          <Icons.Eye size={11} />
-                        ) : (
-                          <Icons.EyeOff size={11} />
-                        )}
-                      </button>
-                    </span>
-                  );
-                })}
+              <div style={{ marginTop: 5 }}>
+                <KeyChips keys={drift.missingInAws} strike />
               </div>
-              {drift.missingInAwsIgnored.length > 0 && (
-                <div
-                  style={{
-                    marginTop: 4,
-                    fontSize: 10.5,
-                    color: "var(--text-muted)",
-                    fontStyle: "italic",
-                  }}
-                >
-                  {drift.missingInAwsIgnored.length} ignored — won't trigger
-                  drift notifications
-                </div>
-              )}
             </div>
           </div>
         )}
@@ -603,7 +503,6 @@ const DriftCard: React.FC<{
 
 export const SecretDriftPanel: React.FC = () => {
   const toast = useToast();
-  const queryClient = useQueryClient();
   const [platform, setPlatform] = useState<string>("secrets");
   // On-demand: a drift scan reads AWS + GitHub, so don't run it on mount — the admin clicks Scan.
   const [scanned, setScanned] = useState(false);
@@ -670,58 +569,6 @@ export const SecretDriftPanel: React.FC = () => {
       }
     },
     onError: (err: any) => toast.error(err?.message || "Failed to merge PR."),
-  });
-
-  // Ignoring/un-ignoring is a lightweight audit-only toggle (see backend) — patch the cached
-  // report in place instead of triggering a full re-scan (which re-reads AWS + GitHub).
-  const patchIgnored = (
-    secretName: string,
-    updater: (ignored: string[]) => string[],
-  ) => {
-    queryClient.setQueryData<DriftReport | undefined>(
-      queryKeys.secretDrift(platform),
-      (old) => {
-        if (!old) return old;
-        return {
-          ...old,
-          drifts: old.drifts.map((d) =>
-            d.secretName === secretName
-              ? { ...d, missingInAwsIgnored: updater(d.missingInAwsIgnored) }
-              : d,
-          ),
-        };
-      },
-    );
-  };
-
-  const ignoreMutation = useMutation({
-    mutationFn: ({ secretName, key }: { secretName: string; key: string }) =>
-      ignoreDriftKey(secretName, key, platform),
-    onSuccess: (_res, vars) => {
-      toast.success(
-        "Ignored — this key will no longer trigger drift notifications.",
-      );
-      patchIgnored(vars.secretName, (ignored) => [
-        ...new Set([...ignored, vars.key]),
-      ]);
-    },
-    onError: (err: any) =>
-      toast.error(err?.message || "Failed to ignore drift key."),
-  });
-
-  const unignoreMutation = useMutation({
-    mutationFn: ({ secretName, key }: { secretName: string; key: string }) =>
-      unignoreDriftKey(secretName, key, platform),
-    onSuccess: (_res, vars) => {
-      toast.success(
-        "Un-ignored — drift notifications will resume for this key.",
-      );
-      patchIgnored(vars.secretName, (ignored) =>
-        ignored.filter((k) => k !== vars.key),
-      );
-    },
-    onError: (err: any) =>
-      toast.error(err?.message || "Failed to un-ignore drift key."),
   });
 
   const runScan = () => {
@@ -883,21 +730,6 @@ export const SecretDriftPanel: React.FC = () => {
               merging={
                 mergeMutation.isPending &&
                 mergeMutation.variables === d.secretName
-              }
-              onIgnoreKey={(key) =>
-                ignoreMutation.mutate({ secretName: d.secretName, key })
-              }
-              onUnignoreKey={(key) =>
-                unignoreMutation.mutate({ secretName: d.secretName, key })
-              }
-              mutatingKey={
-                ignoreMutation.isPending &&
-                ignoreMutation.variables?.secretName === d.secretName
-                  ? ignoreMutation.variables.key
-                  : unignoreMutation.isPending &&
-                      unignoreMutation.variables?.secretName === d.secretName
-                    ? unignoreMutation.variables.key
-                    : null
               }
             />
           ))}

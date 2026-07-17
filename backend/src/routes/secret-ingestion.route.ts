@@ -128,24 +128,4 @@ router.post(
   },
 );
 
-router.post(
-  '/drift/ignore',
-  authenticateToken,
-  (req: Request, res: Response, next: NextFunction) => {
-    new SecretIngestionController(req, res, next)
-      .ignoreDriftKey(req, res, next)
-      .catch(next);
-  },
-);
-
-router.post(
-  '/drift/unignore',
-  authenticateToken,
-  (req: Request, res: Response, next: NextFunction) => {
-    new SecretIngestionController(req, res, next)
-      .unignoreDriftKey(req, res, next)
-      .catch(next);
-  },
-);
-
 export default router;

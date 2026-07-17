@@ -17,7 +17,6 @@ import {
   reviewIngestionSchema,
   infraPreviewSchema,
   resolveDriftSchema,
-  driftKeySchema,
 } from '../validations/secret-ingestion.validation';
 
 /**
@@ -289,58 +288,6 @@ export class SecretIngestionController extends BaseController {
       );
     } catch (error) {
       this.handleError(error, 'Failed to merge secret drift PR');
-    }
-  }
-
-  // POST /api/secrets/drift/ignore — stop notifying about one missingInAws (dangling) key
-  async ignoreDriftKey(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ): Promise<void> {
-    try {
-      const validated = this.validateWithZod(driftKeySchema, this.req.body);
-      if (!validated.success) {
-        return;
-      }
-      const platform = validated.data.platform
-        ? assertSecretsPlatform(validated.data.platform)
-        : undefined;
-      const result = await secretDriftService.ignoreDriftKey(
-        this.user!,
-        validated.data.secretName,
-        validated.data.key,
-        platform ?? 'secrets',
-      );
-      this.sendResponse(result, 'Drift key ignored');
-    } catch (error) {
-      this.handleError(error, 'Failed to ignore drift key');
-    }
-  }
-
-  // POST /api/secrets/drift/unignore — resume notifications for a previously-ignored key
-  async unignoreDriftKey(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ): Promise<void> {
-    try {
-      const validated = this.validateWithZod(driftKeySchema, this.req.body);
-      if (!validated.success) {
-        return;
-      }
-      const platform = validated.data.platform
-        ? assertSecretsPlatform(validated.data.platform)
-        : undefined;
-      const result = await secretDriftService.unignoreDriftKey(
-        this.user!,
-        validated.data.secretName,
-        validated.data.key,
-        platform ?? 'secrets',
-      );
-      this.sendResponse(result, 'Drift key un-ignored');
-    } catch (error) {
-      this.handleError(error, 'Failed to un-ignore drift key');
     }
   }
 

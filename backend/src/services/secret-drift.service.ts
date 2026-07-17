@@ -5,11 +5,7 @@ import {
   getInfraRepoSyncService,
   isInfraRepoEnabled,
 } from './infra-repo-sync.service';
-import {
-  assertSecretsPlatform,
-  isSecretsFamilyPlatform,
-  secretsFamilyPlatforms,
-} from './secret-ingestion.service';
+import { assertSecretsPlatform } from './secret-ingestion.service';
 import logger from '../utils/logger';
 import { AuthenticatedUser } from '../middleware/auth.middleware';
 import { getManageableGroupIds } from '../utils/authz';
@@ -53,10 +49,6 @@ export interface SecretDrift {
   missingInManifest: string[];
   /** Enumerated in a manifest, absent from AWS → dangling reference. Report-only. */
   missingInAws: string[];
-  /** Subset of missingInAws an admin has marked "ignore" — still shown here, but excluded from
-   * scheduled-scan notifications so an unrelated change elsewhere on the secret doesn't
-   * re-surface a dangling key that's already been acknowledged as low-priority. */
-  missingInAwsIgnored: string[];
   /** Consuming manifests referencing the secret whose key-list shape couldn't be parsed. */
   unmatchedManifests: string[];
   manifests: DriftManifestView[];
@@ -93,19 +85,6 @@ export interface DriftReport {
 }
 
 export class SecretDriftService {
-  /**
-   * Stable equality key for a secret's drift — used by the scheduled scan to avoid re-notifying
-   * admins about drift they've already been told about. Order-independent (keys are sorted).
-   */
-  fingerprint(d: SecretDrift): string {
-    const s = (a: string[]) => [...a].sort();
-    return JSON.stringify({
-      m: s(d.missingInManifest),
-      a: s(d.missingInAws),
-      x: s(d.unmatchedManifests),
-    });
-  }
-
   /** Active secrets groups on a platform that carry an externalGroupId (own some secret scope). */
   private async groupsForScope(
     platform: string,
@@ -200,7 +179,6 @@ export class SecretDriftService {
     platform: string,
     secretName: string,
     group: OwningGroup,
-    ignoredKeys: Set<string> = new Set(),
   ): Promise<SecretDrift | null> {
     const svc = getSecretsManagerService(platform);
     const { exists, keys: awsKeys } = await svc.listSecretKeys(secretName);
@@ -219,14 +197,11 @@ export class SecretDriftService {
     const missingInManifest = [...new Set(manifests.flatMap((m) => m.missingKeys))].sort();
     const awsSet = new Set(awsKeys);
     const missingInAws = [...registeredUnion].filter((k) => !awsSet.has(k)).sort();
-    const missingInAwsIgnored = missingInAws.filter((k) => ignoredKeys.has(k));
     const unmatchedManifests = manifests.filter((m) => m.unmatched).map((m) => m.path);
 
     // A secret with no consuming manifest at all is NOT drift — there's nothing for its keys
     // to disagree with. Drift only exists once at least one manifest actually references the
-    // secret and its registered keys don't match AWS. Ignored missingInAws keys still count
-    // toward "has drift" (the card stays visible so an admin can un-ignore it) — only the
-    // scheduled-notification path treats them as resolved.
+    // secret and its registered keys don't match AWS.
     const hasDrift =
       manifests.length > 0 &&
       (missingInManifest.length > 0 || missingInAws.length > 0 || unmatchedManifests.length > 0);
@@ -242,7 +217,6 @@ export class SecretDriftService {
       awsKeyCount: awsKeys.length,
       missingInManifest,
       missingInAws,
-      missingInAwsIgnored,
       unmatchedManifests,
       manifests: manifests.map((m) => ({
         path: m.path,
@@ -286,48 +260,6 @@ export class SecretDriftService {
   }
 
   /**
-   * Currently-ignored missingInAws keys for a platform, keyed by secretName. Persisted as
-   * audit rows (SECRET_DRIFT_KEY_IGNORED / _UNIGNORED) rather than a dedicated table — same
-   * "replay the audit trail" pattern scanAndNotify already uses for fingerprint dedup. Latest
-   * row per (secretName, key) wins.
-   */
-  private async loadIgnoredKeys(platform: string): Promise<Map<string, Set<string>>> {
-    const rows = await prisma.auditEntry.findMany({
-      where: {
-        action: {
-          in: ['SECRET_DRIFT_KEY_IGNORED', 'SECRET_DRIFT_KEY_UNIGNORED'],
-        },
-      },
-      orderBy: { createdAt: 'desc' },
-      take: 5000,
-      select: { action: true, details: true },
-    });
-    const decided = new Set<string>(); // secretName::key pairs already resolved (latest wins)
-    const ignored = new Map<string, Set<string>>();
-    for (const row of rows) {
-      const d = (row.details ?? {}) as {
-        platform?: string;
-        secretName?: string;
-        key?: string;
-      };
-      if (d.platform !== platform || !d.secretName || !d.key) {
-        continue;
-      }
-      const pairKey = `${d.secretName}::${d.key}`;
-      if (decided.has(pairKey)) {
-        continue;
-      }
-      decided.add(pairKey);
-      if (row.action === 'SECRET_DRIFT_KEY_IGNORED') {
-        const set = ignored.get(d.secretName) ?? new Set<string>();
-        set.add(d.key);
-        ignored.set(d.secretName, set);
-      }
-    }
-    return ignored;
-  }
-
-  /**
    * Core scan: compute drift across a set of owning groups on one platform.
    *
    * `withOpenPrs` costs one live GitHub lookup per fixable drift, so only the interactive report
@@ -363,8 +295,6 @@ export class SecretDriftService {
       );
     }
 
-    const ignoredBySecret = await this.loadIgnoredKeys(platform);
-
     const drifts: SecretDrift[] = [];
     const failed: DriftFailure[] = [];
     // Bounded concurrency: each secret is an independent AWS read + (cached) manifest lookup.
@@ -375,12 +305,7 @@ export class SecretDriftService {
         const i = next++;
         const { secretName, group } = names[i];
         try {
-          const drift = await this.driftForSecret(
-            platform,
-            secretName,
-            group,
-            ignoredBySecret.get(secretName),
-          );
+          const drift = await this.driftForSecret(platform, secretName, group);
           if (drift) {
             drifts.push(drift);
           }
@@ -447,7 +372,7 @@ export class SecretDriftService {
   /**
    * Finds a secrets group the caller manages whose scope actually covers `secretName` — this
    * both authorizes any per-secret drift action and gives the audit row a real owning group.
-   * Shared by resolveDrift/mergeDrift/ignoreDriftKey/unignoreDriftKey.
+   * Shared by resolveDrift/mergeDrift.
    */
   private async resolveOwnerGroup(
     key: string,
@@ -613,160 +538,6 @@ export class SecretDriftService {
     };
   }
 
-  /**
-   * Marks a single missingInAws (dangling) key as ignored — it keeps showing up in the
-   * on-demand drift report (still visible, badged), but the scheduled scan stops counting it
-   * toward "new/changed drift" for notification purposes. Persisted as an audit row (no
-   * dedicated table) — see loadIgnoredKeys. Authorization mirrors resolveDrift.
-   */
-  async ignoreDriftKey(
-    user: AuthenticatedUser,
-    secretName: string,
-    ignoreKey: string,
-    platform: string = PLATFORM,
-  ): Promise<{ secretName: string; key: string; ignored: true }> {
-    const key = assertSecretsPlatform(platform);
-    const owner = await this.resolveOwnerGroup(key, user, secretName);
-    await prisma.auditEntry.create({
-      data: {
-        action: 'SECRET_DRIFT_KEY_IGNORED',
-        performerId: user.id,
-        performerName: user.username,
-        groupId: owner.id,
-        details: { platform: key, secretName, key: ignoreKey } as any,
-      },
-    });
-    return { secretName, key: ignoreKey, ignored: true };
-  }
-
-  /** Reverses ignoreDriftKey — the key resumes counting toward drift notifications. */
-  async unignoreDriftKey(
-    user: AuthenticatedUser,
-    secretName: string,
-    ignoreKey: string,
-    platform: string = PLATFORM,
-  ): Promise<{ secretName: string; key: string; ignored: false }> {
-    const key = assertSecretsPlatform(platform);
-    const owner = await this.resolveOwnerGroup(key, user, secretName);
-    await prisma.auditEntry.create({
-      data: {
-        action: 'SECRET_DRIFT_KEY_UNIGNORED',
-        performerId: user.id,
-        performerName: user.username,
-        groupId: owner.id,
-        details: { platform: key, secretName, key: ignoreKey } as any,
-      },
-    });
-    return { secretName, key: ignoreKey, ignored: false };
-  }
-
-  /**
-   * Scheduled scan for one platform: computes drift across ALL secrets groups on the platform,
-   * then notifies admins about secrets whose drift is new or changed since the last alert
-   * (tracked via SECRET_DRIFT_ALERTED audit rows, so we don't re-notify the same drift each run).
-   * Best-effort: never throws.
-   */
-  async scanAndNotify(platform: string): Promise<{ drifting: number; alerted: number }> {
-    const key = platform.toLowerCase();
-    if (!isSecretsFamilyPlatform(key) || !isInfraRepoEnabled(key)) {
-      return { drifting: 0, alerted: 0 };
-    }
-    const groups = await this.groupsForScope(key, { all: true, groupIds: [] });
-    const report = await this.computeDrift(key, groups);
-    if (report.drifts.length === 0) {
-      return { drifting: 0, alerted: 0 };
-    }
-
-    // Ignored missingInAws keys don't count toward notifications (that's the whole point of
-    // ignoring one) — strip them before fingerprinting/alerting, and drop any secret whose
-    // drift is entirely resolved once its ignored keys are excluded. The on-demand report
-    // (computeDrift above) is untouched — it still shows ignored keys, badged, for visibility.
-    const effectiveDrifts = report.drifts
-      .map((d) => ({
-        ...d,
-        missingInAws: d.missingInAws.filter((k) => !d.missingInAwsIgnored.includes(k)),
-      }))
-      .filter(
-        (d) =>
-          d.missingInManifest.length > 0 ||
-          d.missingInAws.length > 0 ||
-          d.unmatchedManifests.length > 0,
-      );
-    if (effectiveDrifts.length === 0) {
-      return { drifting: report.drifts.length, alerted: 0 };
-    }
-
-    // Last-alerted fingerprint per secret, newest first (the first row seen per secret wins).
-    const previous = await prisma.auditEntry.findMany({
-      where: { action: 'SECRET_DRIFT_ALERTED' },
-      orderBy: { createdAt: 'desc' },
-      take: 2000,
-      select: { details: true },
-    });
-    const lastFingerprint = new Map<string, string>();
-    for (const row of previous) {
-      const d = (row.details ?? {}) as {
-        platform?: string;
-        secretName?: string;
-        fingerprint?: string;
-      };
-      if (d.platform !== key || !d.secretName || !d.fingerprint) {
-        continue;
-      }
-      if (!lastFingerprint.has(d.secretName)) {
-        lastFingerprint.set(d.secretName, d.fingerprint);
-      }
-    }
-
-    const newlyDrifting = effectiveDrifts.filter(
-      (d) => lastFingerprint.get(d.secretName) !== this.fingerprint(d),
-    );
-    if (newlyDrifting.length === 0) {
-      return { drifting: report.drifts.length, alerted: 0 };
-    }
-
-    // Record the new fingerprints first so a notification failure below can't cause the same
-    // drift to be alerted again on the next run (the audit rows are the dedupe state).
-    await prisma.auditEntry.createMany({
-      data: newlyDrifting.map((d) => ({
-        action: 'SECRET_DRIFT_ALERTED',
-        performerId: 'system',
-        performerName: 'Drift Scan',
-        groupId: d.groupId,
-        details: {
-          platform: key,
-          secretName: d.secretName,
-          fingerprint: this.fingerprint(d),
-          missingInManifest: d.missingInManifest,
-          missingInAws: d.missingInAws,
-        } as any,
-      })),
-    });
-
-    logger.warn(
-      {
-        platform: key,
-        drifting: report.drifts.length,
-        alerted: newlyDrifting.length,
-      },
-      'Secret drift detected — audit recorded',
-    );
-    return { drifting: report.drifts.length, alerted: newlyDrifting.length };
-  }
-
-  /** Scan every enabled, infra-wired secrets instance and notify on new drift. */
-  async scanAllAndNotify(): Promise<void> {
-    for (const platform of secretsFamilyPlatforms()) {
-      if (!isInfraRepoEnabled(platform)) {
-        continue;
-      }
-      try {
-        await this.scanAndNotify(platform);
-      } catch (err: any) {
-        logger.warn({ platform, error: err.message }, 'Secret drift scan failed for a platform');
-      }
-    }
-  }
 }
 
 export const secretDriftService = new SecretDriftService();

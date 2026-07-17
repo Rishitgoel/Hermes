@@ -13,7 +13,8 @@ import {
   type ZkChange,
   type ZkChangeRequest,
 } from '../services/api/zookeeperApi';
-import { ACTION_COLOR, INDENT, ROW_TINT, ZK_ROW_FONT, detectType, parsesAsJson, previewValue, tooltipValue } from '../components/zookeeper/zkFormat';
+import { ACTION_COLOR, INDENT, ROW_TINT, ZK_ROW_FONT, detectType, parsesAsJson, previewValue, tooltipValue, isLargeValue } from '../components/zookeeper/zkFormat';
+import { JsonViewerButton } from '../components/common/JsonValueViewer';
 import { TypeChip } from '../components/zookeeper/TypeChip';
 import { ActionBadge, ZkDiff, ZkRow } from '../components/zookeeper/ZkRow';
 
@@ -537,20 +538,26 @@ const ZkTreeNode: React.FC<ZkTreeNodeProps> = ({ node, drafts, stageDraft, remov
 
   // Current value for a plain (un-staged) leaf — folders show nothing, staged nodes show a diff.
   // No type chip on the read view; the inferred type is only surfaced while editing (below).
+  // A large value (JSON / multi-line / long) ellipsizes here and gets an expand-to-viewer button.
   const leafValue = (
-    <span
-      title={ownValue ? tooltipValue(ownValue) : undefined}
-      style={{
-        fontFamily: 'monospace',
-        fontSize: ZK_ROW_FONT,
-        color: 'var(--text-muted)',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap',
-        minWidth: 0,
-      }}
-    >
-      {ownValue ? previewValue(ownValue) : <em style={{ color: 'var(--text-light)' }}>—</em>}
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0, maxWidth: '100%' }}>
+      <span
+        title={ownValue ? tooltipValue(ownValue) : undefined}
+        style={{
+          fontFamily: 'monospace',
+          fontSize: ZK_ROW_FONT,
+          color: 'var(--text-muted)',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          minWidth: 0,
+        }}
+      >
+        {ownValue ? previewValue(ownValue) : <em style={{ color: 'var(--text-light)' }}>—</em>}
+      </span>
+      {isLargeValue(ownValue) && (
+        <JsonViewerButton title={node.path} sections={[{ label: 'Value', value: ownValue, tone: 'neutral' }]} />
+      )}
     </span>
   );
 

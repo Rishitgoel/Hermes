@@ -14,6 +14,16 @@ interface SearchableSelectProps {
   placeholder?: string;
   disabled?: boolean;
   style?: React.CSSProperties;
+  // ── Optional multi-select (checkbox column) ──────────────────────────────────
+  // When both `selectedValues` and `onToggleValue` are provided, each option grows a checkbox on
+  // its left for building a multi-selection alongside the single focused `value`. Clicking the
+  // checkbox toggles membership and keeps the dropdown open; clicking the rest of the row still
+  // picks that option as the single focused value (and closes), exactly as in single-select mode.
+  selectedValues?: Set<string>;
+  onToggleValue?: (value: string) => void;
+  // "Select all" unions the currently-visible (search-filtered) values into the selection.
+  onSelectAllFiltered?: (values: string[]) => void;
+  onClearSelection?: () => void;
 }
 
 export const SearchableSelect: React.FC<SearchableSelectProps> = ({
@@ -23,7 +33,12 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
   placeholder = 'Select an option...',
   disabled = false,
   style,
+  selectedValues,
+  onToggleValue,
+  onSelectAllFiltered,
+  onClearSelection,
 }) => {
+  const multiSelect = !!(selectedValues && onToggleValue);
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
@@ -31,7 +46,7 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const optionRefs = useRef<Array<HTMLDivElement | null>>([]);
 
   const selectedOption = useMemo(() => options.find((opt) => opt.value === value), [options, value]);
 
@@ -150,6 +165,11 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
           ) : (
             <span className="trigger-placeholder">{placeholder}</span>
           )}
+          {multiSelect && selectedValues!.size > 0 && (
+            <span className="trigger-group-badge" style={{ background: 'var(--primary)', color: '#fff' }}>
+              {selectedValues!.size} selected
+            </span>
+          )}
         </span>
         <Icons.ChevronDown size={16} className={`chevron-icon ${isOpen ? 'rotate' : ''}`} />
       </button>
@@ -185,6 +205,37 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
             )}
           </div>
 
+          {multiSelect && (
+            <div
+              className="searchable-select-multi-toolbar"
+              style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '6px 12px', borderBottom: '1px solid var(--border)', fontSize: 12 }}
+            >
+              <span style={{ color: 'var(--text-muted)' }}>{selectedValues!.size} selected</span>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelectAllFiltered?.(filteredOptions.map((o) => o.value));
+                }}
+                style={{ background: 'none', border: 'none', color: 'var(--primary)', cursor: 'pointer', padding: 0, fontSize: 12 }}
+              >
+                Select all{filteredOptions.length !== options.length ? ` (${filteredOptions.length})` : ''}
+              </button>
+              {selectedValues!.size > 0 && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onClearSelection?.();
+                  }}
+                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 0, fontSize: 12 }}
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          )}
+
           <div ref={listRef} className="searchable-select-options-list" role="listbox">
             {filteredOptions.length === 0 ? (
               <div className="searchable-select-no-results">No secrets matched.</div>
@@ -192,27 +243,39 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
               filteredOptions.map((opt, index) => {
                 const isSelected = opt.value === value;
                 const isActive = index === activeIndex;
+                const isChecked = multiSelect && selectedValues!.has(opt.value);
 
                 return (
-                  <button
+                  <div
                     key={opt.value}
                     ref={(el) => {
                       optionRefs.current[index] = el;
                     }}
-                    type="button"
                     role="option"
                     aria-selected={isSelected}
+                    tabIndex={-1}
                     className={`searchable-select-option-item ${isSelected ? 'selected' : ''} ${
                       isActive ? 'active' : ''
                     }`}
                     onClick={() => selectOption(opt)}
                     onMouseEnter={() => setActiveIndex(index)}
+                    style={{ cursor: 'pointer' }}
                   >
+                    {multiSelect && (
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        aria-label={`Select ${opt.label} for bulk add`}
+                        onChange={() => onToggleValue!(opt.value)}
+                        onClick={(e) => e.stopPropagation()}
+                        style={{ flexShrink: 0, cursor: 'pointer', marginRight: 2 }}
+                      />
+                    )}
                     <span className="option-label">{opt.label}</span>
                     {opt.groupName && (
                       <span className="option-group-badge">{opt.groupName}</span>
                     )}
-                  </button>
+                  </div>
                 );
               })
             )}
