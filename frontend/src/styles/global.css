@@ -786,6 +786,10 @@ a:hover {
   transition: var(--transition);
 }
 
+.clickable {
+  cursor: pointer;
+}
+
 /* Keyboard-only focus ring (mouse clicks don't trigger :focus-visible). */
 .btn:focus-visible,
 .form-input:focus-visible,

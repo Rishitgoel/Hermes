@@ -361,15 +361,11 @@ export const Groups: React.FC = () => {
                   cursor: 'pointer',
                   opacity: isActive ? 1 : 0.7,
                   minHeight: '220px',
-                  background: 'var(--bg-card)',
-                  display: 'flex',
-                  flexDirection: 'column',
                   justifyContent: 'space-between',
-                  transition: 'var(--transition)'
                 } as React.CSSProperties}
               >
                 <div>
-                  <div className="group-card-header" style={{ marginBottom: '12px' }}>
+                  <div className="group-card-header">
                     <div className="group-icon-box" style={{
                       background: isActive ? 'var(--primary-light)' : 'var(--bg-inset)',
                       color: platform.color
@@ -377,21 +373,21 @@ export const Groups: React.FC = () => {
                       {renderIcon(platform.iconName, platform.color, 20)}
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column' }}>
-                      <h4 className="group-card-title" style={{ fontSize: '18px' }}>{platform.name}</h4>
+                      <h4 className="group-card-title">{platform.name}</h4>
                       <span style={{ fontSize: '11px', color: 'var(--text-light)', fontWeight: 600 }}>
                         {platform.fullName}
                       </span>
                     </div>
                   </div>
-                  <p className="group-card-desc" style={{ fontSize: '13px', marginBottom: '16px', lineHeight: 1.4 }}>
+                  <p className="group-card-desc">
                     {platform.description}
                   </p>
                 </div>
 
-                <div className="group-card-footer" style={{ borderTop: '1px solid var(--border)', paddingTop: '12px', marginTop: 'auto' }}>
+                <div className="group-card-footer">
                   {isActive ? (
                     <>
-                      <span className="group-members-count" style={{ fontSize: '12px', fontWeight: 600 }}>
+                      <span className="group-members-count">
                         <Icons.Layers size={14} /> {groupCount} groups • <Icons.Users size={14} /> {memberCount} memberships
                       </span>
                       <span className="badge badge-approved badge-sm">
@@ -400,7 +396,7 @@ export const Groups: React.FC = () => {
                     </>
                   ) : (
                     <>
-                      <span className="group-members-count" style={{ color: 'var(--text-light)', fontSize: '12px' }}>
+                      <span className="group-members-count" style={{ color: 'var(--text-light)' }}>
                         <Icons.Lock size={14} /> Integration Pending
                       </span>
                       <span className="badge badge-neutral badge-sm">

@@ -252,8 +252,11 @@ export class AccessRequestController extends BaseController {
         throw new AuthorizationError('Only admins can view pending requests');
       }
 
+      const statusParam = req.query.status as string;
+      const status = statusParam === 'PROVISION_FAILED' ? RequestStatus.PROVISION_FAILED : RequestStatus.PENDING;
+
       const where: Prisma.AccessRequestWhereInput = {
-        status: RequestStatus.PENDING,
+        status,
       };
       if (!scopes.superAdmin) {
         where.group = { slug: { in: scopes.groups } };
@@ -367,6 +370,52 @@ export class AccessRequestController extends BaseController {
       this.sendResponse(updatedRequest, `Access request reviewed: ${status}`);
     } catch (error) {
       this.handleError(error, 'Failed to review access request');
+    }
+  }
+
+  // POST /api/access-requests/:id/retry
+  async retryProvisioning(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      const id = this.req.params.id as string;
+      const userId = this.getUserId();
+      if (!userId) {return;}
+
+      // Fetch request to check group permissions
+      const request = await prisma.accessRequest.findUnique({
+        where: { id },
+        include: { group: true },
+      });
+      if (!request) {
+        throw new NotFoundError('Access request not found');
+      }
+
+      // Check if user is group admin of this group
+      if (
+        !(await isGroupAdminOf(
+          this.user!,
+          request.groupId,
+          request.group?.slug,
+        ))
+      ) {
+        throw new AuthorizationError(
+          'You do not have permission to retry provisioning for this request',
+        );
+      }
+
+      const performer = {
+        id: userId,
+        username: this.user!.username,
+      };
+
+      const updatedRequest = await accessWorkflowService.retryProvisioning(id, performer);
+
+      this.sendResponse(updatedRequest, 'Provisioning retried successfully');
+    } catch (error) {
+      this.handleError(error, 'Failed to retry provisioning');
     }
   }
 }

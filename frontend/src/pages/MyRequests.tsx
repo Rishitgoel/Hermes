@@ -20,6 +20,7 @@ interface RequestData {
   reviewedAt: string | null;
   expiresAt: string | null;
   createdAt: string;
+  provisionError?: string | null;
   group: {
     name: string;
     color: string | null;
@@ -102,7 +103,7 @@ export const MyRequests: React.FC = () => {
                   </td>
                   <td>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'flex-start' }}>
-                      <StatusBadge status={req.status} />
+                      <StatusBadge status={req.status} error={req.provisionError} />
                       {req.status === 'PROVISIONED' && req.expiresAt && <ExpiryBadge expiresAt={req.expiresAt} />}
                     </div>
                   </td>

@@ -872,8 +872,22 @@ export class AccessWorkflowService {
     });
 
     if (!request) {throw new NotFoundError('Access request not found');}
-    if (request.status !== RequestStatus.PENDING) {
-      throw new ValidationError('Access request is already reviewed');
+    if (
+      request.status !== RequestStatus.PENDING &&
+      request.status !== RequestStatus.PROVISION_FAILED &&
+      request.status !== RequestStatus.PROVISIONING
+    ) {
+      throw new ValidationError('Access request is not in a reviewable state');
+    }
+
+    if (
+      (request.status === RequestStatus.PROVISION_FAILED ||
+        request.status === RequestStatus.PROVISIONING) &&
+      status !== 'REJECTED'
+    ) {
+      throw new ValidationError(
+        'Failed or active provisioning requests can only be rejected/dismissed',
+      );
     }
 
     if (status === 'REJECTED') {
@@ -2024,6 +2038,62 @@ export class AccessWorkflowService {
       timestamp: new Date(),
     });
   }
+
+  // Retry failed provisioning (Admin)
+  async retryProvisioning(
+    requestId: string,
+    performer: { id: string; username: string },
+  ) {
+    const request = await prisma.accessRequest.findUnique({
+      where: { id: requestId },
+      include: { group: true, level: true },
+    });
+
+    if (!request) {
+      throw new NotFoundError('Access request not found');
+    }
+
+    if (request.status !== RequestStatus.PROVISION_FAILED) {
+      throw new ValidationError('Only failed provisioning requests can be retried');
+    }
+
+    // Set request status back to PROVISIONING before calling _provision
+    const updatedRequest = await prisma.accessRequest.update({
+      where: { id: requestId },
+      data: {
+        status: RequestStatus.PROVISIONING,
+        provisionError: null,
+      },
+      include: { group: true, level: true },
+    });
+
+    // Cast the request to our expected internal type AccessRequestWithGroup
+    const requestWithGroup: AccessRequestWithGroup = {
+      ...updatedRequest,
+      group: {
+        id: updatedRequest.group!.id,
+        name: updatedRequest.group!.name,
+        slug: updatedRequest.group!.slug,
+        platform: updatedRequest.group!.platform,
+        externalGroupId: updatedRequest.group!.externalGroupId,
+      },
+      level: updatedRequest.level
+        ? {
+            id: updatedRequest.level.id,
+            name: updatedRequest.level.name,
+            slug: updatedRequest.level.slug,
+            externalGroupId: updatedRequest.level.externalGroupId,
+          }
+        : null,
+    };
+
+    return this._provision(
+      requestWithGroup,
+      { id: performer.id, name: performer.username },
+      request.reviewNote ?? undefined,
+    );
+  }
+
 
   /**
    * Final auto-expiry failure handler. Called once a deprovision has failed

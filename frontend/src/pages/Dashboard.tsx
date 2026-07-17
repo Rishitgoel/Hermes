@@ -192,9 +192,8 @@ export const Dashboard: React.FC = () => {
       {/* Statistics Row */}
       <div className="stats-grid">
         <div 
-          className="stat-card" 
+          className="stat-card clickable" 
           onClick={() => activeAccessRef.current?.scrollIntoView({ behavior: 'smooth' })} 
-          style={{ cursor: 'pointer' }}
         >
           <div className="stat-icon-wrapper">
             <Icons.ShieldCheck size={26} />
@@ -208,7 +207,7 @@ export const Dashboard: React.FC = () => {
           </div>
         </div>
 
-        <div className="stat-card" onClick={() => navigate('/hermes/my-requests')} style={{ cursor: 'pointer' }}>
+        <div className="stat-card clickable" onClick={() => navigate('/hermes/my-requests')}>
           <div className="stat-icon-wrapper">
             <Icons.FileClock size={26} />
           </div>
@@ -220,9 +219,8 @@ export const Dashboard: React.FC = () => {
 
         {expiringSoonCount > 0 && (
           <div
-            className="stat-card stat-card-warning"
+            className="stat-card stat-card-warning clickable"
             onClick={() => activeAccessRef.current?.scrollIntoView({ behavior: 'smooth' })}
-            style={{ cursor: 'pointer' }}
             title="Grants expiring within 7 days — use Extend in the table below"
           >
             <div className="stat-icon-wrapper" style={{ backgroundColor: 'var(--status-pending-bg)', color: 'var(--status-pending-text)' }}>
@@ -236,7 +234,11 @@ export const Dashboard: React.FC = () => {
         )}
 
         {isAdmin && (
-          <div className="stat-card" onClick={() => navigate('/hermes/pending-approvals')} style={{ cursor: 'pointer', borderLeft: '4px solid var(--secondary)' }}>
+          <div 
+            className="stat-card clickable" 
+            onClick={() => navigate('/hermes/pending-approvals')} 
+            style={{ borderLeft: '4px solid var(--secondary)' }}
+          >
             <div className="stat-icon-wrapper" style={{ backgroundColor: 'var(--primary-light)', color: 'var(--secondary)' }}>
               <Icons.CheckSquare size={26} />
             </div>
@@ -249,9 +251,8 @@ export const Dashboard: React.FC = () => {
 
         {isSuperAdmin && provisionFailureCount > 0 && (
           <div
-            className="stat-card stat-card-danger"
+            className="stat-card stat-card-danger clickable"
             onClick={() => navigate('/hermes/audit-log')}
-            style={{ cursor: 'pointer' }}
             title="PROVISION_FAILED audit entries in the last 7 days"
           >
             <div className="stat-icon-wrapper" style={{ backgroundColor: 'var(--status-rejected-bg)', color: 'var(--status-rejected-text)' }}>

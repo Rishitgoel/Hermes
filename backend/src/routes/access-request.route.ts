@@ -85,4 +85,13 @@ router.put(
   },
 );
 
+router.post(
+  '/:id/retry',
+  authenticateToken,
+  (req: Request, res: Response, next: NextFunction) => {
+    const controller = new AccessRequestController(req, res, next);
+    controller.retryProvisioning(req, res, next).catch(next);
+  },
+);
+
 export default router;

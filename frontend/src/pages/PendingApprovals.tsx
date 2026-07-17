@@ -7,6 +7,7 @@ import { listPendingUserCreations } from '../services/api/userCreation';
 import { listZkChangeRequests } from '../services/api/zookeeperApi';
 import { listIngestionRequests } from '../services/api/secretsApi';
 import { useAuth } from '../contexts/AuthContext';
+import { useToast } from '../contexts/ToastContext';
 import * as Icons from 'lucide-react';
 import { queryKeys } from '../lib/queryKeys';
 import { fetchPlatforms, type LivePlatform } from '../services/api/platforms';
@@ -35,11 +36,13 @@ interface PendingRequest {
     name: string;
     permission: string | null;
   } | null;
+  provisionError?: string | null;
 }
 
 export const PendingApprovals: React.FC = () => {
   const queryClient = useQueryClient();
   const { user } = useAuth();
+  const toast = useToast();
   // Account-creation review is per-platform: super admins (all platforms) and
   // platform admins (their platform(s)) can approve. Pure group admins cannot.
   const canApproveAccounts =
@@ -101,6 +104,50 @@ export const PendingApprovals: React.FC = () => {
     enabled: canReviewSecrets,
   });
 
+  // Query failed provisioning requests for this admin (same platform/group scope)
+  const { data: failedRequests = [], isLoading: loadingFailed } = useQuery<PendingRequest[]>({
+    queryKey: ['accessRequests', 'failed'],
+    queryFn: () => apiClient.get('/api/access-requests/pending', { params: { status: 'PROVISION_FAILED' } }).then((r) => r.data),
+    refetchInterval: 15000,
+    refetchOnMount: 'always',
+  });
+
+  const retryMutation = useMutation({
+    mutationFn: async (requestId: string) => {
+      const res = await apiClient.post(`/api/access-requests/${requestId}/retry`);
+      return res.data;
+    },
+    onSuccess: () => {
+      toast.success('Successfully triggered provisioning retry.');
+      queryClient.invalidateQueries({ queryKey: queryKeys.pendingRequests() });
+      queryClient.invalidateQueries({ queryKey: ['accessRequests', 'failed'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.groups() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.myAccess() });
+    },
+    onError: (err: any) => {
+      toast.error(err.message || 'Failed to retry provisioning.');
+    },
+  });
+
+  const dismissMutation = useMutation({
+    mutationFn: async (requestId: string) => {
+      const res = await apiClient.put('/api/access-requests/bulk/review', {
+        items: [{ requestId, status: 'REJECTED', note: 'Dismissed by administrator due to provisioning error.' }],
+      });
+      return res.data;
+    },
+    onSuccess: () => {
+      toast.success('Successfully dismissed the request.');
+      queryClient.invalidateQueries({ queryKey: queryKeys.pendingRequests() });
+      queryClient.invalidateQueries({ queryKey: ['accessRequests', 'failed'] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.groups() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.myAccess() });
+    },
+    onError: (err: any) => {
+      toast.error(err.message || 'Failed to dismiss request.');
+    },
+  });
+
   const accountCount = canApproveAccounts ? pendingUserCreations.length : 0;
   const zkCount = canReviewZk ? zkReviewRequests.length : 0;
   const secretsCount = canReviewSecrets ? secretsReviewRequests.length : 0;
@@ -108,13 +155,15 @@ export const PendingApprovals: React.FC = () => {
   const sectionsLoading =
     (canApproveAccounts && loadingAccounts) ||
     (canReviewZk && loadingZk) ||
-    (canReviewSecrets && loadingSecrets);
+    (canReviewSecrets && loadingSecrets) ||
+    loadingFailed;
   const nothingToReview =
     !sectionsLoading &&
     requests.length === 0 &&
     accountCount === 0 &&
     zkCount === 0 &&
-    secretsCount === 0;
+    secretsCount === 0 &&
+    failedRequests.length === 0;
 
   // Selection & custom notes state
   const [selectedRequests, setSelectedRequests] = useState<Record<string, boolean>>({});
@@ -573,6 +622,97 @@ export const PendingApprovals: React.FC = () => {
       {canReviewZk && <ZkChangeApprovals />}
       {canReviewSecrets && <SecretIngestionApprovals />}
       {canReviewSecrets && <SecretDriftPanel />}
+
+      {/* Failed Provisioning Retries Section */}
+      {failedRequests.length > 0 && (
+        <div style={{ marginTop: '36px' }}>
+          <SectionHeader
+            title="Failed Provisioning Retries"
+            icon={<Icons.AlertOctagon size={18} style={{ color: 'var(--status-rejected-text)' }} />}
+            meta={`${failedRequests.length} Provisioning Failure(s)`}
+          />
+          <div className="table-container">
+            <table className="hermes-table">
+              <thead>
+                <tr>
+                  <th>Requester</th>
+                  <th style={{ width: '120px' }}>Platform</th>
+                  <th>Requested Group</th>
+                  <th>Error Details</th>
+                  <th style={{ textAlign: 'right', width: '180px' }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {failedRequests.map((req) => (
+                  <tr key={req.id}>
+                    <td>
+                      <div style={{ fontWeight: 700 }}>{req.requesterName.replace('_', ' ')}</div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{req.requesterEmail}</div>
+                    </td>
+                    <td>
+                      <span className="badge badge-sm" style={{ textTransform: 'uppercase' }}>
+                        {req.group.platform}
+                      </span>
+                    </td>
+                    <td>
+                      <span
+                        style={{
+                          fontWeight: 700,
+                          color: req.group.color || 'var(--primary)',
+                          borderLeft: `3px solid ${req.group.color || 'var(--primary)'}`,
+                          paddingLeft: '8px',
+                        }}
+                      >
+                        {req.group.name}
+                      </span>
+                      {req.level && (
+                        <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, paddingLeft: '11px', marginTop: '2px' }}>
+                          {req.level.name}{req.level.permission ? ` · ${req.level.permission}` : ''}
+                        </div>
+                      )}
+                    </td>
+                    <td style={{ maxWidth: '300px', fontSize: '12px', color: 'var(--status-rejected-text)', fontWeight: 500 }}>
+                      {req.provisionError || 'Unknown provisioning error'}
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      <div style={{ display: 'inline-flex', gap: '8px', justifyContent: 'flex-end' }}>
+                        <button
+                          type="button"
+                          className="btn btn-outline btn-sm"
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                          disabled={retryMutation.isPending && retryMutation.variables === req.id}
+                          onClick={() => retryMutation.mutate(req.id)}
+                        >
+                          {retryMutation.isPending && retryMutation.variables === req.id ? (
+                            <Icons.Loader size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                          ) : (
+                            <Icons.RefreshCw size={14} />
+                          )}
+                          Retry
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-outline btn-danger-outline btn-sm"
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                          disabled={dismissMutation.isPending && dismissMutation.variables === req.id}
+                          onClick={() => dismissMutation.mutate(req.id)}
+                        >
+                          {dismissMutation.isPending && dismissMutation.variables === req.id ? (
+                            <Icons.Loader size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                          ) : (
+                            <Icons.XCircle size={14} />
+                          )}
+                          Dismiss
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
