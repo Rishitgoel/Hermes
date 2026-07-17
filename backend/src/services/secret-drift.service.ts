@@ -10,7 +10,6 @@ import {
   isSecretsFamilyPlatform,
   secretsFamilyPlatforms,
 } from './secret-ingestion.service';
-import notificationService from './notification.service';
 import logger from '../utils/logger';
 import { AuthenticatedUser } from '../middleware/auth.middleware';
 import { getManageableGroupIds } from '../utils/authz';
@@ -744,14 +743,13 @@ export class SecretDriftService {
       })),
     });
 
-    await notificationService.notifySecretDriftDetected(key, newlyDrifting);
     logger.warn(
       {
         platform: key,
         drifting: report.drifts.length,
         alerted: newlyDrifting.length,
       },
-      'Secret drift detected — admins notified',
+      'Secret drift detected — audit recorded',
     );
     return { drifting: report.drifts.length, alerted: newlyDrifting.length };
   }
