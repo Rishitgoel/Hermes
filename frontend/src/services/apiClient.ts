@@ -40,9 +40,12 @@ apiClient.interceptors.request.use(
     let token = kc?.token;
 
     // Fallback to localStorage mock token in simulation mode ONLY. Opt-in: the
-    // env var must be explicitly 'true' and we must not be in a production build.
+    // env var must be explicitly 'true', and we must not be in a production
+    // build UNLESS VITE_ALLOW_SIMULATION_IN_PROD is also explicitly set — see
+    // the matching gate in AuthContext.tsx.
     const useSimulation =
-      import.meta.env.VITE_KEYCLOAK_SIMULATION === 'true' && import.meta.env.MODE !== 'production';
+      import.meta.env.VITE_KEYCLOAK_SIMULATION === 'true' &&
+      (import.meta.env.MODE !== 'production' || import.meta.env.VITE_ALLOW_SIMULATION_IN_PROD === 'true');
     if (!token && useSimulation) {
       token = localStorage.getItem('hermes_mock_token');
     }

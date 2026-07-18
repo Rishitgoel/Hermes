@@ -94,7 +94,6 @@ export const Sidebar: React.FC = () => {
     <aside className="sidebar">
       {/* Logo Section */}
       <div className="logo-container">
-        <img src="/assets/logo.png" alt="Bachatt Logo" className="logo-img" />
         <span className="logo-text">HERMES</span>
       </div>
 

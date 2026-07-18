@@ -13,6 +13,10 @@ frontend/dist/
 .env.production
 !.env.example
 
+# Real deploy config (domain, basic-auth hash) — copy Caddyfile.example → Caddyfile.
+Caddyfile
+!Caddyfile.example
+
 # Logs
 *.log
 npm-debug.log*

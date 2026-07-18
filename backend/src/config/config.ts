@@ -51,8 +51,18 @@ export const config = {
 
   // ── Simulation Mode (Fixes #1 — SINGLE definition) ──
   get isSimulation() {
-    // Simulation is ON when explicitly set to 'true' AND not in production
-    return process.env.KEYCLOAK_SIMULATION === 'true' && !this.isProd;
+    // Simulation is ON when explicitly set to 'true' AND not in production —
+    // unless ALLOW_SIMULATION_IN_PROD is ALSO explicitly set to 'true'. That
+    // second flag is a deliberate, narrow opt-in for demo deployments that
+    // have no real Keycloak yet (auth stays fake; everything else — rate
+    // limiting, error-detail hiding, cron cadence — stays prod-hardened).
+    // Anyone who reaches the app gets a self-selected admin role — the
+    // deployment MUST sit behind its own outer gate (e.g. reverse-proxy
+    // Basic Auth) whenever this is on, since the app has no real login.
+    return (
+      process.env.KEYCLOAK_SIMULATION === 'true' &&
+      (!this.isProd || process.env.ALLOW_SIMULATION_IN_PROD === 'true')
+    );
   },
 
   // Read lazily via getters (NOT captured once at import). loadSecrets() injects
@@ -64,13 +74,13 @@ export const config = {
     get jwksUri() {
       return (
         process.env.KEYCLOAK_JWKS_URI ||
-        'https://keycloak.bachatt.app/realms/master/protocol/openid-connect/certs'
+        'https://keycloak.example.com/realms/master/protocol/openid-connect/certs'
       );
     },
     get issuer() {
       return (
         process.env.KEYCLOAK_ISSUER ||
-        'https://keycloak.bachatt.app/realms/master'
+        'https://keycloak.example.com/realms/master'
       );
     },
     get audience() {

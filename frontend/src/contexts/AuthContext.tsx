@@ -74,14 +74,20 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 // Setup simulation flags — opt-in only. A missing/typo'd env var must NOT silently
 // enable simulation (which would read the localStorage mock token as the bearer).
+// VITE_ALLOW_SIMULATION_IN_PROD is a deliberate, narrow override for demo
+// deployments with no real Keycloak yet — mirrors the backend's
+// ALLOW_SIMULATION_IN_PROD gate (see backend/src/config/config.ts). The
+// deployment MUST sit behind its own outer login (e.g. reverse-proxy Basic
+// Auth) whenever this is on, since the app itself has no real auth.
 const useSimulation =
-  import.meta.env.VITE_KEYCLOAK_SIMULATION === 'true' && import.meta.env.MODE !== 'production';
+  import.meta.env.VITE_KEYCLOAK_SIMULATION === 'true' &&
+  (import.meta.env.MODE !== 'production' || import.meta.env.VITE_ALLOW_SIMULATION_IN_PROD === 'true');
 
 // Keycloak client singleton (for live mode)
 let keycloakInstance: Keycloak | null = null;
 if (!useSimulation) {
   keycloakInstance = new Keycloak({
-    url: import.meta.env.VITE_KEYCLOAK_URL || 'https://keycloak.bachatt.app',
+    url: import.meta.env.VITE_KEYCLOAK_URL || 'https://keycloak.example.com',
     realm: import.meta.env.VITE_KEYCLOAK_REALM || 'master',
     clientId: import.meta.env.VITE_KEYCLOAK_CLIENT_ID || 'hermes-prod',
   });

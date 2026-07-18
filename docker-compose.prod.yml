@@ -1,0 +1,77 @@
+# Production deployment for a single box (e.g. one EC2 instance).
+#
+# This is deliberately smaller than docker-compose.yml (the local dev stack):
+# Redash and AWS IAM Identity Center are REAL external services here (your own
+# accounts), not self-hosted, so there's no redash/redis/zookeeper/keycloak
+# container to run — just Hermes itself (db + backend + frontend) behind Caddy.
+#
+# Usage (from the repo root, on the server):
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Required before first run:
+#   - backend/.env.production   (copy from backend/.env.production.example, fill in real values)
+#   - frontend/.env.production  (copy from frontend/.env.production.example, fill in real values)
+#   - Caddyfile                 (set your real domain — see Caddyfile.example)
+#   - CADDY_BASIC_AUTH_USER / CADDY_BASIC_AUTH_HASH in a .env file next to this compose file
+#     (bcrypt hash — generate with: docker run --rm caddy caddy hash-password)
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: hermes_postgres_prod
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-hermes_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:-hermes}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: always
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-hermes_user} -d ${POSTGRES_DB:-hermes}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # No host port published — only reachable from other containers on this network.
+
+  backend:
+    build:
+      context: ./backend
+    container_name: hermes_backend_prod
+    env_file:
+      - backend/.env.production
+    environment:
+      # Assembled here (not hardcoded in .env.production) so it always matches
+      # the postgres service above, whatever POSTGRES_* values are chosen.
+      DATABASE_URL_HERMES: postgresql://${POSTGRES_USER:-hermes_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-hermes}?schema=public&connection_limit=10&pool_timeout=30
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: always
+    # No host port published — only Caddy talks to this, over the compose network.
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: hermes_frontend_prod
+    restart: always
+    # No host port published — Caddy serves it.
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: hermes_caddy_prod
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend
+      - frontend
+    restart: always
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:

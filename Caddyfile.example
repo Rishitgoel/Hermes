@@ -1,0 +1,24 @@
+# Copy this to `Caddyfile` (gitignored) and set your real domain below.
+# Caddy gets TLS automatically from Let's Encrypt for any public domain —
+# including a free DuckDNS subdomain — as long as ports 80/443 reach this box.
+#
+# No auth gate here on purpose: every platform runs in simulation (see
+# backend/.env.production.example — ALLOW_SIMULATION_IN_PROD, all platforms
+# simulated), so there's no real credential or data behind this deployment.
+# It's a public demo. If you ever wire in a real integration again, put a
+# gate back in front before doing so — see git history for the Basic Auth +
+# X-Hermes-Gate setup this replaced.
+
+hermes-yourname.duckdns.org {
+	@apiPaths path /api/* /auth/* /health
+
+	handle @apiPaths {
+		reverse_proxy backend:8001
+	}
+
+	handle {
+		reverse_proxy frontend:80
+	}
+
+	encode gzip
+}

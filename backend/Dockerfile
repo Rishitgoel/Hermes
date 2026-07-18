@@ -28,6 +28,15 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/package.json ./package.json
+# Custom-output Prisma client (schema.prisma generator "client" → ../../generated/hermes,
+# i.e. backend/generated/hermes) lives outside node_modules, so it needs its own COPY —
+# dist/config/prisma.js requires it directly.
+COPY --from=builder /app/generated ./generated
+# TS source + tsconfig — small (~1.4MB), but needed so `npm run prisma:seed`
+# (ts-node prisma/hermes/seed.ts, which imports from ../../src/config/config)
+# actually works against a deployed image, not just local dev.
+COPY --from=builder /app/src ./src
+COPY --from=builder /app/tsconfig.json ./tsconfig.json
 
 EXPOSE 8001
 

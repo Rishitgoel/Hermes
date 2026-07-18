@@ -30,7 +30,9 @@ export function normalizePerms(perms: string): string {
 // In-process, stateful mock of the znode tree (path → ACL). Coherent within a
 // running backend (create node → add entry → read → remove all agree) and resets on
 // restart, exactly like the Redash/AWS sims. No users are seeded — every ZK identity
-// is minted by Hermes, so there are no pre-existing accounts to mock.
+// is minted by Hermes, so there are no pre-existing accounts to mock. It DOES seed a
+// handful of demo config znodes (below) so a fresh demo deploy has something to browse
+// and edit immediately, rather than an empty tree.
 
 interface SimNode {
   /** The znode's data payload (config management). Absent ⇒ the node has no data. */
@@ -38,6 +40,7 @@ interface SimNode {
 }
 
 const sim = {
+  seeded: false,
   nodes: new Map<string, SimNode>(), // path → node
 };
 
@@ -45,6 +48,41 @@ const sim = {
  *  per-path lock meaningful: two unlocked concurrent RMWs would clobber here). */
 function tick(): Promise<void> {
   return Promise.resolve();
+}
+
+/**
+ * Seeds a small demo znode tree on first use each process lifetime (mirrors
+ * `ensureSimSeeded` in aws-identity-center.service.ts / redash.service.ts).
+ * Re-runs on every restart since the sim store is in-memory and resets then —
+ * this keeps the "Config Management" / "Feature Flags" demo groups (seeded in
+ * prisma/hermes/seed.ts, externalGroupId /hermes/config#cdrw and
+ * /hermes/feature-flags#cdrw) non-empty across redeploys, not just once.
+ * Values are deliberately consistent with the demo ZookeeperChangeRequest rows
+ * the Prisma seed creates: max_retries/rate_limit_rps sit at their PRE-change
+ * values (those requests are still PENDING/APPLYING), while
+ * new_onboarding_flow already reflects its APPLIED outcome.
+ */
+function ensureSimSeeded(): void {
+  if (sim.seeded) {return;}
+  sim.seeded = true;
+  const seedNodes: Array<[string, string | undefined]> = [
+    ['/hermes', undefined],
+    ['/hermes/config', undefined],
+    ['/hermes/config/max_retries', '3'],
+    ['/hermes/config/rate_limit_rps', '50'],
+    ['/hermes/config/timeout_ms', '30000'],
+    ['/hermes/config/feature_toggle_ui', 'true'],
+    ['/hermes/feature-flags', undefined],
+    ['/hermes/feature-flags/new_onboarding_flow', 'true'],
+    ['/hermes/feature-flags/dark_mode_default', 'false'],
+    ['/hermes/feature-flags/checkout_v2', 'true'],
+    ['/hermes/feature-flags/experiments', undefined],
+    ['/hermes/feature-flags/experiments/pricing_test_a', 'control'],
+    ['/hermes/feature-flags/experiments/pricing_test_b', 'variant'],
+  ];
+  for (const [path, data] of seedNodes) {
+    sim.nodes.set(path, data !== undefined ? { data: Buffer.from(data, 'utf-8') } : {});
+  }
 }
 
 export class ZookeeperService {
@@ -282,6 +320,7 @@ export class ZookeeperService {
     const base = path.replace(/\/+$/, '') || '/';
     const prefix = base === '/' ? '/' : `${base}/`;
     if (this.isSimulation) {
+      ensureSimSeeded();
       await tick();
       return [...sim.nodes.keys()].filter((k) => k !== base && k.startsWith(prefix) && !this.isReservedPath(k));
     }
@@ -313,6 +352,7 @@ export class ZookeeperService {
 
   async ensureNode(path: string): Promise<void> {
     if (this.isSimulation) {
+      ensureSimSeeded();
       await tick();
       if (!sim.nodes.has(path)) {sim.nodes.set(path, {});}
       return;
@@ -355,6 +395,7 @@ export class ZookeeperService {
   /** Check if a znode exists. */
   async exists(path: string): Promise<boolean> {
     if (this.isSimulation) {
+      ensureSimSeeded();
       await tick();
       return sim.nodes.has(path);
     }
@@ -371,6 +412,7 @@ export class ZookeeperService {
   async deleteNode(path: string): Promise<void> {
     if (path === '/') {return;}
     if (this.isSimulation) {
+      ensureSimSeeded();
       await tick();
       // Mirror live ZooKeeper: `remove` refuses a non-empty node (NOT_EMPTY). Deleting a
       // parent here would orphan its children — a state real ZK can never reach — so we
@@ -411,6 +453,7 @@ export class ZookeeperService {
    *  data. Read-only ⇒ no path lock. */
   async getData(path: string): Promise<string | null> {
     if (this.isSimulation) {
+      ensureSimSeeded();
       await tick();
       const node = sim.nodes.get(path);
       return node?.data !== null && node?.data !== undefined ? node.data.toString('utf-8') : null;
@@ -435,6 +478,7 @@ export class ZookeeperService {
   async setData(path: string, data: string): Promise<void> {
     return this.withPathLock(path, async () => {
       if (this.isSimulation) {
+        ensureSimSeeded();
         await tick();
         const node = sim.nodes.get(path);
         if (!node) {throw new ExternalServiceError(`ZooKeeper setData failed for ${path}: node does not exist`);}
@@ -456,6 +500,7 @@ export class ZookeeperService {
   async getChildren(path: string): Promise<string[]> {
     const base = path.replace(/\/+$/, '') || '/';
     if (this.isSimulation) {
+      ensureSimSeeded();
       await tick();
       const prefix = base === '/' ? '/' : `${base}/`;
       const names = new Set<string>();
@@ -486,6 +531,7 @@ export class ZookeeperService {
    *  already creates parents). New nodes get an empty Hermes-managed ACL. */
   async createNodeRecursive(path: string): Promise<void> {
     if (this.isSimulation) {
+      ensureSimSeeded();
       await tick();
       const norm = path.replace(/\/+$/, '') || '/';
       if (norm === '/') {return;}
@@ -532,9 +578,12 @@ export class ZookeeperService {
 
   // ── Test-only ──────────────────────────────────────────────────────────────────────
 
-  /** Reset the in-process sim store. Test-only — never called in app code. */
+  /** Reset the in-process sim store. Test-only — never called in app code. Also
+   *  clears the `seeded` flag so tests get a genuinely empty tree, not the demo
+   *  znodes `ensureSimSeeded` plants for real deployments. */
   __resetSim(): void {
     sim.nodes.clear();
+    sim.seeded = false;
   }
 }
 
