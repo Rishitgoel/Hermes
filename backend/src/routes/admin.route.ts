@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { AdminController } from '../controllers/admin.controller';
 import { AdminManagementController } from '../controllers/admin-management.controller';
+import { NotificationSettingsController } from '../controllers/notification-settings.controller';
 import { authenticateToken, requireRole } from '../middleware/auth.middleware';
 
 const router = Router();
@@ -102,6 +103,40 @@ router.post('/user-access/disable-accounts', authenticateToken, adminMgmt('disab
 router.get('/settings', authenticateToken, adminMgmt('getSettings'));
 router.post('/settings', authenticateToken, adminMgmt('updateSettings'));
 
+// Notification settings — the global switchboard. Unlike the platform settings
+// above these are not platform-scoped, so they carry a blanket super-admin
+// role check (re-asserted in the controller).
+const notifySettings =
+  (method: keyof NotificationSettingsController) =>
+  (req: Request, res: Response, next: NextFunction) => {
+    const controller = new NotificationSettingsController(req, res, next);
+    (
+      controller[method] as (
+        req: Request,
+        res: Response,
+        next: NextFunction,
+      ) => Promise<void>
+    )(req, res, next).catch(next);
+  };
+
+router.get(
+  '/notification-settings',
+  authenticateToken,
+  requireRole(['hermes_super_admin']),
+  notifySettings('getSettings'),
+);
+router.post(
+  '/notification-settings',
+  authenticateToken,
+  requireRole(['hermes_super_admin']),
+  notifySettings('updateSetting'),
+);
+router.post(
+  '/notification-settings/test',
+  authenticateToken,
+  requireRole(['hermes_super_admin']),
+  notifySettings('sendTest'),
+);
 
 // Platform admins (super admin only — enforced in controller)
 router.get(

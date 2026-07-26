@@ -3,7 +3,10 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useNotifications, type Notification } from '../../contexts/NotificationContext';
 import { getPageTitle } from '../../lib/routeTitles';
-import { Bell, Moon, Sun, X } from 'lucide-react';
+import { commandPaletteShortcutLabel } from '../../lib/platform';
+import { getTheme, toggleTheme as toggleThemeGlobal, THEME_CHANGE_EVENT, type ThemeName } from '../../lib/theme';
+import { OPEN_COMMAND_PALETTE_EVENT } from '../common/CommandPalette';
+import { Bell, Moon, Search, Sun, X } from 'lucide-react';
 
 export const TopBar: React.FC = () => {
   const { user } = useAuth();
@@ -13,16 +16,15 @@ export const TopBar: React.FC = () => {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   // Theme lives on <html data-theme>, set pre-render in main.tsx; this state just mirrors it.
-  const [theme, setTheme] = useState<'light' | 'dark'>(
-    () => (document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'),
-  );
+  const [theme, setTheme] = useState<ThemeName>(getTheme);
 
-  const toggleTheme = () => {
-    const next = theme === 'dark' ? 'light' : 'dark';
-    document.documentElement.dataset.theme = next;
-    localStorage.setItem('hermes_theme', next);
-    setTheme(next);
-  };
+  // The command palette's "Toggle theme" action changes the theme independently of
+  // this button — listen so the icon here stays correct regardless of who triggered it.
+  useEffect(() => {
+    const onThemeChange = (e: Event) => setTheme((e as CustomEvent<ThemeName>).detail);
+    window.addEventListener(THEME_CHANGE_EVENT, onThemeChange);
+    return () => window.removeEventListener(THEME_CHANGE_EVENT, onThemeChange);
+  }, []);
 
   // Close dropdown on click outside
   useEffect(() => {
@@ -92,11 +94,23 @@ export const TopBar: React.FC = () => {
     <header className="topbar">
       <h2 className="topbar-title">{pageTitle}</h2>
 
+      <button
+        type="button"
+        className="topbar-search-trigger"
+        onClick={() => window.dispatchEvent(new Event(OPEN_COMMAND_PALETTE_EVENT))}
+        aria-label="Open command palette"
+        title="Jump to a page or group"
+      >
+        <Search size={15} />
+        <span>Search or jump to…</span>
+        <kbd>{commandPaletteShortcutLabel()}</kbd>
+      </button>
+
       <div className="topbar-actions">
         {/* Theme toggle */}
         <button
           className="bell-button"
-          onClick={toggleTheme}
+          onClick={toggleThemeGlobal}
           aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
           title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
         >

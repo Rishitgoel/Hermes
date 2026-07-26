@@ -36,10 +36,10 @@ import {
   updateGroupSchema,
 } from '../validations/group.validation';
 import logger from '../utils/logger';
+import config from '../config/config';
 import { getSecretsManagerService } from '../services/secrets-manager.service';
 import { assertSecretsPlatform, isSecretsFamilyPlatform } from '../services/secret-ingestion.service';
 import { RequestStatus, UserCreationStatus } from '../../generated/hermes';
-import config from '../config/config';
 
 const PLATFORM_ADMIN_MARKER = 'hermes_platform_admin';
 const GROUP_ADMIN_MARKER = 'hermes_group_admin';
@@ -2726,4 +2726,3 @@ export class AdminManagementController extends BaseController {
 }
 
 export default AdminManagementController;
-

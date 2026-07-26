@@ -19,6 +19,8 @@ import {
 
 interface UserAccessModalProps {
   onClose: () => void;
+  /** Pre-selects a user (e.g. jumped to directly from the command palette's people search). */
+  initialUser?: AdminUser | null;
 }
 
 function formatDate(d: string | null): string {
@@ -43,11 +45,11 @@ const ACCOUNT_STATUS_LABEL: Record<UserPlatformAccountRow['status'], string> = {
  *    (AWS — the backend auto-revokes, since a deleted account can never again
  *    validly back an active grant). See CLAUDE.md's Offboarding section.
  */
-export const UserAccessModal: React.FC<UserAccessModalProps> = ({ onClose }) => {
+export const UserAccessModal: React.FC<UserAccessModalProps> = ({ onClose, initialUser = null }) => {
   const toast = useToast();
   const queryClient = useQueryClient();
 
-  const [selectedUser, setSelectedUser] = useState<AdminUser | null>(null);
+  const [selectedUser, setSelectedUser] = useState<AdminUser | null>(initialUser);
   const [reason, setReason] = useState('');
 
   // ── Access grants (revoke) ────────────────────────────────────────────────

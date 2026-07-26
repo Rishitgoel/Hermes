@@ -21,6 +21,15 @@ import {
   ExternalServiceError,
   NotFoundError,
 } from '../utils/errors';
+import {
+  SecretStore,
+  SecretsInstanceConfig,
+  SecretScopePattern,
+  parseSecretNames as sharedParseSecretNames,
+  parseScopePatterns as sharedParseScopePatterns,
+  matchesPattern as sharedMatchesPattern,
+} from './secret-store.interface';
+import { KeyVaultService } from './key-vault.service';
 
 /**
  * In-process, stateful simulation store for testing secret ingestion offline.
@@ -33,18 +42,14 @@ interface SimSecret {
   values: Record<string, string>;
 }
 
-/** Connection details for one Secrets Manager instance (prod, sandbox, ...). */
-export interface SecretsInstanceConfig {
-  /** Instance / provisioning-registry platform key, e.g. "secrets" or "secrets-sandbox". */
-  key: string;
-  /** These mirror config.secretsInstances[*] getters and are read lazily (secrets may load post-import). */
-  readonly region: string | undefined;
-  readonly endpoint: string | undefined;
-  readonly isSimulation: boolean;
-  readonly accessKeyId: string | undefined;
-  readonly secretAccessKey: string | undefined;
-  readonly profile: string | undefined;
-}
+// The instance-config and scope-pattern types now live in secret-store.interface.ts so the Azure
+// store can share them without importing this module. Re-exported here because existing callers
+// (secret-ingestion.service.ts, the provisioner, tests) import them from this path.
+export type {
+  SecretsInstanceConfig,
+  SecretScopePattern,
+  SecretStore,
+} from './secret-store.interface';
 
 /** Fixed extra secret names each simulated instance surfaces from listAllAwsSecrets (beyond the seeded ones). */
 const SIM_EXTRA_SECRETS: Record<string, string[]> = {
@@ -63,20 +68,6 @@ const SIM_EXTRA_SECRETS: Record<string, string[]> = {
     'sandbox/common/api-keys',
   ],
 };
-
-/**
- * A single line in a secrets group's externalGroupId, classified for scope resolution.
- * - `all`    → the literal `*`; matches every secret in the account.
- * - `prefix` → a trailing-`*` pattern (e.g. `investments*`); matches names starting with the prefix.
- * - `exact`  → a concrete secret name (the original, back-compatible form).
- *
- * Wildcard patterns are resolved LIVE against ListSecrets at read time, so newly-created AWS
- * secrets that match are automatically in scope without editing the group.
- */
-export type SecretScopePattern =
-  | { kind: 'all'; raw: string }
-  | { kind: 'prefix'; prefix: string; raw: string }
-  | { kind: 'exact'; name: string; raw: string };
 
 /**
  * Custom credential provider for a Secrets Manager Client.
@@ -138,7 +129,7 @@ export function getSecretsManagerProvider(
   );
 }
 
-export class SecretsManagerService {
+export class SecretsManagerService implements SecretStore {
   private client: SecretsManagerClient | null = null;
   private readonly instance: SecretsInstanceConfig;
 
@@ -250,23 +241,13 @@ export class SecretsManagerService {
     throw new ExternalServiceError(`Secrets Manager error during ${op}: ${msg}`, ctx);
   }
 
-  /**
-   * Parse newline-separated secret names from a group's externalGroupId.
-   */
+  // Scope-pattern parsing is provider-agnostic — the shared implementations live in
+  // secret-store.interface.ts so the AWS and Azure stores can't drift apart. Kept as methods
+  // because callers reach them as `svc.parseScopePatterns(...)`.
+
+  /** Parse newline-separated secret names from a group's externalGroupId. */
   parseSecretNames(externalGroupId: string): string[] {
-    const names = new Set<string>();
-    for (const line of (externalGroupId || '').split(/\r?\n/)) {
-      const name = line.trim();
-      if (name) {
-        names.add(name);
-      }
-    }
-    if (names.size === 0) {
-      throw new ValidationError(
-        `Invalid Secret Ingestion group id "${externalGroupId}" — expected at least one AWS secret name, one per line.`,
-      );
-    }
-    return [...names];
+    return sharedParseSecretNames(externalGroupId);
   }
 
   /**
@@ -274,41 +255,12 @@ export class SecretsManagerService {
    * `*` = every secret; `prefix*` = names starting with `prefix`; anything else = an exact name.
    */
   parseScopePatterns(externalGroupId: string): SecretScopePattern[] {
-    const patterns: SecretScopePattern[] = [];
-    const seen = new Set<string>();
-    for (const line of (externalGroupId || '').split(/\r?\n/)) {
-      const raw = line.trim();
-      if (!raw || seen.has(raw)) {
-        continue;
-      }
-      seen.add(raw);
-      if (raw === '*') {
-        patterns.push({ kind: 'all', raw });
-      } else if (raw.endsWith('*')) {
-        patterns.push({ kind: 'prefix', prefix: raw.slice(0, -1), raw });
-      } else {
-        patterns.push({ kind: 'exact', name: raw, raw });
-      }
-    }
-    if (patterns.length === 0) {
-      throw new ValidationError(
-        `Invalid Secret Ingestion group id "${externalGroupId}" — expected at least one AWS secret name or wildcard pattern, one per line.`,
-      );
-    }
-    return patterns;
+    return sharedParseScopePatterns(externalGroupId);
   }
 
   /** Whether a resolved secret name is covered by a scope pattern (case-insensitive). */
   matchesPattern(pattern: SecretScopePattern, secretName: string): boolean {
-    const name = secretName.toLowerCase();
-    switch (pattern.kind) {
-      case 'all':
-        return true;
-      case 'prefix':
-        return name.startsWith(pattern.prefix.toLowerCase());
-      case 'exact':
-        return pattern.name.toLowerCase() === name;
-    }
+    return sharedMatchesPattern(pattern, secretName);
   }
 
   /**
@@ -374,8 +326,15 @@ export class SecretsManagerService {
   /**
    * Internal helper to fetch the raw key-value map of a secret.
    * Returns null if the secret does not exist.
+   *
+   * The `keys` narrowing hint from {@link SecretStore} is accepted but ignored here: a single
+   * GetSecretValue already returns the whole blob, so filtering would cost a call, not save one.
+   * Azure needs it (one GetSecret per key) — see key-vault.service.ts.
    */
-  async getSecretMap(name: string): Promise<Record<string, string> | null> {
+  async getSecretMap(
+    name: string,
+    _keys?: string[],
+  ): Promise<Record<string, string> | null> {
     if (this.isSimulation) {
       this.ensureSimSeeded();
       const secret = this.sim.secrets.get(name);
@@ -494,10 +453,15 @@ export class SecretsManagerService {
     }
   }
 
+  /** @deprecated AWS-flavoured alias for {@link listAllSecrets}; kept for existing call sites. */
+  async listAllAwsSecrets(): Promise<string[]> {
+    return this.listAllSecrets();
+  }
+
   /**
    * List all secrets in the AWS account.
    */
-  async listAllAwsSecrets(): Promise<string[]> {
+  async listAllSecrets(): Promise<string[]> {
     if (this.isSimulation) {
       this.ensureSimSeeded();
       const extras = SIM_EXTRA_SECRETS[this.instance.key] ?? SIM_EXTRA_SECRETS.secrets;
@@ -574,9 +538,14 @@ export class SecretsManagerService {
  * The prod instance ("secrets") is the exported singleton below, so callers (and tests that
  * spy on it) resolve to the same object.
  */
-const serviceInstances = new Map<string, SecretsManagerService>();
+const serviceInstances = new Map<string, SecretStore>();
 
-export function getSecretsManagerService(platform: string): SecretsManagerService {
+/**
+ * Returns the {@link SecretStore} for a Secret Ingestion platform key, choosing the implementation
+ * from the instance's `provider` ('aws' ⇒ Secrets Manager, 'azure' ⇒ Key Vault; absent ⇒ 'aws' so
+ * every pre-Azure instance keeps its behaviour).
+ */
+export function getSecretsManagerService(platform: string): SecretStore {
   const key = platform.toLowerCase();
   const cached = serviceInstances.get(key);
   if (cached) {return cached;}
@@ -586,10 +555,30 @@ export function getSecretsManagerService(platform: string): SecretsManagerServic
       `No Secret Ingestion instance is configured for platform "${platform}".`,
     );
   }
-  const svc = new SecretsManagerService(cfg);
+  const svc: SecretStore =
+    cfg.provider === 'azure'
+      ? new KeyVaultService(cfg)
+      : new SecretsManagerService(cfg);
   serviceInstances.set(key, svc);
   return svc;
 }
 
 export const secretsManagerService = getSecretsManagerService('secrets');
 export default secretsManagerService;
+
+/**
+ * TEST-ONLY escape hatch for a real ordering hazard: several modules construct a
+ * {@link PlatformAdapter}-family singleton at IMPORT time (`provisioningRegistry`,
+ * `secretsProvisioner` here, `infraRepoSyncService`), and those eagerly call
+ * `getSecretsManagerService` for every configured instance — including ones a test file expects
+ * to control via its own `process.env.SECRETS_AZURE_*` overrides. Whichever import happens to
+ * pull one of those singletons in FIRST permanently freezes this map's entry with whatever
+ * `config.secretsInstances` produced at THAT moment, which can run before a test file's own
+ * top-level env assignments take effect (a real, observed race — not exclusive to Vitest's
+ * transform vs. Node's). Call this in a `beforeEach`/before creating requests, AFTER setting the
+ * env vars the test needs, so the next `getSecretsManagerService` call re-reads `config` fresh.
+ * Never call this from production code — it exists solely to undo test-order nondeterminism.
+ */
+export function __resetSecretsManagerServiceCacheForTest(): void {
+  serviceInstances.clear();
+}

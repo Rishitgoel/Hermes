@@ -202,6 +202,7 @@ export const GroupSettingsTab: React.FC<GroupSettingsTabProps> = ({ group, onDel
               assignedScopes.map((scope) => (
                 <span
                   key={scope}
+                  title={scope}
                   className={`admin-secrets-assigned-chip ${isPatternScope(scope) ? 'is-pattern' : 'is-literal'}`}
                 >
                   {scope === '*' ? 'Every secret (*)' : scope}
@@ -449,8 +450,8 @@ export const GroupSettingsTab: React.FC<GroupSettingsTabProps> = ({ group, onDel
                             );
                           }}
                         />
-                        <span className="admin-secrets-label" style={{ display: 'flex', alignItems: 'center', gap: '6px', width: '100%' }}>
-                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{name}</span>
+                        <span className="admin-secrets-label" title={name} style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', width: '100%' }}>
+                          <span style={{ wordBreak: 'break-all', whiteSpace: 'normal', lineHeight: 1.35, flex: 1 }}>{name}</span>
                           {!isPresentInAws && (
                             <span className="admin-secrets-not-in-aws-badge" title="Selected here but no longer found in AWS Secrets Manager">
                               Not in AWS

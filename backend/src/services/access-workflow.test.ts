@@ -4,7 +4,12 @@ import { accessWorkflowService } from './access-workflow.service';
 import { userCreationService } from './user-creation.service';
 import provisioningRegistry from './provisioning.registry';
 import { AccessDuration, RequestStatus, UserCreationStatus } from '../../generated/hermes';
-import { ConflictError, UserNotApprovedError } from '../utils/errors';
+import {
+  ConflictError,
+  UserNotApprovedError,
+  NotFoundError,
+  ValidationError,
+} from '../utils/errors';
 import config from '../config/config';
   
 describe('AccessWorkflowService Integration Tests', () => {
@@ -642,6 +647,138 @@ describe('AccessWorkflowService Integration Tests', () => {
     });
   });
 
+
+  describe('Withdrawing an open request', () => {
+    let group: any;
+
+    beforeEach(async () => {
+      group = await prisma.group.create({
+        data: {
+          name: 'Withdrawable Group',
+          slug: 'withdrawable',
+          description: 'For withdrawal tests',
+          platform: 'redash',
+          externalGroupId: 'ext-grp-withdraw',
+        },
+      });
+      await prisma.userCreationRequest.create({
+        data: {
+          userId: testUser.id,
+          userName: testUser.username,
+          userEmail: testUser.email,
+          platform: 'redash',
+          status: UserCreationStatus.COMPLETED,
+        },
+      });
+    });
+
+    it('marks a PENDING request WITHDRAWN, records no reviewer, and audits the requester', async () => {
+      const req = await accessWorkflowService.createRequest(
+        testUser,
+        group.id,
+        'Please grant me access',
+        AccessDuration.ONE_DAY,
+      );
+
+      await accessWorkflowService.withdrawRequest(req.id, testUser, 'No longer needed');
+
+      const row = await prisma.accessRequest.findUnique({ where: { id: req.id } });
+      expect(row?.status).toBe(RequestStatus.WITHDRAWN);
+      expect(row?.reviewNote).toBe('No longer needed');
+      // Nobody reviewed it — a withdrawal must never look like an admin decision.
+      expect(row?.reviewerId).toBeNull();
+      expect(row?.reviewerName).toBeNull();
+
+      const audit = await prisma.auditEntry.findFirst({
+        where: { action: 'REQUEST_WITHDRAWN', accessRequestId: req.id },
+      });
+      expect(audit?.performerId).toBe(testUser.id);
+    });
+
+    it('frees the one-open-request-per-group index so the group can be requested again', async () => {
+      const first = await accessWorkflowService.createRequest(
+        testUser,
+        group.id,
+        'First attempt at access',
+        AccessDuration.ONE_DAY,
+      );
+      // Sanity: while it's open, a second request is refused.
+      await expect(
+        accessWorkflowService.createRequest(
+          testUser,
+          group.id,
+          'Second attempt at access',
+          AccessDuration.ONE_DAY,
+        ),
+      ).rejects.toThrow(ConflictError);
+
+      await accessWorkflowService.withdrawRequest(first.id, testUser);
+
+      // This is the whole point of withdrawal — it must not hit the partial unique index.
+      const second = await accessWorkflowService.createRequest(
+        testUser,
+        group.id,
+        'Second attempt at access',
+        AccessDuration.ONE_DAY,
+      );
+      expect(second.status).toBe(RequestStatus.PENDING);
+    });
+
+    it('withdraws a WAITING_FOR_SETUP request (approved but never provisioned)', async () => {
+      // Account approved but not yet COMPLETED → approval queues instead of provisioning.
+      await prisma.userCreationRequest.update({
+        where: { userId_platform: { userId: testUser.id, platform: 'redash' } },
+        data: { status: UserCreationStatus.APPROVED },
+      });
+
+      const req = await accessWorkflowService.createRequest(
+        testUser,
+        group.id,
+        'Queued behind account setup',
+        AccessDuration.ONE_DAY,
+      );
+      await accessWorkflowService.reviewRequest(req.id, adminUser, 'APPROVED');
+      const queued = await prisma.accessRequest.findUnique({ where: { id: req.id } });
+      expect(queued?.status).toBe(RequestStatus.WAITING_FOR_SETUP);
+
+      await accessWorkflowService.withdrawRequest(req.id, testUser);
+      const row = await prisma.accessRequest.findUnique({ where: { id: req.id } });
+      expect(row?.status).toBe(RequestStatus.WITHDRAWN);
+    });
+
+    it('refuses to withdraw someone else\'s request, and does not reveal that it exists', async () => {
+      const req = await accessWorkflowService.createRequest(
+        testUser,
+        group.id,
+        'My own request here',
+        AccessDuration.ONE_DAY,
+      );
+
+      await expect(
+        accessWorkflowService.withdrawRequest(req.id, {
+          id: 'usr-someone-else',
+          username: 'other.user',
+        }),
+      ).rejects.toThrow(NotFoundError);
+
+      const row = await prisma.accessRequest.findUnique({ where: { id: req.id } });
+      expect(row?.status).toBe(RequestStatus.PENDING);
+    });
+
+    it('refuses to withdraw a request that is already provisioned', async () => {
+      const req = await accessWorkflowService.createRequest(
+        testUser,
+        group.id,
+        'Will be approved',
+        AccessDuration.ONE_DAY,
+      );
+      await accessWorkflowService.reviewRequest(req.id, adminUser, 'APPROVED');
+
+      await expect(
+        accessWorkflowService.withdrawRequest(req.id, testUser),
+      ).rejects.toThrow(ValidationError);
+    });
+  });
 
   describe('Access Renewal (extension) flows', () => {
     let group: any;

@@ -1,10 +1,28 @@
 import apiClient from "../apiClient";
 import { fetchPlatforms } from "./platforms";
 
-/** One Secret Ingestion instance (AWS account) as offered by the prod/sandbox chooser. */
+/**
+ * Derive the env-var name a Key Vault secret is exposed as in its Helm manifest — mirrors the
+ * backend deriveEnvVar() (secret-store.interface.ts). Drop the leading `<service>-` segment,
+ * uppercase, dashes → underscores: `orbit-kfin-username` → `KFIN_USERNAME`.
+ *
+ * Only ever a PREFILL — the requester can overwrite it, and azure/tolgee is a live counter-example
+ * (`tolgee-db-password` → `SPRING_DATASOURCE_PASSWORD`) of a mapping this rule cannot predict.
+ */
+export const deriveEnvVar = (objectName: string): string => {
+  const trimmed = (objectName || "").trim();
+  if (!trimmed) return "";
+  const parts = trimmed.split("-");
+  const body = parts.length > 1 ? parts.slice(1) : parts;
+  return body.join("_").replace(/[^a-zA-Z0-9_]/g, "_").toUpperCase();
+};
+
+/** One Secret Ingestion instance (AWS account or Azure vault) as offered by the instance chooser. */
 export interface SecretsInstance {
   key: string;
   label: string;
+  /** "azure" ⇒ Key Vault, which needs an env-var name per key (see AZURE_PROVIDER usage). */
+  provider?: string | null;
 }
 
 /**
@@ -16,7 +34,7 @@ export const listSecretsInstances = async (): Promise<SecretsInstance[]> => {
   return (
     platforms
       .filter((p) => p.family === "secrets")
-      .map((p) => ({ key: p.key, label: p.label || p.displayName }))
+      .map((p) => ({ key: p.key, label: p.label || p.displayName, provider: p.provider ?? null }))
       // Prod ("secrets") first, then the rest alphabetically for a stable chooser order.
       .sort((a, b) =>
         a.key === "secrets"
@@ -45,6 +63,12 @@ export interface SecretIngestionEntry {
   key: string;
   /** null once the request is terminal — values are redacted server-side. */
   value: string | null;
+  /**
+   * Azure only: the env var this key is exposed as in the Helm manifest
+   * (`secretsStore.mappings[].key`). AWS has no equivalent — there the key name IS the env var.
+   * Omitted ⇒ the backend derives it from the key name.
+   */
+  envVar?: string;
   decision?: "APPROVED" | "REJECTED" | null;
   applied?: boolean;
   error?: string | null;
@@ -62,9 +86,10 @@ export type SecretIngestionStatus =
   | "APPLIED"
   | "PARTIALLY_APPLIED"
   | "APPLY_FAILED"
-  | "REJECTED";
+  | "REJECTED"
+  | "WITHDRAWN";
 
-export type InfraManifestFormat = "helm-values" | "spc";
+export type InfraManifestFormat = "helm-values" | "spc" | "azure-values";
 
 /** A manifest the auto-scan found, with the keys a request would add to it (compose preview). */
 export interface InfraTargetPreview {
@@ -134,7 +159,7 @@ export interface SecretIngestionRequest {
 export interface IngestionCartItem {
   secretName: string;
   justification?: string;
-  entries: { key: string; value: string }[];
+  entries: { key: string; value: string; envVar?: string }[];
   infraTargets?: InfraTargetSelection[];
 }
 
@@ -182,7 +207,7 @@ export const previewInfraTargets = (
 export const submitIngestionRequest = (payload: {
   secretName: string;
   justification?: string;
-  entries: { key: string; value: string }[];
+  entries: { key: string; value: string; envVar?: string }[];
   infraTargets?: InfraTargetSelection[];
   platform?: string;
 }): Promise<SecretIngestionRequest> =>
@@ -207,6 +232,16 @@ export const listIngestionRequests = (
     .get("/api/secrets/requests", {
       params: { scope, ...(platform ? { platform } : {}) },
     })
+    .then((r) => r.data);
+
+/** Requester pulls back their own PENDING request. Also closes the deployment PR that was
+ *  opened at submit time (server-side, best-effort). Rejected in any other status. */
+export const withdrawIngestionRequest = (
+  id: string,
+  reason?: string,
+): Promise<SecretIngestionRequest> =>
+  apiClient
+    .post(`/api/secrets/requests/${id}/withdraw`, reason ? { reason } : {})
     .then((r) => r.data);
 
 export const reviewIngestionRequest = (

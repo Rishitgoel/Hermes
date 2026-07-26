@@ -309,7 +309,7 @@ export const GroupFormModal: React.FC<GroupFormModalProps> = ({
                               );
                             }}
                           />
-                          <span className="admin-secrets-label">{name}</span>
+                          <span className="admin-secrets-label" title={name}>{name}</span>
                         </label>
                       );
                     });

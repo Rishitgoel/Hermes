@@ -8,6 +8,7 @@ import {
   renewRequestSchema,
   createRequestsBulkSchema,
   reviewRequestsBulkSchema,
+  withdrawRequestSchema,
 } from '../validations/access-request.validation';
 import { RequestStatus, Prisma } from '../../generated/hermes';
 import { AuthorizationError, NotFoundError } from '../utils/errors';
@@ -370,6 +371,39 @@ export class AccessRequestController extends BaseController {
       this.sendResponse(updatedRequest, `Access request reviewed: ${status}`);
     } catch (error) {
       this.handleError(error, 'Failed to review access request');
+    }
+  }
+
+  // POST /api/access-requests/:id/withdraw
+  // Requester pulls back their own still-open request. Ownership is enforced in the
+  // service (it 404s a request the caller didn't file), so there is no admin check here
+  // — withdrawal is deliberately NOT an admin capability: an admin ending someone
+  // else's request is a rejection, and it already has its own audited path.
+  async withdrawRequest(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      const validated = this.validateWithZod(
+        withdrawRequestSchema,
+        this.req.body ?? {},
+      );
+      if (!validated.success) {return;}
+
+      const userId = this.getUserId();
+      if (!userId) {return;}
+
+      const id = this.req.params.id as string;
+      const updated = await accessWorkflowService.withdrawRequest(
+        id,
+        { id: userId, username: this.user!.username },
+        validated.data.reason,
+      );
+
+      this.sendResponse(updated, 'Request withdrawn');
+    } catch (error) {
+      this.handleError(error, 'Failed to withdraw access request');
     }
   }
 

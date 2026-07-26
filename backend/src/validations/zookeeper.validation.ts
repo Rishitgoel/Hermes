@@ -41,6 +41,15 @@ export const submitZkChangeSchema = z.object({
     ),
 });
 
+// Requester pulling back their own PENDING request. Reason is optional — it exists only so
+// the audit row can record why; a user owes no justification for their own withdrawal.
+export const withdrawZkChangeSchema = z.object({
+  reason: z
+    .string()
+    .max(250, 'Reason must not exceed 250 characters')
+    .optional(),
+});
+
 // Per-change decisions (git-style): each change is approved or rejected independently.
 export const reviewZkChangeSchema = z.object({
   decisions: z

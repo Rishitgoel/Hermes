@@ -15,6 +15,16 @@ process.env.EMAIL_SIMULATION = 'true';
 process.env.SLACK_SIMULATION = 'true';
 process.env.SECRETS_INGESTION_SIMULATION = 'true';
 process.env.INFRA_REPO_SIMULATION = 'true';
+// Force simulation for the Azure Key Vault instance globally, same as every other integration
+// above. Without this, real credentials in a dev .env (SECRETS_AZURE_SIMULATION=false +
+// SECRETS_AZURE_SUBSCRIPTION_ID) leak into whichever module first triggers an eager singleton
+// (provisioningRegistry, secretsManagerService, secretsProvisioner — all constructed once at
+// import time) — and that first construction can race ahead of a test file's own per-file
+// process.env overrides, permanently caching a live, non-simulated KeyVaultService for the rest
+// of the run. Individual test files still set their own SECRETS_AZURE_* env vars for local
+// behavior (vault names, provider details); this only guarantees no test run ever depends on
+// live Azure credentials, matching AWS/Redash/ZooKeeper's existing guarantee above.
+process.env.SECRETS_AZURE_SIMULATION = 'true';
 process.env.NODE_ENV = 'test';
 
 // 2. Provision the schema on the EPHEMERAL test database only.

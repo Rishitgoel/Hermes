@@ -4,6 +4,7 @@ import {
   SecretScopePattern,
   getSecretsManagerService,
 } from './secrets-manager.service';
+import { PartialWriteError } from './secret-store.interface';
 import {
   InfraSyncResult,
   SelectedTarget,
@@ -14,7 +15,7 @@ import {
 import eventBus from './event-bus';
 import config from '../config/config';
 import logger from '../utils/logger';
-import { encrypt, decrypt } from '../utils/crypto';
+import { encrypt, decrypt, isDecryptionFailure } from '../utils/crypto';
 import { AuthenticatedUser } from '../middleware/auth.middleware';
 import { getManageableGroupIds } from '../utils/authz';
 import {
@@ -90,6 +91,13 @@ export type IngestionDecision = 'APPROVED' | 'REJECTED';
 export interface IngestionEntry {
   key: string;
   value: string | null;
+  /**
+   * Azure only: the env var this key is exposed as in the Helm manifest
+   * (`secretsStore.mappings[].key`). AWS needs none — there the key name IS the env var.
+   * Rides along in the existing `entries` Json column (no schema change) and is passed to the
+   * manifest editor as `keyEnvVars`; absent ⇒ derived from the key name (see deriveEnvVar).
+   */
+  envVar?: string;
   decision?: IngestionDecision | null;
   applied?: boolean;
   error?: string | null;
@@ -100,6 +108,26 @@ export interface IngestionEntry {
    * determined (e.g. the secret's current payload isn't key-value JSON).
    */
   previousValue?: string | null;
+}
+
+/**
+ * Collect the requester-supplied env-var names off a request's entries, for the manifest editor's
+ * `keyEnvVars`. Only Azure manifests consume it (`secretsStore.mappings[].key`); the AWS editors
+ * ignore it, and any key without one falls back to deriveEnvVar(). Returns undefined when nothing
+ * was supplied so the AWS path stays byte-identical to before.
+ *
+ * Lives here (next to {@link IngestionEntry}) rather than in event-listeners because BOTH the
+ * reviewed-event listener and retryInfraMerge need it — and every path that omits it silently
+ * rewrites correct `mappings[].key` lines back to derived guesses.
+ */
+export function envVarsOfEntries(entries: unknown): Record<string, string> | undefined {
+  const out: Record<string, string> = {};
+  for (const e of (entries as any[]) || []) {
+    if (e?.key && typeof e.envVar === 'string' && e.envVar.trim()) {
+      out[e.key] = e.envVar.trim();
+    }
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 export interface SecretTarget {
@@ -116,12 +144,12 @@ interface ScopedPattern {
 
 export class SecretIngestionService {
   private decryptRow<T extends { entries: unknown }>(row: T): T {
-    if (!row) return row;
+    if (!row) {return row;}
     const entries = ((row.entries as unknown as IngestionEntry[]) ?? []).map(
       e => ({
         ...e,
         value: decrypt(e.value) ?? null,
-      })
+      }),
     );
     return { ...row, entries: entries as any };
   }
@@ -130,10 +158,22 @@ export class SecretIngestionService {
     return rows.map(r => this.decryptRow(r));
   }
 
-  private encryptEntries(entries: IngestionEntry[]): IngestionEntry[] {
+  /**
+   * Re-encrypts decrypted entries for storage. `stored` is the row's original (still-encrypted)
+   * entries: any value that failed to decrypt is written back as its original ciphertext rather
+   * than as decrypt()'s placeholder, so a key/DB problem stays recoverable once the right
+   * DB_ENCRYPTION_KEY is restored instead of being overwritten with an unrecoverable string.
+   */
+  private encryptEntries(
+    entries: IngestionEntry[],
+    stored?: IngestionEntry[],
+  ): IngestionEntry[] {
+    const storedByKey = new Map((stored ?? []).map(e => [e.key, e.value]));
     return entries.map(e => ({
       ...e,
-      value: encrypt(e.value) ?? null,
+      value: isDecryptionFailure(e.value)
+        ? (storedByKey.get(e.key) ?? null)
+        : (encrypt(e.value) ?? null),
     }));
   }
 
@@ -401,7 +441,7 @@ export class SecretIngestionService {
   async createIngestionRequest(opts: {
     requester: AuthenticatedUser;
     secretName: string;
-    entries: { key: string; value: string }[];
+    entries: { key: string; value: string; envVar?: string }[];
     justification?: string;
     infraTargets?: SelectedTarget[];
     platform?: string;
@@ -428,6 +468,17 @@ export class SecretIngestionService {
     // names are case-sensitive, so writing the client-supplied casing could create a
     // sibling secret instead of matching the one the group actually grants.
     const secretName = owner.secretName;
+
+    // Reject a key the target provider itself can't accept BEFORE the row is created — the infra
+    // PR is opened off this request, so letting an invalid name through means a manifest edit is
+    // written for a key that will fail at approval and can never exist. No-op for AWS, which has
+    // no key-name rule of its own.
+    const store = getSecretsManagerService(platform);
+    if (store.validateKeyName) {
+      for (const e of opts.entries) {
+        store.validateKeyName(e.key.trim());
+      }
+    }
 
     // The requester's chosen manifest files (from the compose preview). An explicit empty
     // array is preserved (it means "no files → no PR", e.g. an update-only request) and is
@@ -460,6 +511,8 @@ export class SecretIngestionService {
         entries: entries.map(e => ({
           key: e.key.trim(),
           value: encrypt(e.value) ?? null,
+          // Azure only; omitted entirely when absent so AWS rows keep their existing shape.
+          ...(e.envVar?.trim() ? { envVar: e.envVar.trim() } : {}),
           decision: null,
           applied: false,
         })) as any,
@@ -517,7 +570,7 @@ export class SecretIngestionService {
     platform?: string;
     secrets: {
       secretName: string;
-      entries: { key: string; value: string }[];
+      entries: { key: string; value: string; envVar?: string }[];
       justification?: string;
       infraTargets?: SelectedTarget[];
     }[];
@@ -689,15 +742,38 @@ export class SecretIngestionService {
     // different AWS accounts, so each must be read from its own SecretsManagerService.
     const keyOf = (r: { platform: string; secretName: string }) =>
       `${r.platform} ${r.secretName}`;
+    // Which keys each (platform, secretName) actually needs: the UNION across every row sharing
+    // it, since one read serves them all. Only these are ever surfaced as `previousValue`, and an
+    // Azure vault costs one GetSecret PER key — so passing the hint turns a whole-vault read (one
+    // call per secret in the vault, on every render of the approvals queue) into a handful. AWS
+    // ignores it: its single GetSecretValue already returns the whole blob.
+    const wantedByKey = new Map<string, Set<string>>();
+    for (const r of rows) {
+      const set = wantedByKey.get(keyOf(r)) ?? new Set<string>();
+      for (const e of (r.entries as unknown as IngestionEntry[]) ?? []) {
+        if (e?.key) {
+          set.add(e.key);
+        }
+      }
+      wantedByKey.set(keyOf(r), set);
+    }
     const mapByKey = new Map<string, Record<string, string> | null>();
     const distinct = [...new Map(rows.map(r => [keyOf(r), r])).values()];
     await Promise.all(
       distinct.map(async r => {
+        const wanted = [...(wantedByKey.get(keyOf(r)) ?? [])];
+        // No entries ⇒ nothing to hydrate. Skip rather than pass an empty list, which the stores
+        // read as "no narrowing" and would answer with a full read.
+        if (wanted.length === 0) {
+          mapByKey.set(keyOf(r), {});
+          return;
+        }
         try {
           mapByKey.set(
             keyOf(r),
             await getSecretsManagerService(r.platform).getSecretMap(
               r.secretName,
+              wanted,
             ),
           );
         } catch (err: any) {
@@ -752,6 +828,101 @@ export class SecretIngestionService {
   }
 
   /**
+   * Withdraw one's OWN ingestion request while it is still PENDING.
+   *
+   * PENDING only — narrower than the review path, which also accepts APPLY_FAILED. By
+   * APPLY_FAILED some approved keys may already be live in the secret store, so a
+   * requester withdrawing there would bury half-applied writes behind a status that
+   * claims nothing happened.
+   *
+   * Nothing was written to AWS, so this is terminal: values are redacted here exactly as
+   * they are for REJECTED. The infra-deployment PR — which is opened at SUBMIT time,
+   * before any review — is closed asynchronously by the `secret-ingestion.withdrawn`
+   * listener, mirroring how it was opened. Leaving it open would park a draft PR proposing
+   * keys that will now never exist in the secret store.
+   */
+  async withdrawIngestionRequest(
+    requestId: string,
+    requester: { id: string; username: string },
+    reason?: string,
+  ) {
+    const row = await prisma.secretIngestionRequest.findUnique({
+      where: { id: requestId },
+    });
+    if (!row) {
+      throw new NotFoundError('Secret Ingestion Request not found');
+    }
+    // 404 rather than 403 — someone else's request shouldn't be probeable.
+    if (row.requesterId !== requester.id) {
+      throw new NotFoundError('Secret Ingestion Request not found');
+    }
+    if (row.status !== 'PENDING') {
+      throw new ValidationError(
+        `This request can no longer be withdrawn (status: ${row.status}).`,
+      );
+    }
+
+    const storedEntries = (row.entries as unknown as IngestionEntry[]) ?? [];
+
+    // Single conditional update: claims the row AND redacts in one statement, so there is
+    // no window where the request reads as WITHDRAWN while its values are still stored.
+    // reviewIngestionRequest claims PENDING the same way, so exactly one of the two wins.
+    const claim = await prisma.secretIngestionRequest.updateMany({
+      where: { id: requestId, status: 'PENDING' },
+      data: {
+        status: 'WITHDRAWN',
+        entries: storedEntries.map(e => ({ ...e, value: null })) as any,
+        reviewNote: reason?.trim() || null,
+        reviewedAt: new Date(),
+        // Never written to the store — don't stamp an apply time (matches REJECTED).
+        appliedAt: null,
+      },
+    });
+    if (claim.count === 0) {
+      throw new ConflictError(
+        'This request was just picked up by an admin and can no longer be withdrawn.',
+      );
+    }
+
+    await prisma.auditEntry.create({
+      data: {
+        action: 'SECRET_INGESTION_WITHDRAWN',
+        performerId: requester.id,
+        performerName: requester.username,
+        groupId: row.groupId,
+        details: {
+          requestId: row.id,
+          requestNumber: row.requestNumber,
+          platform: row.platform,
+          secretName: row.secretName,
+          requesterName: row.requesterName,
+          reason: reason?.trim() || null,
+          // Key names only — the values are exactly what was just redacted.
+          keys: storedEntries.map(e => e.key),
+        } as any,
+      },
+    });
+
+    eventBus.emitAccessEvent({
+      type: 'secret-ingestion.withdrawn',
+      payload: {
+        requestId: row.id,
+        platform: row.platform,
+        secretName: row.secretName,
+        requesterName: row.requesterName,
+        keyCount: storedEntries.length,
+        reason: reason?.trim() || null,
+      },
+      timestamp: new Date(),
+    });
+
+    const updated = await prisma.secretIngestionRequest.findUnique({
+      where: { id: requestId },
+    });
+    return updated ? this.decryptRow(updated) : null;
+  }
+
+  /**
    * Applies approved key-value entries to the secret. Values are redacted in Postgres once
    * the request reaches a genuinely terminal outcome (APPLIED/PARTIALLY_APPLIED/REJECTED).
    * APPLY_FAILED is retryable — re-review is allowed from that status too, and values are
@@ -777,6 +948,33 @@ export class SecretIngestionService {
       );
     }
 
+    const decisionByKey = new Map(decisions.map(d => [d.key, d.decision]));
+
+    // A value we couldn't decrypt must never reach AWS. decrypt() yields a placeholder rather
+    // than throwing so read paths can still render the row, but that placeholder is not a
+    // secret — applying it would overwrite a live credential with garbage and still record the
+    // request as APPLIED. Scoped to APPROVED keys on purpose: a rejected key never touches AWS,
+    // so blocking those too would strand an undecryptable request with no way to clear it.
+    const undecryptableKeys = (
+      (decryptedRow.entries as unknown as IngestionEntry[]) ?? []
+    )
+      .filter(
+        e =>
+          decisionByKey.get(e.key) === 'APPROVED' &&
+          isDecryptionFailure(e.value),
+      )
+      .map(e => e.key);
+    if (undecryptableKeys.length > 0) {
+      throw new ValidationError(
+        `Cannot apply this request — the stored value for ${undecryptableKeys
+          .map(k => `"${k}"`)
+          .join(', ')} could not be decrypted. This usually means DB_ENCRYPTION_KEY ` +
+          'changed since the request was submitted. Approving would overwrite the live ' +
+          'secret with an invalid value, so nothing was applied — ask the requester to ' +
+          'resubmit these keys, or reject them.',
+      );
+    }
+
     // Resolve the AWS account this request targets from the row itself, so the read/apply
     // below hit the correct instance (prod vs sandbox) regardless of the caller.
     const svc = getSecretsManagerService(decryptedRow.platform);
@@ -797,7 +995,6 @@ export class SecretIngestionService {
       );
     }
 
-    const decisionByKey = new Map(decisions.map(d => [d.key, d.decision]));
     const entries = ((decryptedRow.entries as unknown as IngestionEntry[]) ?? []).map(
       e => ({
         ...e,
@@ -811,7 +1008,12 @@ export class SecretIngestionService {
     // computed live for display only — so this can't be recomputed later from the DB row.
     let currentMap: Record<string, string> | null = null;
     try {
-      currentMap = await svc.getSecretMap(decryptedRow.secretName);
+      // Narrowed to this request's own keys — they're the only ones read below, and on Azure an
+      // unnarrowed read is one GetSecret per secret in the whole vault.
+      currentMap = await svc.getSecretMap(
+        decryptedRow.secretName,
+        entries.map(e => e.key),
+      );
     } catch {
       currentMap = null;
     }
@@ -857,16 +1059,34 @@ export class SecretIngestionService {
           }
         }
       } catch (err: any) {
-        failedCount = approvedCount;
+        // A store that writes one key at a time (Azure Key Vault — see PartialWriteError) can fail
+        // partway. Those keys ARE live in the vault, so marking them unapplied would both misstate
+        // the audit trail and hide them from whoever has to reason about what actually changed.
+        // AWS never reports this (one atomic PutSecretValue), so its behaviour is unchanged.
+        const written = new Set(
+          err instanceof PartialWriteError ? err.writtenKeys : [],
+        );
         applyError = err.message;
         for (const e of entries) {
-          if (e.decision === 'APPROVED') {
+          if (e.decision !== 'APPROVED') {
+            continue;
+          }
+          if (written.has(e.key)) {
+            e.applied = true;
+            e.error = null;
+          } else {
             e.applied = false;
             e.error = err.message;
+            failedCount++;
           }
         }
         logger.error(
-          { requestId, secretName: decryptedRow.secretName, error: err.message },
+          {
+            requestId,
+            secretName: decryptedRow.secretName,
+            error: err.message,
+            writtenKeys: [...written],
+          },
           'Failed to apply secret ingestion request',
         );
       }
@@ -888,7 +1108,10 @@ export class SecretIngestionService {
     // would strand the request with no way to recover the entered values.
     const finalEntries =
       status === 'APPLY_FAILED'
-        ? this.encryptEntries(entries)
+        ? this.encryptEntries(
+            entries,
+            (row.entries as unknown as IngestionEntry[]) ?? [],
+          )
         : entries.map(e => ({ ...e, value: null }));
 
     const updated = await prisma.secretIngestionRequest.update({
@@ -996,6 +1219,10 @@ export class SecretIngestionService {
       reviewerName: decryptedRow.reviewerName ?? undefined,
     };
     const targets = (decryptedRow.infraTargets as SelectedTarget[] | null) || undefined;
+    // Azure only: every path below REBUILDS the branch from base, so omitting these wouldn't just
+    // skip the overrides — it would actively replace already-correct `mappings[].key` lines with
+    // deriveEnvVar() guesses. Same source the reviewed-event listener uses.
+    const keyEnvVars = envVarsOfEntries(entries);
 
     const infra = getInfraRepoSyncService(row.platform);
 
@@ -1029,6 +1256,7 @@ export class SecretIngestionService {
         requestId: row.id,
         secretName: row.secretName,
         proposedKeys: approvedKeys,
+        keyEnvVars,
         targets,
         requesterName: row.requesterName,
         requesterEmail: row.requesterEmail,
@@ -1057,12 +1285,14 @@ export class SecretIngestionService {
       ? await infra.mergePrForRequest({
           request: req,
           approvedKeys,
+          keyEnvVars,
           targets,
           review,
         })
       : await infra.readyPrForRequest({
           request: req,
           approvedKeys,
+          keyEnvVars,
           targets,
           review,
         });

@@ -85,6 +85,17 @@ router.put(
   },
 );
 
+// Requester withdraws their own still-open request. Ownership (not an admin tier) is the
+// authorization, and it's enforced in the service.
+router.post(
+  '/:id/withdraw',
+  authenticateToken,
+  (req: Request, res: Response, next: NextFunction) => {
+    const controller = new AccessRequestController(req, res, next);
+    controller.withdrawRequest(req, res, next).catch(next);
+  },
+);
+
 router.post(
   '/:id/retry',
   authenticateToken,

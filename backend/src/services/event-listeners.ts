@@ -7,7 +7,7 @@ import {
   isInfraAutoMergeEnabled,
   isInfraRepoEnabled,
 } from './infra-repo-sync.service';
-import { persistInfraResult } from './secret-ingestion.service';
+import { persistInfraResult, envVarsOfEntries } from './secret-ingestion.service';
 import prisma from '../config/prisma';
 import logger from '../utils/logger';
 
@@ -158,13 +158,14 @@ export function registerEventListeners(): void {
   // (fires for any platform whose invite needs a setup step — e.g. Redash).
   eventBus.on('access.queued-for-setup', async event => {
     try {
-      const { requesterId, groupName, reviewerName, platform } =
+      const { requesterId, groupName, reviewerName, platform, requesterEmail } =
         event.payload as any;
       await notificationService.notifyAccessQueuedForSetup(
         requesterId,
         groupName,
         reviewerName,
         platform,
+        requesterEmail,
       );
     } catch (err: any) {
       logger.error(
@@ -396,20 +397,45 @@ export function registerEventListeners(): void {
       if (!row) {
         return;
       }
+      // The requester can withdraw between submit and this listener running (opening a PR
+      // takes a couple of GitHub round-trips). Don't open a PR proposing keys that will now
+      // never be written — the withdrawal's own listener found no infraPrNumber to close.
+      if (row.status === 'WITHDRAWN') {
+        return;
+      }
       const proposedKeys = ((row.entries as any[]) || [])
         .map(e => e.key)
         .filter(Boolean);
+      const keyEnvVars = envVarsOfEntries(row.entries);
       const targets =
         (row.infraTargets as SelectedTarget[] | null) || undefined;
-      const result = await getInfraRepoSyncService(instance).openPrForRequest({
+      const infra = getInfraRepoSyncService(instance);
+      const result = await infra.openPrForRequest({
         requestId,
         secretName,
         proposedKeys,
+        keyEnvVars,
         targets,
         requesterName: row.requesterName,
         requesterEmail: row.requesterEmail,
       });
       await persistInfraResult(requestId, result);
+
+      // Narrower version of the same race: the withdrawal can land *while* openPrForRequest
+      // is in flight, so the check above passed and the withdrawal listener still saw no PR
+      // number. Re-read now that the number is persisted and clean up, otherwise the infra
+      // repo keeps a draft PR that no Hermes request will ever act on.
+      const after = await prisma.secretIngestionRequest.findUnique({
+        where: { id: requestId },
+        select: { status: true, infraPrNumber: true },
+      });
+      if (after?.status === 'WITHDRAWN' && after.infraPrNumber) {
+        const closed = await infra.closePrForRequest({
+          request: { infraPrNumber: after.infraPrNumber },
+          reason: 'withdrawn by the requester',
+        });
+        await persistInfraResult(requestId, closed);
+      }
     } catch (err: any) {
       logger.error(
         'Failed to open infra-deployment PR for secret ingestion:',
@@ -456,6 +482,7 @@ export function registerEventListeners(): void {
       const newApprovedKeys: string[] = (
         (newApprovedKeysFromEvent ?? approvedKeys) as string[]
       ).filter(Boolean);
+      const keyEnvVars = envVarsOfEntries(row.entries);
       const targets =
         (row.infraTargets as SelectedTarget[] | null) || undefined;
 
@@ -475,6 +502,7 @@ export function registerEventListeners(): void {
             // approved is safe (an already-registered key just yields SKIPPED). Mirrors
             // retryInfraMerge's re-open, which passes the full set for the same reason.
             proposedKeys: approvedKeys,
+            keyEnvVars,
             targets,
             requesterName: row.requesterName,
             requesterEmail: row.requesterEmail,
@@ -505,6 +533,7 @@ export function registerEventListeners(): void {
           ? await infra.mergePrForRequest({
               request: req,
               approvedKeys,
+              keyEnvVars,
               targets,
               newApprovedKeys,
               review,
@@ -512,6 +541,7 @@ export function registerEventListeners(): void {
           : await infra.readyPrForRequest({
               request: req,
               approvedKeys,
+              keyEnvVars,
               targets,
               review,
             });
@@ -561,6 +591,39 @@ export function registerEventListeners(): void {
           persistErr.message,
         );
       }
+    }
+  });
+
+  // A withdrawn request's deployment PR was opened at SUBMIT time, before anyone reviewed
+  // it — so unlike a rejection, withdrawal has to clean up a PR that exists for keys which
+  // will now never reach the secret store. Same best-effort contract as every other PR
+  // mirror step: a GitHub failure is logged and never fails the withdrawal, which has
+  // already committed. Worst case the draft PR is left open for a human to close.
+  eventBus.on('secret-ingestion.withdrawn' as any, async event => {
+    try {
+      const { requestId, platform, reason } = event.payload as any;
+      const instance = platform ?? 'secrets';
+      if (!isInfraRepoEnabled(instance)) {
+        return;
+      }
+      const row = await prisma.secretIngestionRequest.findUnique({
+        where: { id: requestId },
+      });
+      if (!row?.infraPrNumber) {
+        return;
+      }
+      const closed = await getInfraRepoSyncService(instance).closePrForRequest({
+        request: row,
+        reason: reason
+          ? `withdrawn by the requester — ${reason}`
+          : 'withdrawn by the requester',
+      });
+      await persistInfraResult(requestId, closed);
+    } catch (err: any) {
+      logger.error(
+        'Failed to close infra-deployment PR for withdrawn secret ingestion request:',
+        err.message,
+      );
     }
   });
 

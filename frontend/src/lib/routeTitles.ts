@@ -9,5 +9,8 @@ export function getPageTitle(pathname: string): string {
   if (p === '/pending-approvals') return 'Pending Approvals';
   if (p === '/admin') return 'Admin Management';
   if (p === '/audit-log') return 'Audit Log';
+  if (p === '/zookeeper' || p.startsWith('/zookeeper/')) return 'ZooKeeper Config';
+  if (p === '/secrets' || p.startsWith('/secrets/')) return 'Secret Ingestion';
+  if (p === '/settings') return 'Settings';
   return 'Hermes';
 }

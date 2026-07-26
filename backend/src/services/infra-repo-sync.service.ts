@@ -5,6 +5,7 @@ import config from '../config/config';
 import logger from '../utils/logger';
 import { BaseError, ExternalServiceError } from '../utils/errors';
 import prisma from '../config/prisma';
+import { deriveEnvVar } from './secret-store.interface';
 
 /**
  * infra-repo-sync.service — mirrors approved Secret Ingestion key ADDITIONS into the
@@ -45,7 +46,15 @@ export interface InfraSyncResult {
   note?: string | null;
 }
 
-type Mechanism = 'helm-values' | 'spc';
+// How a manifest enumerates a secret's keys:
+//  - helm-values  → AWS: `secretsStore.mappings[].awsSecretName` + a nested `items:` list
+//  - spc          → AWS: a standalone SecretProviderClass (`jmesPath:` + `secretObjects.data`)
+//  - azure-values → Azure: `secretsStore.keyvaultName` + `mappings[]` of objectName/key pairs.
+//    One level shallower than helm-values, because a Key Vault secret has no inner keys: the vault
+//    is the "secret" and `mappings[]` IS the key list. Hermes never edits the Azure SPC — the shared
+//    chart (azure/Helm_chart_azure/chart/templates/secretproviderclass.yaml) renders both `objects:`
+//    and `secretObjects.data` from `mappings`, so editing the values file is sufficient.
+type Mechanism = 'helm-values' | 'spc' | 'azure-values';
 interface Consumer {
   path: string;
   mech: Mechanism;
@@ -90,7 +99,10 @@ export type ManifestEditResult =
   | { status: 'edited'; content: string; added: string[] }
   | { status: 'up-to-date' }
   | { status: 'not-referenced' }
-  | { status: 'unmatched' };
+  // `reason` explains WHY the file couldn't be edited (structure unreadable, an env-var clash, an
+  // unsafe scalar). Optional so existing editors need no change; logged so an operator isn't left
+  // guessing which of several causes applied.
+  | { status: 'unmatched'; reason?: string };
 
 // ---------------------------------------------------------------------------
 // Pure YAML editors (exported for unit tests — no I/O, deterministic)
@@ -505,9 +517,322 @@ export function editSpc(content: string, secretName: string, keys: string[]): Ma
   return { status: 'up-to-date' };
 }
 
+// ---------------------------------------------------------------------------
+// Azure Key Vault manifests (`secretsStore.keyvaultName` + `mappings[]`)
+// ---------------------------------------------------------------------------
+
+/** One `- objectName:` / `key:` pair inside `secretsStore.mappings`, with its line span. */
+interface AzureMappingEntry {
+  objectName: string;
+  /** The env var this entry maps to (`key:`), or null when the entry has no `key:` line. */
+  envVar: string | null;
+  /** Line index of the `key:` line, so an env-var change can be rewritten in place. -1 if absent. */
+  envVarIdx: number;
+  startIdx: number;
+  endIdx: number;
+  dashIndent: number;
+  keyIndent: number;
+}
+
+/**
+ * Characters that survive unquoted in a YAML scalar without changing the document's structure.
+ * Both halves of a mapping entry are rendered unquoted, and both are ultimately requester-supplied
+ * (the Key Vault secret name and its env var), so anything outside this set — a newline, a colon,
+ * a `#` — would corrupt the manifest or inject sibling keys into `mappings`. Refuse the edit
+ * instead: the values file is merged into a live Helm release.
+ */
+const SAFE_YAML_SCALAR = /^[A-Za-z0-9_.\-/]+$/;
+
+/**
+ * Locate the `mappings:` list belonging to the `secretsStore` block whose `keyvaultName` is
+ * `vaultName`, and parse its existing entries.
+ *
+ * Returns `null` when this file doesn't reference the vault at all, and `mappingsIdx: -1` when it
+ * does but has no recognizable `mappings:` list (→ `unmatched`, NOT "no keys registered").
+ */
+function findAzureMappings(
+  lines: string[],
+  vaultName: string,
+): {
+  mappingsIdx: number;
+  mappingsIndent: number;
+  entries: AzureMappingEntry[];
+  /** A list item we couldn't read (no `objectName:`) — the block is not fully understood. */
+  unparsed: boolean;
+} | null {
+  const target = vaultName.trim().toLowerCase();
+
+  // Azure vault names are case-insensitive, so compare that way.
+  let kvIdx = -1;
+  let kvIndent = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^(\s*)keyvaultName:\s*(.+?)\s*$/);
+    if (m && stripQuotes(m[2]).toLowerCase() === target) {
+      kvIdx = i;
+      kvIndent = m[1].length;
+      break;
+    }
+  }
+  if (kvIdx === -1) {
+    return null;
+  }
+
+  // `mappings:` is a sibling of `keyvaultName` under `secretsStore`. Scan forward first (the real
+  // manifests order it that way), then backward, stopping in both directions as soon as the block's
+  // indent is left — so a `mappings:` belonging to some OTHER block can't be picked up.
+  const findSibling = (from: number, step: -1 | 1): number => {
+    for (let j = from; j >= 0 && j < lines.length; j += step) {
+      const ln = lines[j];
+      if (/^\s*$/.test(ln) || /^\s*#/.test(ln)) {
+        continue;
+      }
+      const ind = indentOf(ln);
+      if (ind < kvIndent) {
+        return -1;
+      }
+      if (ind === kvIndent && /^\s*mappings:\s*$/.test(ln)) {
+        return j;
+      }
+    }
+    return -1;
+  };
+  let mappingsIdx = findSibling(kvIdx + 1, 1);
+  if (mappingsIdx === -1) {
+    mappingsIdx = findSibling(kvIdx - 1, -1);
+  }
+  if (mappingsIdx === -1) {
+    return { mappingsIdx: -1, mappingsIndent: 0, entries: [], unparsed: false };
+  }
+
+  const mappingsIndent = indentOf(lines[mappingsIdx]);
+  const parsed: AzureMappingEntry[] = [];
+  let current: AzureMappingEntry | null = null;
+  let itemIndent = -1;
+  for (let j = mappingsIdx + 1; j < lines.length; j++) {
+    const ln = lines[j];
+    if (/^\s*$/.test(ln) || /^\s*#/.test(ln)) {
+      continue;
+    }
+    const ind = indentOf(ln);
+    if (ind <= mappingsIndent) {
+      break;
+    }
+    // An entry is recognized by its LIST ITEM, not by `- objectName:` specifically: the two halves
+    // are unordered YAML mapping keys, and `- key: X` / `objectName: y` (which hand edits and
+    // `seed-keyvault.sh --print-mappings` both produce) is the same entry. Keying off the dash
+    // line's first field would treat those as absent — appending a duplicate mapping on the next
+    // edit and reporting the whole vault as drift.
+    const dash = ln.match(/^(\s*)-\s+/);
+    if (dash && (itemIndent === -1 || dash[1].length === itemIndent)) {
+      itemIndent = dash[1].length;
+      current = {
+        objectName: '',
+        envVar: null,
+        envVarIdx: -1,
+        startIdx: j,
+        endIdx: j,
+        dashIndent: dash[1].length,
+        keyIndent: dash[1].length + 2,
+      };
+      parsed.push(current);
+    }
+    if (!current) {
+      continue;
+    }
+    current.endIdx = j;
+    const om = ln.match(/^\s*-?\s*objectName:\s*(.+?)\s*$/);
+    if (om) {
+      current.objectName = stripQuotes(om[1]);
+    }
+    const km = ln.match(/^(\s*)-?\s*key:\s*(.+?)\s*$/);
+    if (km) {
+      current.envVar = stripQuotes(km[2]);
+      current.envVarIdx = j;
+      // Only a CONTINUATION `key:` gives a usable indent to copy — one written inline as `- key:`
+      // sits at the dash, and reusing that would render the next entry's `key:` under no dash.
+      if (!/^\s*-/.test(ln)) {
+        current.keyIndent = km[1].length;
+      }
+    }
+  }
+  const entries = parsed.filter((e) => e.objectName);
+  return {
+    mappingsIdx,
+    mappingsIndent,
+    entries,
+    unparsed: entries.length !== parsed.length,
+  };
+}
+
+/**
+ * Register `keys` (Key Vault secret names) in an Azure values manifest by appending
+ * `- objectName: <key>` / `key: <envVar>` pairs to `secretsStore.mappings`.
+ *
+ * `envVars` supplies the env-var name per key; anything missing falls back to {@link deriveEnvVar}.
+ * A key that is ALREADY registered under a different env var is rewritten in place rather than
+ * skipped — otherwise a requester's override is accepted, badged in the UI and audited while
+ * changing nothing. Such a key is reported in `added` too, so the existing preview/PR-body
+ * machinery treats it as a change to this file (and a second run is a no-op, so it stays
+ * idempotent).
+ *
+ * Insertion is SORTED when the existing list already is (azure/saathi-be's is, azure/orbit's is
+ * not) — the same `mappings` block is also regenerated by each app repo's
+ * `deploy/seed-keyvault.sh --print-mappings`, so matching its ordering keeps the two writers from
+ * producing churn against each other.
+ */
+export function editAzureValuesMappings(
+  content: string,
+  vaultName: string,
+  keys: string[],
+  envVars?: Record<string, string>,
+): ManifestEditResult {
+  const eol = detectEol(content);
+  const lines = content.split(/\r?\n/);
+
+  const found = findAzureMappings(lines, vaultName);
+  if (!found) {
+    return { status: 'not-referenced' };
+  }
+  if (found.mappingsIdx === -1) {
+    return { status: 'unmatched', reason: 'no `mappings:` list found for this vault' };
+  }
+  if (found.unparsed) {
+    return {
+      status: 'unmatched',
+      reason: 'a `mappings:` entry has no recognizable `objectName:` — refusing to edit a list we cannot fully read',
+    };
+  }
+  const { mappingsIdx, mappingsIndent, entries } = found;
+
+  // Key Vault object names are case-insensitive, so match that way — otherwise a request for
+  // `orbit-kfin-username` would append a second entry alongside an existing `Orbit-Kfin-Username`.
+  const byName = new Map(entries.map((e) => [e.objectName.toLowerCase(), e]));
+  const envVarFor = (k: string): string => envVars?.[k]?.trim() || deriveEnvVar(k);
+
+  // De-dupe first: a repeated key would otherwise be inserted twice, and the env-var collision
+  // check below would see the second copy claiming the first copy's name and reject the file.
+  const wantedKeys = [...new Map(keys.map((k) => [k.toLowerCase(), k])).values()];
+  const missing = wantedKeys.filter((k) => !byName.has(k.toLowerCase()));
+  // An explicit override for a key that is already registered: rewrite its `key:` line in place.
+  const rewrites: { at: number; line: string; key: string }[] = [];
+  for (const k of wantedKeys) {
+    const entry = byName.get(k.toLowerCase());
+    const wanted = envVars?.[k]?.trim();
+    if (!entry || !wanted || entry.envVar === wanted || entry.envVarIdx === -1) {
+      continue;
+    }
+    rewrites.push({
+      at: entry.envVarIdx,
+      line: ' '.repeat(entry.keyIndent) + 'key: ' + wanted,
+      key: k,
+    });
+  }
+  if (missing.length === 0 && rewrites.length === 0) {
+    return { status: 'up-to-date' };
+  }
+
+  // Both halves land unquoted in a live Helm values file. Anything that could restructure the
+  // document (a newline, `:`, `#`, a quote) must never be rendered — refuse the whole file rather
+  // than commit a manifest that breaks the release or smuggles in a sibling mapping.
+  for (const k of missing) {
+    const env = envVarFor(k);
+    const bad = !SAFE_YAML_SCALAR.test(k)
+      ? `objectName "${k}"`
+      : !SAFE_YAML_SCALAR.test(env)
+        ? `env var "${env}"`
+        : null;
+    if (bad) {
+      return {
+        status: 'unmatched',
+        reason: `${bad} contains characters that are unsafe to write unquoted into YAML`,
+      };
+    }
+  }
+  for (const r of rewrites) {
+    if (!SAFE_YAML_SCALAR.test(envVarFor(r.key))) {
+      return {
+        status: 'unmatched',
+        reason: `env var "${envVarFor(r.key)}" contains characters that are unsafe to write unquoted into YAML`,
+      };
+    }
+  }
+
+  // An env var is the name the pod actually reads, and the shared chart renders `secretObjects.data`
+  // straight from `mappings` — so two entries claiming the same one collapse into a single Secret
+  // key and one silently wins. deriveEnvVar() is a guess, so this is reachable without anyone
+  // intending it. Refuse and let a human pick an explicit name.
+  const claimedBy = new Map<string, string>();
+  for (const e of entries) {
+    if (e.envVar && !rewrites.some((r) => r.at === e.envVarIdx)) {
+      claimedBy.set(e.envVar, e.objectName);
+    }
+  }
+  for (const r of rewrites) {
+    const env = envVarFor(r.key);
+    const owner = claimedBy.get(env);
+    if (owner && owner.toLowerCase() !== r.key.toLowerCase()) {
+      return {
+        status: 'unmatched',
+        reason: `env var "${env}" is already mapped from "${owner}" — refusing to create a duplicate`,
+      };
+    }
+    claimedBy.set(env, r.key);
+  }
+  for (const k of missing) {
+    const env = envVarFor(k);
+    const owner = claimedBy.get(env);
+    if (owner) {
+      return {
+        status: 'unmatched',
+        reason: `env var "${env}" is already mapped from "${owner}" — set an explicit Environment Variable for "${k}"`,
+      };
+    }
+    claimedBy.set(env, k);
+  }
+
+  const dashIndent = entries.length ? entries[0].dashIndent : mappingsIndent + 2;
+  const keyIndent = entries.length ? entries[0].keyIndent : mappingsIndent + 4;
+  const renderEntry = (k: string): string[] => [
+    ' '.repeat(dashIndent) + '- objectName: ' + k,
+    ' '.repeat(keyIndent) + 'key: ' + envVarFor(k),
+  ];
+
+  const names = entries.map((e) => e.objectName);
+  const isSorted = names.every((n, i) => i === 0 || names[i - 1] <= n);
+
+  // Collect insertions as (index, lines) then apply DESCENDING, so earlier indices stay valid and
+  // any comments interleaved in the block survive untouched. Ties are broken by the key itself so
+  // several new keys landing at the same slot still come out in sorted order (applying descending
+  // reverses same-index insertions, hence the descending tiebreak here).
+  const insertions: { at: number; key: string; lines: string[] }[] = [];
+  const lastEnd = entries.length ? entries[entries.length - 1].endIdx : mappingsIdx;
+  for (const k of missing) {
+    let at = lastEnd + 1;
+    if (isSorted && entries.length) {
+      const after = entries.find((e) => e.objectName > k);
+      at = after ? after.startIdx : lastEnd + 1;
+    }
+    insertions.push({ at, key: k, lines: renderEntry(k) });
+  }
+  insertions.sort((a, b) => b.at - a.at || (a.key < b.key ? 1 : a.key > b.key ? -1 : 0));
+
+  const out = [...lines];
+  for (const r of rewrites) {
+    out[r.at] = r.line;
+  }
+  for (const ins of insertions) {
+    out.splice(ins.at, 0, ...ins.lines);
+  }
+  return {
+    status: 'edited',
+    content: out.join(eol),
+    added: [...missing, ...rewrites.map((r) => r.key)],
+  };
+}
+
 /**
  * The keys currently REGISTERED for `secretName` in a manifest — the flip side of the editors
- * above (used by drift detection to diff the repo's enumerated keys against what AWS holds).
+ * above (used by drift detection to diff the repo's enumerated keys against what the provider holds).
  * `referenced` is false when the secret isn't mentioned at all; `unmatched` is true when it IS
  * referenced but its key-list structure couldn't be located, so `keys` is unknown, not empty.
  */
@@ -515,10 +840,36 @@ export function registeredKeysInFile(
   path: string,
   content: string,
   secretName: string,
+  flavor?: InfraRepoConfig['manifestFlavor'],
 ): { referenced: boolean; keys: string[]; unmatched: boolean } {
+  if (isAzureValuesFile(path, flavor)) {
+    return registeredKeysAzureValues(content, secretName);
+  }
   return isSpcFile(path)
     ? registeredKeysSpc(content, secretName)
     : registeredKeysValues(content, secretName);
+}
+
+/** Registered keys = the `objectName`s under the vault's `secretsStore.mappings`. */
+function registeredKeysAzureValues(
+  content: string,
+  vaultName: string,
+): { referenced: boolean; keys: string[]; unmatched: boolean } {
+  const found = findAzureMappings(content.split(/\r?\n/), vaultName);
+  if (!found) {
+    return { referenced: false, keys: [], unmatched: false };
+  }
+  // No `mappings:` at all, or a list holding an item we couldn't read: either way the registered
+  // key set is UNKNOWN, not empty. Reporting it as empty would make drift claim every vault key is
+  // missing here and offer to append all of them.
+  if (found.mappingsIdx === -1 || found.unparsed) {
+    return { referenced: true, keys: [], unmatched: true };
+  }
+  return {
+    referenced: true,
+    keys: found.entries.map((e) => e.objectName),
+    unmatched: false,
+  };
 }
 
 /** Registered keys under the `items:` list of the values mapping matching `secretName`. */
@@ -644,6 +995,28 @@ function registeredKeysSpc(
 
 const isValuesFile = (p: string): boolean => /(^|\/)values-[^/]*\.ya?ml$/i.test(p);
 const isSpcFile = (p: string): boolean => /(^|\/)secretproviderclass[^/]*\.ya?ml$/i.test(p);
+// Fallback only: used when no instance flavor is available (the exported pure helpers, and their
+// unit tests). Every live path routes off the INSTANCE's declared `manifestFlavor` instead — see
+// isAzureValuesFile below — so relocating the AKS manifests out of `azure/` doesn't silently send
+// them to the AWS editors.
+const looksAzureByPath = (p: string): boolean => /^azure\//i.test(p) && isValuesFile(p);
+
+/**
+ * Whether a file should be read/written with the Azure Key Vault shape.
+ *
+ * An instance's repo scope holds exactly one flavor (pathInclude/pathExclude guarantee prod and
+ * Azure never see each other's folders), so the instance's own `manifestFlavor` is authoritative
+ * when we have it. The path heuristic is only the fallback for the standalone helpers.
+ */
+const isAzureValuesFile = (
+  p: string,
+  flavor?: InfraRepoConfig['manifestFlavor'],
+): boolean => {
+  if (flavor) {
+    return flavor === 'azure' && isValuesFile(p);
+  }
+  return looksAzureByPath(p);
+};
 // Only values-*.yaml is ever auto-discovered as a consumer — SecretProviderClass files are
 // deliberately excluded (product decision — Hermes must never edit that file).
 const isCandidate = (p: string): boolean => isValuesFile(p);
@@ -653,12 +1026,16 @@ const isCandidate = (p: string): boolean => isValuesFile(p);
  * SecretProviderClass object with no `jmesPath`) are intentionally excluded — adding a
  * key there needs no edit, so they must not appear as consumers.
  */
-export function referencedEnumeratedSecrets(path: string, content: string): Consumer[] {
+export function referencedEnumeratedSecrets(
+  path: string,
+  content: string,
+  flavor?: InfraRepoConfig['manifestFlavor'],
+): Consumer[] {
   // Thin wrapper over namedSecretsInFile — the actual scan production's refreshIndex() runs.
   // Kept as a SINGLE implementation (rather than two independently-maintained copies of the
   // same regex-based scan) so a fix to the scanning heuristic can't silently apply to only
   // one of the two call shapes; this function just re-projects onto {path, mech}.
-  return namedSecretsInFile(path, content).map(({ mech }) => ({ path, mech }));
+  return namedSecretsInFile(path, content, flavor).map(({ mech }) => ({ path, mech }));
 }
 
 function editForFile(
@@ -666,7 +1043,14 @@ function editForFile(
   content: string,
   secretName: string,
   keys: string[],
+  envVars?: Record<string, string>,
+  flavor?: InfraRepoConfig['manifestFlavor'],
 ): ManifestEditResult {
+  // Azure manifests carry a different structure entirely (vault + objectName/key pairs) and are the
+  // only ones that need the env-var mapping — see editAzureValuesMappings.
+  if (isAzureValuesFile(path, flavor)) {
+    return editAzureValuesMappings(content, secretName, keys, envVars);
+  }
   // SecretProviderClass is excluded from AUTO-discovery (isCandidate) so it's never
   // suggested — but a requester who manually adds one (a real edge case, e.g. a service
   // that only has an SPC manifest) can still have it edited.
@@ -692,6 +1076,22 @@ export interface InfraRepoConfig {
   readonly baseBranch: string;
   readonly apiBaseUrl: string;
   readonly isSimulation: boolean;
+  /**
+   * Restrict the tree scan to paths under this prefix (`pathInclude`), or away from prefixes
+   * (`pathExclude`). Azure sets `pathInclude: 'azure/'` so it never sees anything outside its own
+   * folder. Prod does NOT exclude `azure/` in return (see config.ts — a real AWS-shaped manifest
+   * was misfiled under `azure/` in the live repo, which prod needs to reach) — an accepted,
+   * one-directional trade-off, not a mutual guarantee. Unset ⇒ scan everything (the sandbox, which
+   * has its own repo).
+   */
+  readonly pathInclude?: string;
+  readonly pathExclude?: readonly string[];
+  /**
+   * Which manifest shape this instance's folder uses. Only consulted where the code must pick a
+   * shape with no file in hand — the simulated compose preview. Live paths always route off the
+   * real path/content. Unset ⇒ 'aws'.
+   */
+  readonly manifestFlavor?: 'aws' | 'azure';
 }
 
 export class InfraRepoSyncService {
@@ -763,6 +1163,43 @@ export class InfraRepoSyncService {
       },
     );
     return this.client;
+  }
+
+  /**
+   * Whether each manifest that consumes a secret is expected to enumerate ALL of that secret's
+   * keys — i.e. whether "key present in the store, absent from this manifest" is drift.
+   *
+   * True for AWS: a Secrets Manager secret belongs to one service, so its consumers are exactly
+   * the manifests that should list every key in it.
+   *
+   * FALSE for Azure: the "secret" is the whole Key Vault and `bachatt-prod-kv` backs orbit,
+   * saathi-be and tolgee, each of which deliberately maps only its own subset. orbit not listing
+   * saathi's keys is correct, not drift — and treating it as drift would make "Solve drift" append
+   * every vault secret to every service's manifest, mounting unrelated credentials into unrelated
+   * pods. Hermes cannot know which service should own a new vault key, so that half of the report
+   * is simply not computable there (dangling `missingInAws` keys still are, and still report).
+   */
+  get consumersEnumerateAllKeys(): boolean {
+    return this.cfg.manifestFlavor !== 'azure';
+  }
+
+  /**
+   * Whether a repo path belongs to THIS instance. Prod and Azure share one repo but own disjoint
+   * folders — see {@link InfraRepoConfig.pathInclude}. Applied BOTH to the tree scan and to the
+   * requester's explicitly-chosen targets (see targetConsumers): `manifestRef` is client-supplied,
+   * so a chosen path alone is not a safe boundary — the editors would happily match a vault name
+   * the requester handed them.
+   */
+  private isInPathScope(path: string): boolean {
+    const { pathInclude, pathExclude } = this.cfg;
+    const p = path.toLowerCase();
+    if (pathInclude && !p.startsWith(pathInclude.toLowerCase())) {
+      return false;
+    }
+    if (pathExclude?.some((prefix) => p.startsWith(prefix.toLowerCase()))) {
+      return false;
+    }
+    return true;
   }
 
   private repoPath(suffix: string): string {
@@ -1163,7 +1600,9 @@ export class InfraRepoSyncService {
       return this.indexCache;
     }
     const entries = await this.getTreeEntries(treeSha);
-    const candidates = entries.filter((e) => e.type === 'blob' && isCandidate(e.path));
+    const candidates = entries.filter(
+      (e) => e.type === 'blob' && this.isInPathScope(e.path) && isCandidate(e.path),
+    );
     // Independent reads — bounded concurrency instead of one-at-a-time (this can scan every
     // values-*.yaml in the whole repo), but capped well under GitHub's secondary rate limit
     // rather than firing all of them at once.
@@ -1171,7 +1610,13 @@ export class InfraRepoSyncService {
     // comes from the same snapshot — and so the content cached below matches `treeSha` exactly.
     const scanned = await mapWithConcurrency(candidates, 6, async (e) => {
       const file = await this.getContent(e.path, commitSha);
-      return file ? { path: e.path, file, refs: namedSecretsInFile(e.path, file.content) } : null;
+      return file
+        ? {
+            path: e.path,
+            file,
+            refs: namedSecretsInFile(e.path, file.content, this.cfg.manifestFlavor),
+          }
+        : null;
     });
     const index = new Map<string, Consumer[]>();
     const files = new Map<string, { sha: string; content: string }>();
@@ -1181,11 +1626,12 @@ export class InfraRepoSyncService {
       }
       files.set(result.path, result.file);
       for (const { name, mech } of result.refs) {
-        const list = index.get(name) || [];
+        const key = this.consumerKey(name);
+        const list = index.get(key) || [];
         if (!list.some((c) => c.path === result.path)) {
           list.push({ path: result.path, mech });
         }
-        index.set(name, list);
+        index.set(key, list);
       }
     }
     this.indexCache = { treeSha, index, files, validatedAt: Date.now() };
@@ -1196,9 +1642,23 @@ export class InfraRepoSyncService {
     return this.indexCache;
   }
 
+  /**
+   * How a secret name is keyed in the consumer index.
+   *
+   * Azure Key Vault names are case-insensitive (findAzureMappings compares them that way), so the
+   * index must be too — otherwise `SECRETS_AZURE_VAULT_NAME=Bachatt-Prod-KV` against manifests
+   * saying `keyvaultName: bachatt-prod-kv` yields zero consumers and every request silently opens
+   * no PR. AWS secret names ARE case-sensitive (two secrets may differ only by case), so the key
+   * must stay exact there or two distinct secrets would share one consumer list.
+   */
+  private consumerKey(name: string): string {
+    const trimmed = name.trim();
+    return this.cfg.manifestFlavor === 'azure' ? trimmed.toLowerCase() : trimmed;
+  }
+
   private async consumersOf(secretName: string, opts?: { fresh?: boolean }): Promise<Consumer[]> {
     const { index } = await this.getIndex(opts);
-    return index.get(secretName.trim()) || [];
+    return index.get(this.consumerKey(secretName)) || [];
   }
 
   /**
@@ -1221,9 +1681,33 @@ export class InfraRepoSyncService {
       keys?: string[];
     }[];
     if (targets !== undefined) {
-      result = targets.map((t) => ({
+      // `path` AND `manifestRef` are both requester-supplied, so the folder scoping that keeps the
+      // prod and Azure instances off each other's manifests CANNOT rely on the tree scan alone: a
+      // prod request naming `azure/orbit/.../values-prod.yaml` with `manifestRef` set to the vault
+      // would otherwise be edited happily. Out-of-scope picks are dropped (and logged), the same
+      // way out-of-scope grants are excluded rather than trusted from the client.
+      const inScope = targets.filter((t) => this.isInPathScope(t.path));
+      if (inScope.length !== targets.length) {
+        logger.warn(
+          {
+            secretName,
+            repo: this.slug,
+            dropped: targets
+              .filter((t) => !this.isInPathScope(t.path))
+              .map((t) => t.path),
+          },
+          'infra-repo-sync: dropped requester-selected manifests outside this instance’s path scope',
+        );
+      }
+      result = inScope.map((t) => ({
         path: t.path,
-        mech: t.format || (isSpcFile(t.path) ? 'spc' : 'helm-values'),
+        mech:
+          t.format ||
+          (isAzureValuesFile(t.path, this.cfg.manifestFlavor)
+            ? 'azure-values'
+            : isSpcFile(t.path)
+              ? 'spc'
+              : 'helm-values'),
         manifestRef: (t.manifestRef || secretName).trim(),
         // A requester-narrowed key subset for this specific file — undefined means "apply
         // every proposed/approved key", the historical default.
@@ -1264,6 +1748,7 @@ export class InfraRepoSyncService {
     secretName: string,
     keys: string[],
     existingKeys: string[] = [],
+    envVars?: Record<string, string>,
   ): Promise<ResolvedTarget[]> {
     const wanted = [...new Set(keys.map((k) => k.trim()).filter(Boolean))];
     if (this.isSimulation) {
@@ -1272,11 +1757,14 @@ export class InfraRepoSyncService {
       // exactly this against the file). An update-only request → keysToAdd empty → no PR.
       const existing = new Set(existingKeys);
       const safe = secretName.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+      const azure = this.cfg.manifestFlavor === 'azure';
       return [
         {
-          path: `(simulated) ${safe}/prod/values-prod.yaml`,
+          path: azure
+            ? `(simulated) azure/${safe}/prod/values-prod-azure.yaml`
+            : `(simulated) ${safe}/prod/values-prod.yaml`,
           env: 'prod',
-          format: 'helm-values',
+          format: azure ? 'azure-values' : 'helm-values',
           manifestRef: secretName,
           keysToAdd: wanted.filter((k) => !existing.has(k)),
         },
@@ -1288,7 +1776,7 @@ export class InfraRepoSyncService {
     // Wrap this GitHub round-trip so a raw axios failure surfaces as the project's standard
     // BaseError shape instead of a generic 500.
     try {
-      return await this.resolveTargetsLive(secretName, wanted);
+      return await this.resolveTargetsLive(secretName, wanted, envVars);
     } catch (err: any) {
       if (err instanceof BaseError) {
         throw err;
@@ -1303,6 +1791,7 @@ export class InfraRepoSyncService {
   private async resolveTargetsLive(
     secretName: string,
     wanted: string[],
+    envVars?: Record<string, string>,
   ): Promise<ResolvedTarget[]> {
     const consumers = await this.consumersOf(secretName);
     // Independent reads — this sits on the interactive compose-screen preview path, so
@@ -1313,10 +1802,17 @@ export class InfraRepoSyncService {
       if (!file) {
         return null;
       }
-      const res = editForFile(c.path, file.content, secretName, wanted);
+      const res = editForFile(
+        c.path,
+        file.content,
+        secretName,
+        wanted,
+        envVars,
+        this.cfg.manifestFlavor,
+      );
       if (res.status === 'unmatched') {
         logger.warn(
-          { secretName, path: c.path },
+          { secretName, path: c.path, reason: res.reason },
           'infra-repo-sync: manifest references the secret but its expected key-list structure was not found — cannot auto-register keys here',
         );
       }
@@ -1345,11 +1841,17 @@ export class InfraRepoSyncService {
       const safe = secretName.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
       const registeredKeys = keys.length > 1 ? keys.slice(0, -1) : [];
       const missingKeys = keys.filter((k) => !registeredKeys.includes(k));
+      // Match the instance's real manifest shape, same as resolveTargets' simulated branch — a
+      // demo that reports `helm-values` for a Key Vault instance misrepresents what a live scan
+      // would find.
+      const azure = this.cfg.manifestFlavor === 'azure';
       return [
         {
-          path: `(simulated) ${safe}/prod/values-prod.yaml`,
+          path: azure
+            ? `(simulated) azure/${safe}/prod/values-prod-azure.yaml`
+            : `(simulated) ${safe}/prod/values-prod.yaml`,
           env: 'prod',
-          format: 'helm-values',
+          format: azure ? 'azure-values' : 'helm-values',
           registeredKeys,
           missingKeys,
           unmatched: false,
@@ -1365,13 +1867,18 @@ export class InfraRepoSyncService {
       // fine; it also makes the report internally consistent (every secret compared against the
       // same commit) rather than smeared across the scan's duration.
       const { index, files } = await this.getIndex();
-      const consumers = index.get(secretName.trim()) || [];
+      const consumers = index.get(this.consumerKey(secretName)) || [];
       const resolved = consumers.map((c) => {
         const file = files.get(c.path);
         if (!file) {
           return null;
         }
-        const reg = registeredKeysInFile(c.path, file.content, secretName);
+        const reg = registeredKeysInFile(
+          c.path,
+          file.content,
+          secretName,
+          this.cfg.manifestFlavor,
+        );
         const m: DriftManifest = {
           path: c.path,
           env: envOf(c.path),
@@ -1421,8 +1928,13 @@ export class InfraRepoSyncService {
     targets?: SelectedTarget[];
     requesterName?: string;
     requesterEmail?: string;
+    /**
+     * Env-var name per key, for manifests that need one (Azure `mappings[].key`). Absent keys fall
+     * back to deriveEnvVar(). Ignored by the AWS editors, where the key name IS the env var.
+     */
+    keyEnvVars?: Record<string, string>;
   }): Promise<InfraSyncResult> {
-    const { requestId, secretName } = opts;
+    const { requestId, secretName, keyEnvVars } = opts;
     const proposedKeys = [...new Set(opts.proposedKeys.map((k) => k.trim()).filter(Boolean))];
     const branch = this.branchName(secretName, requestId);
 
@@ -1499,7 +2011,14 @@ export class InfraRepoSyncService {
       }
       // A per-file key subset (requester narrowed which keys this specific file gets) wins
       // over the full proposed set.
-      const res = editForFile(c.path, file.content, c.manifestRef, c.keys ?? proposedKeys);
+      const res = editForFile(
+        c.path,
+        file.content,
+        c.manifestRef,
+        c.keys ?? proposedKeys,
+        keyEnvVars,
+        this.cfg.manifestFlavor,
+      );
       return { path: c.path, file, res };
     });
     const edits: {
@@ -1523,7 +2042,7 @@ export class InfraRepoSyncService {
       } else if (r.res.status === 'unmatched') {
         unmatchedPaths.push(r.path);
         logger.warn(
-          { requestId, secretName, path: r.path },
+          { requestId, secretName, path: r.path, reason: r.res.reason },
           'infra-repo-sync: manifest referenced the secret but its expected key-list structure was not found — key NOT registered in this file',
         );
       }
@@ -1585,7 +2104,7 @@ export class InfraRepoSyncService {
         if (racedPr) {
           logger.warn(
             { requestId, secretName, pr: racedPr.number, status },
-            "infra-repo-sync: lost a concurrent open race — adopting the winner's PR",
+            'infra-repo-sync: lost a concurrent open race — adopting the winner\'s PR',
           );
           return {
             state: 'OPEN',
@@ -1644,6 +2163,12 @@ export class InfraRepoSyncService {
     };
     approvedKeys: string[];
     targets?: SelectedTarget[];
+    /**
+     * Env-var name per key, for manifests that need one (Azure `mappings[].key`). Absent keys fall
+     * back to deriveEnvVar(). Ignored by the AWS editors, where the key name IS the env var.
+     */
+    keyEnvVars?: Record<string, string>;
+
     // Supplied by the ingestion review paths, which know what the reviewer decided: rewrites the
     // PR title/body to describe what the branch now actually registers (see reviewedPrBody).
     // Omitted by the drift path — a drift PR was never reviewed, so its body is already accurate
@@ -1657,7 +2182,7 @@ export class InfraRepoSyncService {
   }): Promise<
     { done: InfraSyncResult } | { done: null; prNumber: number; unmatchedPaths: string[] }
   > {
-    const { request, approvedKeys } = opts;
+    const { request, approvedKeys, keyEnvVars } = opts;
     if (!request.infraPrNumber || !request.infraBranch) {
       return {
         done: { state: 'SKIPPED', note: 'no open infra PR for this request' },
@@ -1700,7 +2225,14 @@ export class InfraRepoSyncService {
       // A per-file key subset further narrows the (already-approved) keys applied here —
       // e.g. the requester chose this file for key A only, even though B was also approved.
       const keysForFile = c.keys ? c.keys.filter((k) => approvedKeys.includes(k)) : approvedKeys;
-      const res = editForFile(c.path, base.content, c.manifestRef, keysForFile);
+      const res = editForFile(
+        c.path,
+        base.content,
+        c.manifestRef,
+        keysForFile,
+        keyEnvVars,
+        this.cfg.manifestFlavor,
+      );
       const desired = res.status === 'edited' ? res.content : base.content;
       if (res.status === 'unmatched') {
         logger.warn(
@@ -1708,6 +2240,7 @@ export class InfraRepoSyncService {
             requestId: request.id,
             secretName: request.secretName,
             path: c.path,
+            reason: res.reason,
           },
           'infra-repo-sync: manifest structure not found during recompute — key not registered in this file',
         );
@@ -1803,6 +2336,12 @@ export class InfraRepoSyncService {
     };
     approvedKeys: string[];
     targets?: SelectedTarget[];
+    /**
+     * Env-var name per key, for manifests that need one (Azure `mappings[].key`). Absent keys fall
+     * back to deriveEnvVar(). Ignored by the AWS editors, where the key name IS the env var.
+     */
+    keyEnvVars?: Record<string, string>;
+
     // The subset of approvedKeys that are genuinely NEW (the ones the PR exists for) —
     // an UPDATE key's value changes in AWS but needs no manifest edit. Live mode ignores
     // this and recomputes from the real file instead (more reliable); simulation has no
@@ -1845,6 +2384,7 @@ export class InfraRepoSyncService {
       request,
       approvedKeys,
       targets: opts.targets,
+      keyEnvVars: opts.keyEnvVars,
       review: opts.review,
     });
     if (prep.done) {
@@ -1954,6 +2494,12 @@ export class InfraRepoSyncService {
     };
     approvedKeys: string[];
     targets?: SelectedTarget[];
+    /**
+     * Env-var name per key, for manifests that need one (Azure `mappings[].key`). Absent keys fall
+     * back to deriveEnvVar(). Ignored by the AWS editors, where the key name IS the env var.
+     */
+    keyEnvVars?: Record<string, string>;
+
     // See prepareApprovedBranch. Most load-bearing on this path: the human who merges this PR
     // reads its description, and if they hit a conflict they hand-type keys out of it.
     review?: {
@@ -1996,6 +2542,7 @@ export class InfraRepoSyncService {
       request,
       approvedKeys,
       targets: opts.targets,
+      keyEnvVars: opts.keyEnvVars,
       review: opts.review,
     });
     if (prep.done) {
@@ -2255,10 +2802,31 @@ export class InfraRepoSyncService {
 // (unlike referencedEnumeratedSecrets, which projects this onto {path, mech} for the
 // Consumer[] shape the consumer index uses). Used by refreshIndex() and, via the wrapper
 // above, by referencedEnumeratedSecrets — kept as the single implementation.
-function namedSecretsInFile(path: string, content: string): { name: string; mech: Mechanism }[] {
+function namedSecretsInFile(
+  path: string,
+  content: string,
+  flavor?: InfraRepoConfig['manifestFlavor'],
+): { name: string; mech: Mechanism }[] {
   const lines = content.split(/\r?\n/);
   const out: { name: string; mech: Mechanism }[] = [];
   const seen = new Set<string>();
+
+  // Azure: the join key is the VAULT, not a per-secret name — one values file declares exactly one
+  // `secretsStore.keyvaultName`, and its `mappings[]` is that vault's key list.
+  if (isAzureValuesFile(path, flavor)) {
+    for (const ln of lines) {
+      const m = ln.match(/^\s*keyvaultName:\s*(.+?)\s*$/);
+      if (m) {
+        const name = stripQuotes(m[1]);
+        // The shared chart's own values.yaml carries an empty placeholder — skip it.
+        if (name && !seen.has(name)) {
+          seen.add(name);
+          out.push({ name, mech: 'azure-values' });
+        }
+      }
+    }
+    return out;
+  }
 
   if (isValuesFile(path)) {
     for (const ln of lines) {

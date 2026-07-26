@@ -12,6 +12,7 @@ import notificationRouter from './routes/notification.route';
 import auditRouter from './routes/audit.route';
 import adminRouter from './routes/admin.route';
 import userCreationRouter from './routes/user-creation.route';
+import apolloUserRouter from './routes/apollo-user.route';
 import platformRouter from './routes/platform.route';
 import zookeeperRouter from './routes/zookeeper.route';
 import secretIngestionRouter from './routes/secret-ingestion.route';
@@ -44,16 +45,14 @@ const allowedOrigins = config.frontend.allowedOrigins;
 app.use(
   cors({
     origin: (origin, callback) => {
-      // A missing Origin header isn't reliably attacker-controlled: browsers
-      // often omit it on same-origin fetch()/XHR calls (the frontend+backend
-      // deployed behind one reverse-proxy domain, as documented in
-      // frontend/.env.production.example), and a non-browser client (curl,
-      // Postman) can just as easily set any Origin it wants — so rejecting
-      // "no Origin" here blocks legitimate same-origin traffic without
-      // actually stopping the caller it was meant to stop. Real protection
-      // against cross-origin credentialed requests still comes from the
-      // allowlist check below, which every browser enforces.
-      if (!origin || allowedOrigins.includes(origin)) {
+      if (!origin) {
+        // Allow server-to-server / health-check / Postman only in non-prod
+        if (config.isDev) {
+          callback(null, true);
+        } else {
+          callback(new Error('Origin header required in production'));
+        }
+      } else if (allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
         callback(new Error('Not allowed by CORS'));
@@ -118,6 +117,7 @@ hermesRoutes.use('/api/notifications', notificationRouter);
 hermesRoutes.use('/api/audit', auditRouter);
 hermesRoutes.use('/api/admin', adminRouter);
 hermesRoutes.use('/api/user-creation-requests', userCreationRouter);
+hermesRoutes.use('/api/apollo-users', apolloUserRouter);
 hermesRoutes.use('/api/platforms', platformRouter);
 hermesRoutes.use('/api/zookeeper', zookeeperRouter);
 hermesRoutes.use('/api/secrets', secretIngestionRouter);

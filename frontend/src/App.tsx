@@ -17,6 +17,7 @@ import AuditLog from './pages/AuditLog';
 import AdminManagement from './pages/AdminManagement';
 import ZookeeperConfig from './pages/ZookeeperConfig';
 import { SecretIngestion } from './pages/SecretIngestion';
+import Settings from './pages/Settings';
 
 import './styles/global.css';
 
@@ -88,6 +89,15 @@ export const App: React.FC = () => {
                   element={
                     <ProtectedRoute allowedRoles={['hermes_super_admin']}>
                       <AuditLog />
+                    </ProtectedRoute>
+                  }
+                />
+
+                <Route
+                  path="settings"
+                  element={
+                    <ProtectedRoute allowedRoles={['hermes_super_admin']}>
+                      <Settings />
                     </ProtectedRoute>
                   }
                 />

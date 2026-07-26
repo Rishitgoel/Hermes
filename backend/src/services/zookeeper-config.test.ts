@@ -3,7 +3,12 @@ import prisma from '../config/prisma';
 import { zookeeperConfigService } from './zookeeper-config.service';
 import { zookeeperService } from './zookeeper.service';
 import { zookeeperProvisioner } from './zookeeper.provisioner';
-import { AuthorizationError, ConflictError } from '../utils/errors';
+import {
+  AuthorizationError,
+  ConflictError,
+  NotFoundError,
+  ValidationError,
+} from '../utils/errors';
 
 /**
  * Config-service tests, all in simulation mode. Grants live in real Postgres (setup.ts
@@ -495,5 +500,69 @@ describe('ZookeeperConfigService (simulation)', () => {
     const after = await prisma.zookeeperChangeRequest.findUnique({ where: { id: stuck.id } });
     expect(after!.status).toBe('APPLY_FAILED');
     expect(after!.applyError).toMatch(/process interrupted/);
+  });
+
+  describe('withdrawChangeRequest', () => {
+    it('marks a PENDING request WITHDRAWN, applies nothing, and drops it from the review queue', async () => {
+      await setupGrant('/hermes/credit-card#cdrw');
+      await seed('/hermes/credit-card/key', 'original');
+
+      const [req] = await zookeeperConfigService.createChangeRequest({
+        requester: USER,
+        changes: [{ path: '/hermes/credit-card/key', action: 'SET', oldValue: 'original', newValue: 'changed' }],
+      });
+
+      await zookeeperConfigService.withdrawChangeRequest(req.id, USER, 'Wrong value');
+
+      const row = await prisma.zookeeperChangeRequest.findUnique({ where: { id: req.id } });
+      expect(row!.status).toBe('WITHDRAWN');
+      expect(row!.reviewNote).toBe('Wrong value');
+      // Nobody reviewed it — a withdrawal must never read as an admin decision.
+      expect(row!.reviewerId).toBeNull();
+      // The znode is untouched.
+      expect(await zookeeperService.getData('/hermes/credit-card/key')).toBe('original');
+
+      const queue = await zookeeperConfigService.listChangeRequests(
+        { id: REVIEWER.id, username: REVIEWER.username, roles: ['hermes_super_admin'] } as any,
+        'review',
+      );
+      expect(queue.map((r) => r.id)).not.toContain(req.id);
+
+      const audit = await prisma.auditEntry.findFirst({ where: { action: 'ZK_CHANGE_WITHDRAWN' } });
+      expect(audit!.performerId).toBe(USER.id);
+    });
+
+    it("refuses to withdraw another user's request without revealing it exists", async () => {
+      await setupGrant('/hermes/credit-card#cdrw');
+      await seed('/hermes/credit-card/key', 'original');
+      const [req] = await zookeeperConfigService.createChangeRequest({
+        requester: USER,
+        changes: [{ path: '/hermes/credit-card/key', action: 'SET', oldValue: 'original', newValue: 'changed' }],
+      });
+
+      await expect(
+        zookeeperConfigService.withdrawChangeRequest(req.id, { id: 'usr-other', username: 'Mallory' }),
+      ).rejects.toBeInstanceOf(NotFoundError);
+      expect((await prisma.zookeeperChangeRequest.findUnique({ where: { id: req.id } }))!.status).toBe('PENDING');
+    });
+
+    it('refuses to withdraw an APPLY_FAILED request — half-applied changes are an admin problem', async () => {
+      const { group } = await setupGrant('/hermes/credit-card#cdrw');
+      const failed = await prisma.zookeeperChangeRequest.create({
+        data: {
+          requesterId: USER.id,
+          requesterName: USER.username,
+          requesterEmail: USER.email,
+          groupId: group.id,
+          groupIds: [group.id],
+          status: 'APPLY_FAILED',
+          changes: [],
+        },
+      });
+
+      await expect(
+        zookeeperConfigService.withdrawChangeRequest(failed.id, USER),
+      ).rejects.toBeInstanceOf(ValidationError);
+    });
   });
 });

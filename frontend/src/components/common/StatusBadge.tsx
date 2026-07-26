@@ -15,7 +15,8 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, error }) => {
     if (sLower === 'approved' || sLower === 'provisioned') return 'badge-approved';
     if (sLower === 'rejected' || sLower === 'provision_failed') return 'badge-rejected';
     if (sLower === 'expired') return 'badge-expired';
-    if (sLower === 'revoked') return 'badge-revoked';
+    // Neutral, not red: the requester ended this themselves — it isn't a rejection.
+    if (sLower === 'revoked' || sLower === 'withdrawn') return 'badge-revoked';
     return '';
   };
 

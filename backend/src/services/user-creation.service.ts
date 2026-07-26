@@ -164,11 +164,50 @@ export class UserCreationService {
     // (Redash) aren't auto-drafted on /auth/me, so the first submit creates the row
     // straight into PENDING with the justification.
     if (!row) {
+      const lowerEmail = requester.email.toLowerCase();
+      const byEmail = await prisma.userCreationRequest.findUnique({
+        where: { userEmail_platform: { userEmail: lowerEmail, platform } },
+      });
+      if (byEmail) {
+        logger.warn(
+          { userId: requester.id, previousUserId: byEmail.userId, email: lowerEmail, platform },
+          'user-creation request exists for this email under a different userId — adopting it on submit',
+        );
+        const updated = await prisma.userCreationRequest.update({
+          where: { id: byEmail.id },
+          data: {
+            userId: requester.id,
+            userName: requester.username,
+            justification: justification.trim(),
+            status: UserCreationStatus.PENDING,
+            submittedAt: new Date(),
+            reviewerId: null,
+            reviewerName: null,
+            reviewNote: null,
+            reviewedAt: null,
+            rejectionReason: null,
+          },
+        });
+        eventBus.emitAccessEvent({
+          type: 'user-creation.submitted',
+          payload: {
+            requestId: updated.id,
+            userId: updated.userId,
+            userName: updated.userName,
+            userEmail: updated.userEmail,
+            justification: updated.justification,
+            platform: updated.platform,
+          },
+          timestamp: new Date(),
+        });
+        return normalizeInviteLink(updated);
+      }
+
       const created = await prisma.userCreationRequest.create({
         data: {
           userId: requester.id,
           userName: requester.username,
-          userEmail: requester.email.toLowerCase(),
+          userEmail: lowerEmail,
           platform,
           justification: justification.trim(),
           status: UserCreationStatus.PENDING,

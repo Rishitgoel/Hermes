@@ -157,7 +157,7 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
         <span className="trigger-value">
           {selectedOption ? (
             <>
-              <span className="trigger-label">{selectedOption.label}</span>
+              <span className="trigger-label" title={selectedOption.label}>{selectedOption.label}</span>
               {selectedOption.groupName && (
                 <span className="trigger-group-badge">{selectedOption.groupName}</span>
               )}
@@ -271,7 +271,7 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
                         style={{ flexShrink: 0, cursor: 'pointer', marginRight: 2 }}
                       />
                     )}
-                    <span className="option-label">{opt.label}</span>
+                    <span className="option-label" title={opt.label}>{opt.label}</span>
                     {opt.groupName && (
                       <span className="option-group-badge">{opt.groupName}</span>
                     )}

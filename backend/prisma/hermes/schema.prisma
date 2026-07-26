@@ -444,6 +444,11 @@ enum RequestStatus {
   // completed their Redash setup (user-creation flow). Will auto-provision
   // when the Redash user sync detects the user.
   WAITING_FOR_SETUP
+  // Requester pulled their own still-open request back before an admin acted on it.
+  // Deliberately distinct from REJECTED so the audit trail never reads a self-withdrawal
+  // as an admin decision. Terminal, and absent from the partial unique index on
+  // (requester_id, group_id), so withdrawing frees the user to request the group again.
+  WITHDRAWN
 }
 
 enum UserCreationStatus {
@@ -462,6 +467,7 @@ enum ZkChangeStatus {
   PARTIALLY_APPLIED  // Some changes approved+applied, others rejected (terminal)
   APPLY_FAILED       // One or more APPROVED changes failed to apply (retryable)
   REJECTED           // Every change rejected (terminal)
+  WITHDRAWN          // Requester pulled it back while still PENDING (terminal); never applied
 }
 
 enum SecretIngestionStatus {
@@ -471,6 +477,9 @@ enum SecretIngestionStatus {
   PARTIALLY_APPLIED
   APPLY_FAILED
   REJECTED
+  // Requester pulled it back while still PENDING (terminal). Nothing was written to the
+  // secret store; staged values are redacted and the infra-deployment PR is closed.
+  WITHDRAWN
 }
 
 model SecretIngestionRequest {

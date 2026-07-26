@@ -7,6 +7,7 @@ export interface AccessEvent {
     | 'requests.bulk.created'
     | 'request.approved'
     | 'request.rejected'
+    | 'request.withdrawn'
     | 'access.granted'
     | 'access.revoked'
     | 'access.expired'
@@ -20,7 +21,9 @@ export interface AccessEvent {
     | 'user-creation.rejected'
     | 'user-creation.completed'
     | 'zk-change.submitted'
-    | 'zk-change.reviewed';
+    | 'zk-change.reviewed'
+    | 'zk-change.withdrawn'
+    | 'secret-ingestion.withdrawn';
   payload: Record<string, unknown>;
   timestamp: Date;
 }

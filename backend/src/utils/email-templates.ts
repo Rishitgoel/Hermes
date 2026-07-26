@@ -387,6 +387,24 @@ export function userGroupRejected(opts: {
   };
 }
 
+export function userAccessQueuedForSetup(opts: {
+  groupName: string;
+  reviewerName: string;
+  platformLabel: string;
+}): EmailContent {
+  const href = url('/my-requests');
+  return {
+    subject: `[Hermes] Access approved — pending setup: ${opts.groupName}`,
+    html: layout({
+      heading: 'Access queued for setup',
+      bodyHtml: `<p style="margin:0;">${esc(opts.reviewerName)} approved your request to the <strong>${esc(opts.groupName)}</strong> group. It will activate once you create a password for your ${esc(opts.platformLabel)} account.</p>`,
+      ctaLabel: 'View my requests',
+      ctaHref: href,
+    }),
+    text: `${opts.reviewerName} approved your request to ${opts.groupName}. It will activate once you create a password for your ${opts.platformLabel} account. ${href}`,
+  };
+}
+
 export function userAccessRevoked(opts: {
   groupName: string;
   revokerName: string;

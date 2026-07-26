@@ -33,6 +33,7 @@ export class PlatformController extends BaseController {
             launchUrl: adapter.getLaunchUrl?.() ?? null,
             family: adapter.family ?? key,
             label: adapter.label ?? null,
+            provider: adapter.provider ?? null,
           };
         });
       this.sendResponse(

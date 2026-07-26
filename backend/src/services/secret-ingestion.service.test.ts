@@ -7,7 +7,7 @@ import { isInfraAutoMergeEnabled } from './infra-repo-sync.service';
 
 import { secretsManagerService } from './secrets-manager.service';
 import { secretsProvisioner } from './secrets.provisioner';
-import { AuthorizationError } from '../utils/errors';
+import { AuthorizationError, NotFoundError, ValidationError } from '../utils/errors';
 import eventBus from './event-bus';
 
 describe('SecretIngestionService (simulation)', () => {
@@ -465,6 +465,93 @@ describe('SecretIngestionService (simulation)', () => {
     // Clean up
     await prisma.systemSetting.deleteMany({
       where: { key: { in: ['secrets:auto_merge:secrets', 'secrets:auto_merge:secrets-sandbox'] } }
+    });
+  });
+
+  describe('withdrawIngestionRequest', () => {
+    it('marks it WITHDRAWN, redacts the staged values, and writes nothing to the store', async () => {
+      await setupGrant();
+      const request = await secretIngestionService.createIngestionRequest({
+        requester: { id: USER.id, username: USER.username, email: USER.email, roles: [] },
+        secretName: 'payment/gateway',
+        entries: [{ key: 'API_KEY', value: 'super-secret' }],
+        justification: 'Ingest Stripe keys',
+      });
+
+      const withdrawn = await secretIngestionService.withdrawIngestionRequest(
+        request.id,
+        USER,
+        'Wrong environment',
+      );
+
+      expect(withdrawn!.status).toBe('WITHDRAWN');
+      expect(withdrawn!.reviewNote).toBe('Wrong environment');
+      // Never applied — must not carry an apply timestamp, same as REJECTED.
+      expect(withdrawn!.appliedAt).toBeNull();
+      // Nobody reviewed it.
+      expect(withdrawn!.reviewerId).toBeNull();
+
+      // The value is gone from the row — a terminal request never keeps staged secrets.
+      const raw = await prisma.secretIngestionRequest.findUnique({ where: { id: request.id } });
+      const rawEntries = raw!.entries as any[];
+      expect(rawEntries[0].key).toBe('API_KEY');
+      expect(rawEntries[0].value).toBeNull();
+
+      // Nothing reached the secret store.
+      const stored = await secretsManagerService.getSecretMap('payment/gateway', ['API_KEY']);
+      expect(stored?.API_KEY).toBeUndefined();
+
+      const audit = await prisma.auditEntry.findFirst({
+        where: { action: 'SECRET_INGESTION_WITHDRAWN' },
+      });
+      expect(audit!.performerId).toBe(USER.id);
+    });
+
+    it('emits secret-ingestion.withdrawn so the deployment PR can be closed', async () => {
+      await setupGrant();
+      const seen: any[] = [];
+      const listener = (e: any) => seen.push(e);
+      eventBus.on('secret-ingestion.withdrawn' as any, listener);
+      try {
+        const request = await secretIngestionService.createIngestionRequest({
+          requester: { id: USER.id, username: USER.username, email: USER.email, roles: [] },
+          secretName: 'payment/gateway',
+          entries: [{ key: 'API_KEY', value: 'v' }],
+        });
+        await secretIngestionService.withdrawIngestionRequest(request.id, USER);
+        expect(seen).toHaveLength(1);
+        expect(seen[0].payload).toMatchObject({
+          requestId: request.id,
+          secretName: 'payment/gateway',
+          platform: 'secrets',
+        });
+      } finally {
+        eventBus.off('secret-ingestion.withdrawn' as any, listener);
+      }
+    });
+
+    it("refuses another user's request, and refuses a request that is no longer PENDING", async () => {
+      await setupGrant();
+      const request = await secretIngestionService.createIngestionRequest({
+        requester: { id: USER.id, username: USER.username, email: USER.email, roles: [] },
+        secretName: 'payment/gateway',
+        entries: [{ key: 'API_KEY', value: 'v' }],
+      });
+
+      await expect(
+        secretIngestionService.withdrawIngestionRequest(request.id, {
+          id: 'usr-other',
+          username: 'Mallory',
+        }),
+      ).rejects.toBeInstanceOf(NotFoundError);
+
+      // Once reviewed it's terminal — withdrawal must not rewrite an applied request.
+      await secretIngestionService.reviewIngestionRequest(request.id, REVIEWER, [
+        { key: 'API_KEY', decision: 'APPROVED' },
+      ]);
+      await expect(
+        secretIngestionService.withdrawIngestionRequest(request.id, USER),
+      ).rejects.toBeInstanceOf(ValidationError);
     });
   });
 });

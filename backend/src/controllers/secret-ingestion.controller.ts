@@ -15,6 +15,7 @@ import {
   submitIngestionSchema,
   submitIngestionBulkSchema,
   reviewIngestionSchema,
+  withdrawIngestionSchema,
   infraPreviewSchema,
   resolveDriftSchema,
 } from '../validations/secret-ingestion.validation';
@@ -288,6 +289,40 @@ export class SecretIngestionController extends BaseController {
       );
     } catch (error) {
       this.handleError(error, 'Failed to merge secret drift PR');
+    }
+  }
+
+  // POST /api/secrets/requests/:id/withdraw
+  // Requester-only: the service 404s a request the caller didn't file, so unlike the
+  // review/retry/dismiss handlers above there is no canReview gate here — withdrawal is
+  // not an admin capability (an admin ending someone else's request is a rejection).
+  async withdrawRequest(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      const validated = this.validateWithZod(
+        withdrawIngestionSchema,
+        this.req.body ?? {},
+      );
+      if (!validated.success) {
+        return;
+      }
+      const userId = this.getUserId();
+      if (!userId) {
+        return;
+      }
+      const id = this.req.params.id as string;
+
+      const updated = await secretIngestionService.withdrawIngestionRequest(
+        id,
+        { id: userId, username: this.user!.username },
+        validated.data.reason,
+      );
+      this.sendResponse(updated, 'Secret ingestion request withdrawn');
+    } catch (error) {
+      this.handleError(error, 'Failed to withdraw secret ingestion request');
     }
   }
 

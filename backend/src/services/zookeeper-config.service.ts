@@ -467,6 +467,86 @@ export class ZookeeperConfigService {
   }
 
   /**
+   * Withdraw one's OWN change request while it is still PENDING.
+   *
+   * PENDING only — deliberately narrower than the review path, which also accepts
+   * APPLY_FAILED. An APPLY_FAILED request has already been approved and has partially
+   * written znodes; letting the requester withdraw it would strand those half-applied
+   * changes with no reviewer left to retry them. Recovering that is the admin's job.
+   *
+   * Nothing external is touched: a PENDING request has written nothing to ZooKeeper (or
+   * to the DB-backed store), so withdrawal is a pure status flip.
+   */
+  async withdrawChangeRequest(
+    requestId: string,
+    requester: { id: string; username: string },
+    reason?: string,
+  ) {
+    const row = await prisma.zookeeperChangeRequest.findUnique({
+      where: { id: requestId },
+    });
+    if (!row) {throw new NotFoundError('Change request not found');}
+    // 404 rather than 403 — a non-participant shouldn't be able to probe for the
+    // existence of someone else's request.
+    if (row.requesterId !== requester.id)
+      {throw new NotFoundError('Change request not found');}
+    if (row.status !== 'PENDING')
+      {throw new ValidationError(
+        `This request can no longer be withdrawn (status: ${row.status}).`,
+      );}
+
+    // Race guard against an admin reviewing at the same moment: reviewChangeRequest
+    // claims the row by moving it to APPLYING, so whichever conditional update lands
+    // first wins and the other side gets a clear conflict.
+    const claim = await prisma.zookeeperChangeRequest.updateMany({
+      where: { id: requestId, status: 'PENDING' },
+      data: {
+        status: 'WITHDRAWN',
+        reviewNote: reason?.trim() || null,
+        reviewedAt: new Date(),
+      },
+    });
+    if (claim.count === 0) {
+      throw new ConflictError(
+        'This change request was just picked up by an admin and can no longer be withdrawn.',
+      );
+    }
+
+    const changes = (row.changes as unknown as ZkChange[]) ?? [];
+
+    await prisma.auditEntry.create({
+      data: {
+        action: 'ZK_CHANGE_WITHDRAWN',
+        performerId: requester.id,
+        performerName: requester.username,
+        groupId: row.groupId,
+        details: {
+          requestId: row.id,
+          changeCount: changes.length,
+          groupIds: row.groupIds,
+          groupName: changes[0]?.groupName ?? null,
+          reason: reason?.trim() || null,
+          paths: changes.map(c => c.path),
+        } as any,
+      },
+    });
+
+    eventBus.emitAccessEvent({
+      type: 'zk-change.withdrawn',
+      payload: {
+        requestId: row.id,
+        groupIds: row.groupIds,
+        requesterName: requester.username,
+        changeCount: changes.length,
+        reason: reason?.trim() || null,
+      },
+      timestamp: new Date(),
+    });
+
+    return prisma.zookeeperChangeRequest.findUnique({ where: { id: requestId } });
+  }
+
+  /**
    * Recover requests orphaned mid-apply. `APPLYING` is a transient state with no resting
    * point: if the process dies (crash / redeploy) between claiming a request and writing
    * its terminal status, the row is stranded — never re-listed for review, never terminal.

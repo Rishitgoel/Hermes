@@ -56,4 +56,8 @@ export const queryKeys = {
   adminGroupLevels: (groupId: string) => ['admin', 'group-levels', groupId] as const,
   adminUserAccess: (userId: string) => ['admin', 'user-access', userId] as const,
   adminUserPlatformAccounts: (userId: string) => ['admin', 'user-platform-accounts', userId] as const,
+
+  // Settings
+  notificationSettings: () => ['admin', 'notification-settings'] as const,
+  adminSystemSettings: () => ['admin', 'system-settings'] as const,
 };

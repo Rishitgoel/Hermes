@@ -1,12 +1,36 @@
 import { z } from 'zod';
 
+// Both a key name and an env var are written UNQUOTED into a Helm values file that gets merged
+// into a live release (see editAzureValuesMappings / editValuesItems). A newline, a `:` or a `#`
+// there either breaks the manifest or injects a sibling mapping, so the charset is constrained at
+// the boundary rather than trusted downstream. This is the same set the manifest editors accept.
+const YAML_SAFE_NAME = /^[A-Za-z0-9_.\-/]+$/;
+
 const entrySchema = z.object({
   key: z
     .string()
     .trim()
     .min(1, 'Key name cannot be empty')
-    .max(512, 'Key name is too long'),
+    .max(512, 'Key name is too long')
+    .regex(
+      YAML_SAFE_NAME,
+      'Key name may only contain letters, numbers and _ . - / characters',
+    ),
   value: z.string().max(50000, 'Value is too large'),
+  // Azure only: the env var this key is exposed as in the Helm manifest
+  // (`secretsStore.mappings[].key`). AWS has no equivalent — there the key name IS the env var.
+  // Optional because it is only ever a PREFILL: omitted ⇒ the manifest editor derives it from the
+  // key name (see deriveEnvVar). Deliberately not enforced per-platform here — that would need DB
+  // state, which is not this layer's job (same reasoning as the group-has-levels rule).
+  envVar: z
+    .string()
+    .trim()
+    .max(256, 'Environment variable name is too long')
+    .regex(
+      YAML_SAFE_NAME,
+      'Environment variable name may only contain letters, numbers and _ . - / characters',
+    )
+    .optional(),
 });
 
 // A manifest file the requester chose to include in the infra-deployment PR.
@@ -17,7 +41,7 @@ const selectedTargetSchema = z.object({
     .min(1, 'File path cannot be empty')
     .max(400, 'File path is too long'),
   manifestRef: z.string().trim().max(512).optional(),
-  format: z.enum(['helm-values', 'spc']).optional(),
+  format: z.enum(['helm-values', 'spc', 'azure-values']).optional(),
   // Exact keys the requester wants applied to THIS file — a subset of what the scan found
   // missing there. Omitted/empty = apply every key (today's default).
   keys: z.array(z.string().trim().min(1).max(512)).max(200).optional(),
@@ -108,6 +132,15 @@ export const resolveDriftSchema = z.object({
     .trim()
     .min(1, 'Secret name cannot be empty')
     .max(512, 'Secret name is too long'),
+});
+
+// Requester pulling back their own PENDING request. Reason is optional — it exists only so
+// the audit row (and the closed PR's comment) can record why.
+export const withdrawIngestionSchema = z.object({
+  reason: z
+    .string()
+    .max(250, 'Reason must not exceed 250 characters')
+    .optional(),
 });
 
 export const reviewIngestionSchema = z.object({

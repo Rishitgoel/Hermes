@@ -32,6 +32,134 @@ function validateGithubApiUrl(raw: string, envName: string): string {
   return raw;
 }
 
+/**
+ * Vault name the simulated Azure Key Vault instance uses when SECRETS_AZURE_VAULT_NAME is unset.
+ * Deliberately NOT the real `bachatt-prod-kv`, so a simulated instance can never be mistaken for
+ * the production vault in a group's externalGroupId, an audit row, or a log line.
+ */
+export const SIM_AZURE_VAULT_NAME = 'bachatt-sim-kv';
+
+/**
+ * Build the Azure Key Vault Secret Ingestion instance (`secrets-azure`) from a `<prefix>_*` env
+ * block.
+ *
+ * Enabled once `<prefix>_VAULT_NAME` is set (live) or `<prefix>_SIMULATION=true` (offline). An
+ * unconfigured prefix yields `enabled: false` and is skipped at registration
+ * (provisioning.registry.ts), so no dead adapter appears in the instance chooser.
+ */
+function azureSecretsInstance(opts: {
+  key: string;
+  label: string;
+  displayName: string;
+  envPrefix: string;
+}) {
+  const { key, label, displayName, envPrefix: p } = opts;
+  const env = (suffix: string): string | undefined =>
+    process.env[`${p}_${suffix}`];
+
+  const vault = env('VAULT_NAME') || '';
+  const subscriptionId = env('SUBSCRIPTION_ID') || '';
+  const simExplicit = env('SIMULATION') === 'true';
+  // Either mode counts as configured: a vault pin (one vault, no ARM) or a subscription id
+  // (discover every vault, like the AWS store lists every secret in the account).
+  const enabled = !!vault || !!subscriptionId || simExplicit;
+  const isSimulation = simExplicit || (!vault && !subscriptionId);
+  // Only an EXPLICIT vault name pins the instance. Left unset, it runs in discovery mode — live,
+  // that enumerates the subscription's vaults; simulated, KeyVaultService serves its seeded mock
+  // vaults. Either way `<prefix>_SIMULATION=true` alone is a complete local setup, and the local
+  // shape matches the live one (a vault picker, not a single hardcoded vault).
+  const vaultName = vault;
+
+  // Explicitly asking for live mode with neither a vault pin nor a subscription would otherwise
+  // fall through to the simulated store — writes would appear to succeed while landing nowhere.
+  // Fail at config load.
+  if (env('SIMULATION') === 'false' && !vault && !subscriptionId) {
+    throw new Error(
+      `${p}_SIMULATION=false (Azure Key Vault live mode requested) but neither ${p}_SUBSCRIPTION_ID nor ` +
+        `${p}_VAULT_NAME is set. Without one the instance would silently fall back to the in-process simulation ` +
+        `store and every write would be discarded. Set ${p}_SUBSCRIPTION_ID to discover every vault in the ` +
+        `subscription, or ${p}_VAULT_NAME to pin this instance to a single vault.`,
+    );
+  }
+
+  return {
+    key,
+    family: 'secrets',
+    label,
+    displayName,
+    provider: 'azure' as const,
+    enabled,
+    // AWS-shaped fields the shared SecretsInstanceConfig requires; unused by the Key Vault store.
+    region: undefined as string | undefined,
+    accessKeyId: undefined as string | undefined,
+    secretAccessKey: undefined as string | undefined,
+    profile: undefined as string | undefined,
+    // Optional vault URL override (e.g. a private endpoint). Unset ⇒ https://<vault>.vault.azure.net.
+    get endpoint(): string | undefined {
+      return env('ENDPOINT');
+    },
+    get vaultName(): string | undefined {
+      return vaultName || undefined;
+    },
+    // Discovery mode: which subscription's vaults this instance can see. Ignored when vaultName
+    // pins the instance to one vault.
+    get subscriptionId(): string | undefined {
+      return subscriptionId || undefined;
+    },
+    // Service-principal credentials. Hermes runs on AWS ECS and has no Azure managed identity of
+    // its own, so these are required for live mode. Secret-backed — must stay lazy getters.
+    get tenantId(): string | undefined {
+      return env('TENANT_ID');
+    },
+    get clientId(): string | undefined {
+      return env('CLIENT_ID');
+    },
+    get clientSecret(): string | undefined {
+      return env('CLIENT_SECRET');
+    },
+    get isSimulation(): boolean {
+      return isSimulation;
+    },
+    // Mirrors the SAME infra-deployment repo as prod (not a separate one like the sandbox), scoped
+    // to `azure/` — the AKS manifests live alongside the EKS ones. Prod's own scope is NOT
+    // excluded from `azure/` in return (see the prod infraRepo config below) — a one-directional,
+    // deliberately accepted trade-off, not a mutual isolation guarantee.
+    get infraRepo() {
+      return {
+        get token(): string | undefined {
+          return env('INFRA_REPO_TOKEN') || config.infraRepo.token;
+        },
+        get owner(): string {
+          return env('INFRA_REPO_OWNER') || config.infraRepo.owner;
+        },
+        get repo(): string {
+          return env('INFRA_REPO_NAME') || config.infraRepo.repo;
+        },
+        get baseBranch(): string {
+          return env('INFRA_REPO_BASE_BRANCH') || config.infraRepo.baseBranch;
+        },
+        get apiBaseUrl(): string {
+          return config.infraRepo.apiBaseUrl;
+        },
+        get isSimulation(): boolean {
+          return env('INFRA_REPO_SIMULATION') === 'true' || !this.token;
+        },
+        // Independent of the prod instance's toggle — approving an Azure key is a separate
+        // decision from approving an AWS one.
+        get autoMergeEnabled(): boolean {
+          return env('INFRA_REPO_AUTO_MERGE') === 'true';
+        },
+        // Only ever scan/edit the AKS manifests.
+        pathInclude: 'azure/',
+        manifestFlavor: 'azure' as const,
+      };
+    },
+    get infraEnabled(): boolean {
+      return true;
+    },
+  };
+}
+
 export const config = {
   nodeEnv: process.env.NODE_ENV || 'development',
   port: parseInt(process.env.PORT || '8001', 10),
@@ -39,7 +167,7 @@ export const config = {
   database: {
     get encryptionKey() {
       return process.env.DB_ENCRYPTION_KEY || 'hermes-default-development-encryption-key-32bytes';
-    }
+    },
   },
 
   get isDev() {
@@ -51,18 +179,8 @@ export const config = {
 
   // ── Simulation Mode (Fixes #1 — SINGLE definition) ──
   get isSimulation() {
-    // Simulation is ON when explicitly set to 'true' AND not in production —
-    // unless ALLOW_SIMULATION_IN_PROD is ALSO explicitly set to 'true'. That
-    // second flag is a deliberate, narrow opt-in for demo deployments that
-    // have no real Keycloak yet (auth stays fake; everything else — rate
-    // limiting, error-detail hiding, cron cadence — stays prod-hardened).
-    // Anyone who reaches the app gets a self-selected admin role — the
-    // deployment MUST sit behind its own outer gate (e.g. reverse-proxy
-    // Basic Auth) whenever this is on, since the app has no real login.
-    return (
-      process.env.KEYCLOAK_SIMULATION === 'true' &&
-      (!this.isProd || process.env.ALLOW_SIMULATION_IN_PROD === 'true')
-    );
+    // Simulation is ON when explicitly set to 'true' AND not in production
+    return process.env.KEYCLOAK_SIMULATION === 'true' && !this.isProd;
   },
 
   // Read lazily via getters (NOT captured once at import). loadSecrets() injects
@@ -74,13 +192,13 @@ export const config = {
     get jwksUri() {
       return (
         process.env.KEYCLOAK_JWKS_URI ||
-        'https://keycloak.example.com/realms/master/protocol/openid-connect/certs'
+        'https://keycloak.bachatt.app/realms/master/protocol/openid-connect/certs'
       );
     },
     get issuer() {
       return (
         process.env.KEYCLOAK_ISSUER ||
-        'https://keycloak.example.com/realms/master'
+        'https://keycloak.bachatt.app/realms/master'
       );
     },
     get audience() {
@@ -179,10 +297,6 @@ export const config = {
   // import). loadSecrets() injects these from AWS Secrets Manager *after* this
   // module is imported, so a static capture would be stale ('') in production.
   slack: {
-    // Incoming webhook → posts to a single shared channel (team feed). Optional.
-    get webhookUrl() {
-      return process.env.SLACK_WEBHOOK_URL;
-    },
     // Bot token (xoxb-…) → required for per-user DMs (users.lookupByEmail + chat.postMessage).
     get botToken() {
       return process.env.SLACK_BOT_TOKEN;
@@ -378,12 +492,19 @@ export const config = {
           'AWS profile for a separate account, or set SECRETS_SANDBOX_SIMULATION=true for local testing.',
       );
     }
+    const azureMain = azureSecretsInstance({
+      key: 'secrets-azure',
+      label: 'Azure',
+      displayName: 'Secret Ingestion (Azure)',
+      envPrefix: 'SECRETS_AZURE',
+    });
     return [
       {
         key: 'secrets',
         family: 'secrets',
         label: 'Prod + QA',
         displayName: 'Secret Ingestion',
+        provider: 'aws' as const,
         enabled: true,
         get region() {
           return config.secrets.region;
@@ -415,6 +536,7 @@ export const config = {
         family: 'secrets',
         label: 'Sandbox',
         displayName: 'Secret Ingestion (Sandbox)',
+        provider: 'aws' as const,
         enabled: !!sandboxRegion || sandboxSimExplicit || !!sandboxProfile,
         get region() {
           return process.env.SECRETS_SANDBOX_REGION || '';
@@ -472,6 +594,7 @@ export const config = {
           );
         },
       },
+      azureMain,
     ];
   },
 
@@ -505,6 +628,18 @@ export const config = {
     get isSimulation() {
       return process.env.INFRA_REPO_SIMULATION === 'true' || !this.token;
     },
+    // The `azure/` folder is INCLUDED in this instance's scan (not excluded) — a deliberate,
+    // reviewed choice: the real infra-deployment repo has at least one genuinely AWS-shaped
+    // manifest (azure/findesk-be/prod/values-prod.yaml, an EKS/ALB deployment) misfiled under
+    // `azure/`, which this instance otherwise could never discover or edit. ⚠ Known accepted
+    // risk: `manifestRef` on a requester's infraTargets is client-supplied and unvalidated
+    // against their own scope (secret-ingestion.validation.ts), and the Azure-shaped manifests
+    // under `azure/` (orbit, saathi-be, tolgee — all carry `keyvaultName:`) are now in this
+    // instance's reachable path set. A requester with ONLY AWS `secrets` access can point their
+    // own request's infraTargets at one of those files with a manifestRef matching a real Key
+    // Vault name; whether that write actually lands still depends on
+    // isAzureValuesFile's routing (see infra-repo-sync.service.ts) correctly steering it to the
+    // AWS editor rather than falling back to path-based Azure detection.
     get autoMergeEnabled() {
       return process.env.INFRA_REPO_AUTO_MERGE === 'true';
     },

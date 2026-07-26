@@ -1,4 +1,4 @@
-import './config/config'; // Loads dotenv + normalizes env once (trigger restart - live redash reset) - db fix
+import './config/config'; // Loads dotenv + normalizes env once (trigger restart - live redash reset)
 
 import config from './config/config';
 import logger from './utils/logger';
@@ -47,10 +47,6 @@ function reportNotificationReadiness(): void {
 async function bootstrap() {
   try {
     logger.info('🚀 Hermes Backend starting up...');
-
-    if (config.isProd && config.isSimulation) {
-      logger.warn('⚠️⚠️⚠️  AUTH IS SIMULATED IN PRODUCTION (ALLOW_SIMULATION_IN_PROD=true). Anyone who reaches this app can self-select an admin role — it MUST be sitting behind its own outer login (e.g. reverse-proxy Basic Auth). Do not use this setting on a deployment you are not personally gating.  ⚠️⚠️⚠️');
-    }
 
     // 1. Load AWS secrets FIRST (prod). Must precede every dynamic import below so
     //    config reads (Keycloak JWKS/issuer/audience, Redash key, adminPassword) see
@@ -105,7 +101,7 @@ async function bootstrap() {
     process.on('SIGINT', shutdown);
 
   } catch (error: any) {
-    logger.fatal({ err: error }, '❌ Failed to bootstrap Hermes Application');
+    logger.fatal('❌ Failed to bootstrap Hermes Application:', error.message);
     process.exit(1);
   }
 }

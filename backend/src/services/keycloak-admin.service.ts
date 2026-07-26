@@ -1,7 +1,7 @@
 import axios from 'axios';
 import config from '../config/config';
 import logger from '../utils/logger';
-import { ExternalServiceError } from '../utils/errors';
+import { ConflictError, ExternalServiceError } from '../utils/errors';
 
 interface RoleRepresentation {
   id: string;
@@ -9,6 +9,50 @@ interface RoleRepresentation {
   composite?: boolean;
   clientRole?: boolean;
   containerId?: string;
+}
+
+export interface CreateKeycloakUserInput {
+  email: string;
+  username: string;
+  firstName?: string;
+  lastName?: string;
+  /** Plaintext password stored as a TEMPORARY credential (forces reset at first login). */
+  temporaryPassword: string;
+}
+
+/**
+ * True for Keycloak's own privileged built-ins — the ones that administer
+ * Keycloak itself.
+ *
+ * Used to refuse acting on an account that outranks the caller: a
+ * hermes_super_admin cannot be granted these roles, so they must not be able to
+ * take over an account that holds one either.
+ */
+export function isPrivilegedRealmRole(roleName: string): boolean {
+  const name = roleName.toLowerCase();
+  return name === 'admin' || name === 'create-realm' || name === 'realm-admin';
+}
+
+/**
+ * Bound every Keycloak Admin API call. Raw axios has NO default timeout, so an
+ * unresponsive Keycloak would otherwise hold an Express request open until the
+ * socket eventually dies. Matches `createHttpClient`'s default.
+ */
+const KEYCLOAK_TIMEOUT_MS = 10_000;
+
+/**
+ * Worth retrying: the request never got a considered answer. A network error, a
+ * client-side timeout, or a 5xx. Explicitly NOT 4xx — a 400/403/404/409 is a
+ * decision Keycloak made and repeating the call just repeats it.
+ */
+function isTransientKeycloakError(err: any): boolean {
+  if (err?.code === 'ECONNABORTED') {
+    return true;
+  }
+  if (!err?.response) {
+    return true;
+  }
+  return err.response.status >= 500;
 }
 
 /**
@@ -47,6 +91,59 @@ class KeycloakAdminService {
     return `${config.keycloak.adminUrl}/admin/realms/${config.keycloak.realm}`;
   }
 
+  /**
+   * Retry an idempotent Keycloak call through transient failures with
+   * exponential backoff, and recover once from an expired token.
+   *
+   * The 401 case is not theoretical: the token cache trusts `expires_in`, so a
+   * Keycloak restart or an admin-session revocation invalidates a token we still
+   * believe is good. Dropping the cache and re-authenticating once turns that
+   * from a hard failure into a hiccup.
+   *
+   * ONLY for calls that are safe to repeat — reads, and role mappings (adding an
+   * existing mapping is a Keycloak no-op). Creating a user is NOT safe to repeat
+   * and is handled separately in `createUser`.
+   */
+  private async withRetry<T>(
+    op: string,
+    fn: () => Promise<T>,
+    attempts = 3,
+  ): Promise<T> {
+    let lastErr: any;
+    let reauthed = false;
+
+    for (let i = 0; i < attempts; i++) {
+      try {
+        return await fn();
+      } catch (err: any) {
+        lastErr = err;
+
+        // Stale token → drop the cache and retry immediately, once.
+        if (err?.response?.status === 401 && !reauthed) {
+          reauthed = true;
+          this.tokenCache = null;
+          logger.warn(
+            { op },
+            'Keycloak admin: token rejected (401) — re-authenticating and retrying once',
+          );
+          continue;
+        }
+
+        if (!isTransientKeycloakError(err) || i === attempts - 1) {
+          throw err;
+        }
+
+        const delayMs = 300 * Math.pow(2, i);
+        logger.warn(
+          { op, attempt: i + 1, delayMs, error: err.message },
+          'Keycloak admin: transient error, retrying',
+        );
+        await new Promise(res => setTimeout(res, delayMs));
+      }
+    }
+    throw lastErr;
+  }
+
   private async getToken(): Promise<string | null> {
     if (this.tokenCache && this.tokenCache.expiresAt > Date.now() + 5000) {
       return this.tokenCache.token;
@@ -61,7 +158,12 @@ class KeycloakAdminService {
           username: config.keycloak.adminUsername,
           password: config.keycloak.adminPassword || '',
         }).toString(),
-        { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } },
+        {
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          // Every other call funnels through here, so an unbounded hang on the
+          // token endpoint would stall all of them.
+          timeout: KEYCLOAK_TIMEOUT_MS,
+        },
       );
       const token = res.data.access_token as string;
       const expiresIn = (res.data.expires_in as number) ?? 60;
@@ -279,26 +381,279 @@ class KeycloakAdminService {
   async findUserIdByEmail(email: string): Promise<string | null> {
     if (!this.isLive) {return null;}
     try {
-      const headers = await this.authHeaders();
-      const res = await axios.get(`${this.base}/users`, {
-        headers,
-        params: { email, exact: true },
+      // Retried: `createUser`'s recovery path relies on this to decide whether a
+      // failed-looking create actually landed. A transient blip returning a false
+      // "not found" there would re-issue the create against an account that
+      // already exists.
+      return await this.withRetry('findUserIdByEmail', async () => {
+        const headers = await this.authHeaders();
+        const res = await axios.get(`${this.base}/users`, {
+          headers,
+          params: { email, exact: true },
+          timeout: KEYCLOAK_TIMEOUT_MS,
+        });
+        const users: Array<{ id: string; email?: string }> = Array.isArray(
+          res.data,
+        )
+          ? res.data
+          : [];
+        const match =
+          users.find(
+            u => (u.email || '').toLowerCase() === email.toLowerCase(),
+          ) ?? users[0];
+        return match?.id ?? null;
       });
-      const users: Array<{ id: string; email?: string }> = Array.isArray(
-        res.data,
-      )
-        ? res.data
-        : [];
-      const match =
-        users.find(
-          u => (u.email || '').toLowerCase() === email.toLowerCase(),
-        ) ?? users[0];
-      return match?.id ?? null;
     } catch (err: any) {
       logger.warn(
         `Keycloak admin: findUserIdByEmail failed for ${email}: ${err.message}`,
       );
       return null;
+    }
+  }
+
+  /**
+   * Create a realm user with a temporary password, in a single Admin API call.
+   * Returns the new user's Keycloak id.
+   *
+   * The password is passed inline as a `temporary: true` credential rather than
+   * being set in a follow-up request, so there is no window in which the account
+   * exists without one. `temporary: true` is what makes Keycloak challenge the
+   * user to choose a new password before it will issue a token; UPDATE_PASSWORD
+   * is *also* set explicitly on the representation because that derivation has
+   * historically varied between Keycloak versions, and the difference between the
+   * two behaviours is "must reset at first login" vs "keeps this password
+   * forever".
+   *
+   * `emailVerified: true` is deliberate: the address is vouched for by the super
+   * admin creating the account, and leaving it false would make Keycloak demand a
+   * verification email — which Hermes does not send for this flow.
+   *
+   * Throws ConflictError if the username or email is already taken.
+   *
+   * NOT retried blindly. A create is the one call here that isn't safe to repeat:
+   * if the request reached Keycloak and only the *response* was lost, a second
+   * attempt returns 409 and the caller is told "already exists" about an account
+   * it just made itself — with the password undelivered. So a transient failure
+   * first asks Keycloak whether the account actually landed, adopts it if so, and
+   * only re-issues the create when it definitively did not.
+   */
+  async createUser(input: CreateKeycloakUserInput): Promise<string> {
+    if (!this.isLive) {
+      throw new ExternalServiceError(
+        'Keycloak is running in simulation mode — cannot create a real user. ' +
+          'Set KEYCLOAK_ADMIN_PASSWORD and disable KEYCLOAK_SIMULATION.',
+      );
+    }
+
+    const attemptCreate = async (): Promise<string | undefined> => {
+      const headers = await this.authHeaders();
+      const res = await axios.post(
+        `${this.base}/users`,
+        {
+          username: input.username,
+          email: input.email,
+          firstName: input.firstName,
+          lastName: input.lastName,
+          enabled: true,
+          emailVerified: true,
+          requiredActions: ['UPDATE_PASSWORD'],
+          credentials: [
+            {
+              type: 'password',
+              value: input.temporaryPassword,
+              temporary: true,
+            },
+          ],
+        },
+        { headers, timeout: KEYCLOAK_TIMEOUT_MS },
+      );
+      return res.headers?.location as string | undefined;
+    };
+
+    const MAX_CREATE_ATTEMPTS = 2;
+    let location: string | undefined;
+
+    for (let attempt = 1; ; attempt++) {
+      try {
+        location = await attemptCreate();
+        break;
+      } catch (err: any) {
+        if (err.response?.status === 409) {
+          throw new ConflictError(
+            `A Keycloak user with this email or username already exists (${input.email})`,
+          );
+        }
+
+        if (isTransientKeycloakError(err) && attempt < MAX_CREATE_ATTEMPTS) {
+          // Did the create actually land before the connection broke? If it did,
+          // re-issuing would 409 against our own account.
+          const landed = await this.findUserIdByEmail(input.email);
+          if (landed) {
+            logger.warn(
+              { email: input.email, userId: landed, error: err.message },
+              'Keycloak admin: create appeared to fail but the account exists — adopting it instead of retrying',
+            );
+            return landed;
+          }
+          logger.warn(
+            { email: input.email, attempt, error: err.message },
+            'Keycloak admin: transient error on user create and no account was written — retrying',
+          );
+          await new Promise(res => setTimeout(res, 300 * attempt));
+          continue;
+        }
+
+        // 400 here is usually the realm's password policy rejecting the generated
+        // password — surface Keycloak's own message, it names the failing rule.
+        const detail =
+          err.response?.data?.errorMessage ||
+          err.response?.data?.error ||
+          err.message;
+        throw new ExternalServiceError(
+          `Keycloak rejected the user creation: ${detail}`,
+        );
+      }
+    }
+
+    // 201 Created carries the new id in the Location header. Some proxies strip
+    // it, so fall back to an email lookup rather than failing a user that was in
+    // fact created.
+    const rawId = location?.split('/').filter(Boolean).pop();
+    const idFromLocation = rawId ? rawId.split('?')[0].split('#')[0] : undefined;
+    if (idFromLocation) {
+      return idFromLocation;
+    }
+
+    const resolved = await this.findUserIdByEmail(input.email);
+    if (!resolved) {
+      // The account was accepted by Keycloak but we cannot name it, so we can
+      // neither finish provisioning nor roll it back (deleting needs the very id
+      // we're missing). Say so explicitly: the caller must know an orphan may
+      // exist, or they will retry, hit a 409, and have no idea why.
+      logger.error(
+        { email: input.email, username: input.username },
+        'Keycloak accepted the user creation but its id could not be resolved — a partially-provisioned account may exist',
+      );
+      throw new ExternalServiceError(
+        `Keycloak accepted the account for ${input.email} but did not return its id, so provisioning could not be completed. ` +
+          `A user "${input.username}" may now exist in Keycloak with no password delivered — check the realm and delete it before retrying.`,
+      );
+    }
+    return resolved;
+  }
+
+  /**
+   * EFFECTIVE realm role names held by a user. Used as a safety guard before a
+   * password reset — see `apollo-user.service.regeneratePassword`. Empty when not
+   * live.
+   *
+   * Deliberately the `/composite` endpoint, not the plain one: Hermes itself
+   * builds composite roles (see `ensureCompositeRole`), so a privileged role
+   * reached *through* a composite is entirely possible. The plain endpoint returns
+   * only direct assignments and would let exactly that case slip past the guard.
+   */
+  async getUserRealmRoles(userId: string): Promise<string[]> {
+    if (!this.isLive) {
+      return [];
+    }
+    return this.withRetry('getUserRealmRoles', async () => {
+      const headers = await this.authHeaders();
+      const res = await axios.get(
+        `${this.base}/users/${encodeURIComponent(userId)}/role-mappings/realm/composite`,
+        { headers, timeout: KEYCLOAK_TIMEOUT_MS },
+      );
+      const roles: RoleRepresentation[] = Array.isArray(res.data) ? res.data : [];
+      return roles.map(r => r.name).filter((n): n is string => !!n);
+    });
+  }
+
+  /**
+   * Replace a user's password with a new TEMPORARY one, forcing them to choose a
+   * fresh password at their next login. Invalidates whatever password they had.
+   *
+   * Safe to retry: the call is a PUT carrying the full desired state, so a repeat
+   * after a lost response simply sets the same password again.
+   */
+  async resetPassword(userId: string, temporaryPassword: string): Promise<void> {
+    if (!this.isLive) {
+      throw new ExternalServiceError(
+        'Keycloak is running in simulation mode — cannot reset a real password.',
+      );
+    }
+
+    await this.withRetry('resetPassword', async () => {
+      const headers = await this.authHeaders();
+      await axios.put(
+        `${this.base}/users/${encodeURIComponent(userId)}/reset-password`,
+        { type: 'password', value: temporaryPassword, temporary: true },
+        { headers, timeout: KEYCLOAK_TIMEOUT_MS },
+      );
+    });
+
+    // `temporary: true` above is what normally adds UPDATE_PASSWORD, but that
+    // derivation has varied between Keycloak versions and the difference is
+    // "must reset at next login" vs "keeps this password forever". Re-assert it
+    // explicitly, merging rather than replacing so any other pending required
+    // action (e.g. CONFIGURE_TOTP) survives.
+    //
+    // Best-effort: the reset itself already succeeded, and failing the whole
+    // operation here would strand a password that has already been changed.
+    try {
+      await this.withRetry('resetPassword:requiredAction', async () => {
+        const headers = await this.authHeaders();
+        const current = await axios.get(
+          `${this.base}/users/${encodeURIComponent(userId)}`,
+          { headers, timeout: KEYCLOAK_TIMEOUT_MS },
+        );
+        const actions: string[] = Array.isArray(current.data?.requiredActions)
+          ? current.data.requiredActions
+          : [];
+        if (actions.includes('UPDATE_PASSWORD')) {
+          return;
+        }
+        await axios.put(
+          `${this.base}/users/${encodeURIComponent(userId)}`,
+          {
+            ...(current.data && typeof current.data === 'object' ? current.data : {}),
+            requiredActions: [...actions, 'UPDATE_PASSWORD'],
+          },
+          { headers, timeout: KEYCLOAK_TIMEOUT_MS },
+        );
+      });
+    } catch (err: any) {
+      logger.warn(
+        { userId, error: err.message },
+        'Keycloak admin: password was reset but UPDATE_PASSWORD could not be re-asserted — the temporary credential should still force a reset',
+      );
+    }
+  }
+
+  /**
+   * True if a username is already taken. Used to disambiguate a derived username
+   * (First_Last) *before* creating the user, so a name collision becomes
+   * "Rishit_Goel_2" rather than an opaque 409 the super admin can't act on.
+   * Exact match; Keycloak compares usernames case-insensitively.
+   */
+  async usernameExists(username: string): Promise<boolean> {
+    if (!this.isLive) {
+      return false;
+    }
+    try {
+      return await this.withRetry('usernameExists', async () => {
+        const headers = await this.authHeaders();
+        const res = await axios.get(`${this.base}/users`, {
+          headers,
+          params: { username, exact: true },
+          timeout: KEYCLOAK_TIMEOUT_MS,
+        });
+        return Array.isArray(res.data) && res.data.length > 0;
+      });
+    } catch (err: any) {
+      logger.warn(
+        `Keycloak admin: usernameExists failed for ${username}: ${err.message}`,
+      );
+      // Unknown → assume free and let Keycloak's own 409 be the backstop.
+      return false;
     }
   }
 

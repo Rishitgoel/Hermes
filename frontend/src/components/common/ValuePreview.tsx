@@ -1,6 +1,7 @@
 import React from 'react';
 import { detectType, isLargeValue, previewValue, tooltipValue, TYPE_META, type ValueType } from '../../lib/valueFormat';
 import { JsonViewerButton, type ViewerSection } from './JsonValueViewer';
+import CopyButton from './CopyButton';
 
 /**
  * Inline preview of a value (optionally a before → after diff) that never overflows its container:
@@ -51,7 +52,28 @@ export const ValuePreview: React.FC<{
   emptyLabel?: React.ReactNode;
   /** Show the inferred-type badge (json/array/num/bool/str) before the preview. Default true. */
   showTypeChip?: boolean;
-}> = ({ value, previousValue, viewerTitle, emptyLabel, showTypeChip = true }) => {
+  /** Show a copy button next to the value. Default true. */
+  showCopyButton?: boolean;
+  /**
+   * Always offer the expand-to-viewer button, not just when `isLargeValue` says the value is big.
+   * The size heuristic is about the value itself, but clipping is really about column width — a
+   * 60-char value in a narrow cell (or either side of a before → after diff, which halves the
+   * space again) ellipsizes with no way to read it. Set this wherever the reader must be able to
+   * see the whole value regardless of length.
+   */
+  alwaysShowViewer?: boolean;
+  /** Visible text for the expand button (see JsonViewerButton). Icon-only when omitted. */
+  viewerLabel?: React.ReactNode;
+}> = ({
+  value,
+  previousValue,
+  viewerTitle,
+  emptyLabel,
+  showTypeChip = true,
+  showCopyButton = true,
+  alwaysShowViewer = false,
+  viewerLabel,
+}) => {
   if (value === null || value === undefined) {
     return (
       <span style={{ fontStyle: 'italic', color: 'var(--text-muted)' }}>
@@ -61,7 +83,12 @@ export const ValuePreview: React.FC<{
   }
 
   const isDiff = previousValue !== null && previousValue !== undefined && previousValue !== value;
-  const large = isLargeValue(value) || (isDiff && isLargeValue(previousValue));
+  // `alwaysShowViewer` still skips a blank value with nothing to compare against — opening a
+  // viewer that just reads "(empty)" is a dead button.
+  const large =
+    (alwaysShowViewer && (value !== '' || isDiff)) ||
+    isLargeValue(value) ||
+    (isDiff && isLargeValue(previousValue));
 
   const sections: ViewerSection[] = isDiff
     ? [
@@ -71,24 +98,25 @@ export const ValuePreview: React.FC<{
     : [{ label: 'Value', value, tone: 'neutral' }];
 
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0, maxWidth: '100%' }}>
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0, maxWidth: '100%', width: '100%' }}>
       {showTypeChip && <TypeChip type={detectType(value)} />}
       {isDiff ? (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0, maxWidth: '100%' }}>
-          <span title={tooltipValue(previousValue)} style={{ ...clip, textDecoration: 'line-through', color: 'var(--text-muted)' }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0, maxWidth: '100%', flex: '1 1 0px' }}>
+          <span title={tooltipValue(previousValue)} style={{ ...clip, flex: '1 1 0px', textDecoration: 'line-through', color: 'var(--text-muted)' }}>
             {previewValue(previousValue)}
           </span>
           <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>→</span>
-          <span title={tooltipValue(value)} style={{ ...clip }}>
+          <span title={tooltipValue(value)} style={{ ...clip, flex: '1 1 0px' }}>
             {previewValue(value)}
           </span>
         </span>
       ) : (
-        <span title={tooltipValue(value)} style={{ ...clip }}>
+        <span title={tooltipValue(value)} style={{ ...clip, flex: '1 1 0px' }}>
           {previewValue(value) || <em style={{ color: 'var(--text-light)' }}>(empty)</em>}
         </span>
       )}
-      {large && <JsonViewerButton title={viewerTitle ?? 'Value'} sections={sections} />}
+      {showCopyButton && value && <CopyButton value={value} title="Copy value" size={12} />}
+      {large && <JsonViewerButton title={viewerTitle ?? 'Value'} sections={sections} label={viewerLabel} />}
     </span>
   );
 };

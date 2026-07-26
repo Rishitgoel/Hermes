@@ -834,6 +834,7 @@ export class AccessWorkflowService {
           groupName: group.name,
           reviewerName: performer.username,
           platform,
+          requesterEmail: target.email,
         },
         timestamp: new Date(),
       });
@@ -857,6 +858,105 @@ export class AccessWorkflowService {
       name: performer.username,
     });
     return { kind: 'provisioned', request: provisioned };
+  }
+
+  /**
+   * Withdraw one's OWN still-open access request (requester-initiated, no admin involved).
+   *
+   * Only PENDING and WAITING_FOR_SETUP are withdrawable — exactly the two statuses the
+   * one-open-request-per-(user, group) partial unique index covers, which is the point:
+   * a request stuck waiting on a platform account the user no longer wants blocks them
+   * from ever re-requesting that group. Anything further along has already touched the
+   * platform (PROVISIONING/PROVISIONED) or is terminal, and unwinding those is revoke's
+   * job, not withdrawal's.
+   *
+   * WAITING_FOR_SETUP is included deliberately even though an admin already approved it:
+   * nothing has been provisioned yet, so there is nothing to undo — it is still just a
+   * queued intention.
+   *
+   * The conditional updateMany is the race guard: an admin approving at the same moment
+   * moves the row out of these statuses first, and the loser gets a ConflictError rather
+   * than silently withdrawing an already-approved request.
+   */
+  async withdrawRequest(
+    requestId: string,
+    requester: { id: string; username: string },
+    reason?: string,
+  ) {
+    const request = await prisma.accessRequest.findUnique({
+      where: { id: requestId },
+      include: { group: true },
+    });
+    if (!request) {throw new NotFoundError('Access request not found');}
+
+    // Not an AuthorizationError: whether some other user's request exists is not
+    // something a non-participant should be able to probe.
+    if (request.requesterId !== requester.id) {
+      throw new NotFoundError('Access request not found');
+    }
+
+    const withdrawable: RequestStatus[] = [
+      RequestStatus.PENDING,
+      RequestStatus.WAITING_FOR_SETUP,
+    ];
+    if (!withdrawable.includes(request.status)) {
+      throw new ValidationError(
+        `This request can no longer be withdrawn (status: ${request.status}).`,
+      );
+    }
+
+    const claim = await prisma.accessRequest.updateMany({
+      where: { id: requestId, status: { in: withdrawable } },
+      data: {
+        status: RequestStatus.WITHDRAWN,
+        reviewNote: reason?.trim() || null,
+        reviewedAt: new Date(),
+      },
+    });
+    if (claim.count === 0) {
+      throw new ConflictError(
+        'This request was just reviewed by an admin and can no longer be withdrawn.',
+      );
+    }
+
+    // Reviewer fields stay null on purpose — nobody reviewed this. The audit row carries
+    // the requester as the performer, which is what makes a withdrawal legible as such.
+    await prisma.auditEntry.create({
+      data: {
+        action: 'REQUEST_WITHDRAWN',
+        performerId: requester.id,
+        performerName: requester.username,
+        targetUserId: request.requesterId,
+        targetUserName: request.requesterName,
+        groupId: request.groupId,
+        accessRequestId: requestId,
+        details: {
+          reason: reason?.trim() || null,
+          groupName: request.group.name,
+          justification: request.justification,
+          previousStatus: request.status,
+        },
+      },
+    });
+
+    eventBus.emitAccessEvent({
+      type: 'request.withdrawn',
+      payload: {
+        requestId,
+        requesterId: request.requesterId,
+        requesterName: request.requesterName,
+        groupId: request.groupId,
+        groupName: request.group.name,
+        previousStatus: request.status,
+        reason: reason?.trim() || null,
+      },
+      timestamp: new Date(),
+    });
+
+    return prisma.accessRequest.findUnique({
+      where: { id: requestId },
+      include: { group: true, level: true },
+    });
   }
 
   // Review Request (Admin)
@@ -999,6 +1099,7 @@ export class AccessWorkflowService {
           groupName: request.group.name,
           reviewerName: reviewer.username,
           platform,
+          requesterEmail: request.requesterEmail,
         },
         timestamp: new Date(),
       });

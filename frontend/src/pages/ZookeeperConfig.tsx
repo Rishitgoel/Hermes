@@ -1,5 +1,6 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useRef, useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import * as Icons from 'lucide-react';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import SectionHeader from '../components/common/SectionHeader';
@@ -10,9 +11,11 @@ import {
   getZkScope,
   listZkChangeRequests,
   submitZkChangeRequest,
+  withdrawZkChangeRequest,
   type ZkChange,
   type ZkChangeRequest,
 } from '../services/api/zookeeperApi';
+import ReasonModal from '../components/common/ReasonModal';
 import { ACTION_COLOR, INDENT, ROW_TINT, ZK_ROW_FONT, detectType, parsesAsJson, previewValue, tooltipValue, isLargeValue } from '../components/zookeeper/zkFormat';
 import { JsonViewerButton } from '../components/common/JsonValueViewer';
 import { TypeChip } from '../components/zookeeper/TypeChip';
@@ -44,6 +47,8 @@ const STATUS_BADGE: Record<ZkChangeRequest['status'], string> = {
   PARTIALLY_APPLIED: 'badge-warning',
   APPLY_FAILED: 'badge-danger',
   REJECTED: 'badge-danger',
+  // Neutral — the requester ended this themselves, it was never rejected.
+  WITHDRAWN: 'badge-revoked',
 };
 
 const DRAFTS_KEY = 'hermes_zk_drafts';
@@ -58,6 +63,11 @@ const isDirectChild = (base: string, p: string): boolean => {
 export const ZookeeperConfig: React.FC = () => {
   const queryClient = useQueryClient();
   const toast = useToast();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const targetPath = searchParams.get('path');
+
+  // The request the withdraw confirmation is open for (null = closed).
+  const [withdrawing, setWithdrawing] = useState<ZkChangeRequest | null>(null);
 
   // Drafts are mirrored to localStorage so switching tabs/pages never loses staged work.
   const [drafts, setDrafts] = useState<DraftMap>(() => {
@@ -103,6 +113,16 @@ export const ZookeeperConfig: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.zkChangeRequests('mine') });
     },
     onError: (err: any) => toast.error(err?.message || 'Failed to submit change request.'),
+  });
+
+  const withdrawMutation = useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) => withdrawZkChangeRequest(id, reason || undefined),
+    onSuccess: () => {
+      toast.success('Change request withdrawn.');
+      setWithdrawing(null);
+      queryClient.invalidateQueries({ queryKey: queryKeys.zkChangeRequests('mine') });
+    },
+    onError: (err: any) => toast.error(err?.message || 'Failed to withdraw change request.'),
   });
 
   // ── Derived ───────────────────────────────────────────────────────────────────
@@ -192,6 +212,8 @@ export const ZookeeperConfig: React.FC = () => {
                     stageDraft={stageDraft}
                     removeDraft={removeDraft}
                     removeSubtree={removeSubtree}
+                    targetPath={targetPath}
+                    setSearchParams={setSearchParams}
                   />
                 ))}
               </div>
@@ -281,6 +303,7 @@ export const ZookeeperConfig: React.FC = () => {
                   <th>Changes</th>
                   <th style={{ width: 130 }}>Status</th>
                   <th style={{ width: 180 }}>Submitted</th>
+                  <th style={{ width: 110 }}></th>
                 </tr>
               </thead>
               <tbody>
@@ -324,6 +347,20 @@ export const ZookeeperConfig: React.FC = () => {
                     <td style={{ color: 'var(--text-light)', fontSize: 13 }}>
                       {new Date(r.createdAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                     </td>
+                    <td style={{ textAlign: 'right' }}>
+                      {/* PENDING only — an APPLY_FAILED request is already approved and may have
+                          half-written znodes, so recovering it belongs to an admin. */}
+                      {r.status === 'PENDING' && (
+                        <button
+                          type="button"
+                          className="btn btn-outline btn-sm"
+                          onClick={() => setWithdrawing(r)}
+                          disabled={withdrawMutation.isPending}
+                        >
+                          Withdraw
+                        </button>
+                      )}
+                    </td>
                   </tr>
                   );
                 })}
@@ -332,6 +369,22 @@ export const ZookeeperConfig: React.FC = () => {
           </div>
         )}
       </div>
+
+      <ReasonModal
+        isOpen={!!withdrawing}
+        title="Withdraw change request"
+        message={
+          <>
+            Withdraw this request and its {withdrawing?.changes.length ?? 0} staged change(s)? Nothing
+            has been written to ZooKeeper yet, and you can stage and submit the changes again later.
+          </>
+        }
+        placeholder="Why are you withdrawing this? (optional)"
+        confirmLabel="Withdraw request"
+        loading={withdrawMutation.isPending}
+        onConfirm={(reason) => withdrawing && withdrawMutation.mutate({ id: withdrawing.id, reason })}
+        onClose={() => setWithdrawing(null)}
+      />
     </div>
   );
 };
@@ -352,16 +405,51 @@ interface ZkTreeNodeProps {
   defaultExpanded?: boolean;
   /** This node is a pending CREATE (folder) that doesn't exist on the server yet. */
   virtual?: boolean;
+  targetPath: string | null;
+  setSearchParams: ReturnType<typeof useSearchParams>[1];
 }
 
 const rowsFor = (s: string) => Math.min(14, Math.max(2, s.split('\n').length));
 const lastSeg = (p: string) => p.split('/').pop() || p;
 
-const ZkTreeNode: React.FC<ZkTreeNodeProps> = ({ node, drafts, stageDraft, removeDraft, removeSubtree, isRoot, defaultExpanded, virtual }) => {
-  const [expanded, setExpanded] = useState(!!defaultExpanded);
+const ZkTreeNode: React.FC<ZkTreeNodeProps> = ({
+  node,
+  drafts,
+  stageDraft,
+  removeDraft,
+  removeSubtree,
+  isRoot,
+  defaultExpanded,
+  virtual,
+  targetPath,
+  setSearchParams,
+}) => {
+  const shouldExpand = useMemo(() => {
+    if (!targetPath) return false;
+    if (targetPath === node.path) return true;
+    return targetPath.startsWith(node.path === '/' ? '/' : `${node.path}/`);
+  }, [targetPath, node.path]);
+
+  const [expanded, setExpanded] = useState(!!defaultExpanded || shouldExpand);
   const [editingValue, setEditingValue] = useState<string | null>(null); // inline value edit
   const [renameTo, setRenameTo] = useState<string | null>(null); // inline rename
   const [adding, setAdding] = useState<{ kind: 'property' | 'folder'; name: string; value: string } | null>(null);
+
+  const rowRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (shouldExpand) {
+      setExpanded(true);
+    }
+  }, [shouldExpand]);
+
+  const isTarget = targetPath === node.path;
+
+  useEffect(() => {
+    if (isTarget && rowRef.current) {
+      rowRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }, [isTarget]);
 
   const browse = useQuery({
     queryKey: queryKeys.zkNodes(node.path),
@@ -616,18 +704,29 @@ const ZkTreeNode: React.FC<ZkTreeNodeProps> = ({ node, drafts, stageDraft, remov
       </div>
     ) : undefined;
 
+  const handleNameClick = () => {
+    if (isFolderView) {
+      toggle();
+    }
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('path', node.path);
+      return next;
+    }, { replace: true });
+  };
+
   return (
-    <div>
+    <div ref={isTarget ? rowRef : undefined}>
       <ZkRow
         caret={caret}
         icon={icon}
         name={nameNode}
         nameTitle={node.path}
-        onNameClick={isFolderView ? toggle : undefined}
+        onNameClick={handleNameClick}
         badges={badges}
         body={body}
         actions={rowActions}
-        tint={draft ? ROW_TINT[draft.action] : undefined}
+        tint={draft ? ROW_TINT[draft.action] : isTarget ? 'var(--primary-light)' : undefined}
         align={editingValue !== null ? 'flex-start' : 'center'}
       />
 
@@ -732,6 +831,8 @@ const ZkTreeNode: React.FC<ZkTreeNodeProps> = ({ node, drafts, stageDraft, remov
                   stageDraft={stageDraft}
                   removeDraft={removeDraft}
                   removeSubtree={removeSubtree}
+                  targetPath={targetPath}
+                  setSearchParams={setSearchParams}
                 />
               ))}
 
@@ -750,6 +851,8 @@ const ZkTreeNode: React.FC<ZkTreeNodeProps> = ({ node, drafts, stageDraft, remov
                       stageDraft={stageDraft}
                       removeDraft={removeDraft}
                       removeSubtree={removeSubtree}
+                      targetPath={targetPath}
+                      setSearchParams={setSearchParams}
                     />
                   );
                 }

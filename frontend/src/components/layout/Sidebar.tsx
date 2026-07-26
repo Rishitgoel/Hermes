@@ -17,7 +17,8 @@ import {
   Network,
   KeyRound,
   LogOut,
-  Sparkles
+  Sparkles,
+  Settings as SettingsIcon
 } from 'lucide-react';
 
 export const Sidebar: React.FC = () => {
@@ -44,6 +45,10 @@ export const Sidebar: React.FC = () => {
 
   // Admin Management is for super admins and platform admins.
   const showAdminManagement = (scopes?.superAdmin ?? isSuperAdmin) || (scopes?.platforms?.length ?? 0) > 0;
+
+  // Settings change behaviour for everyone (who gets notified, how staff are
+  // onboarded), so they are super-admin only.
+  const showSettings = scopes?.superAdmin ?? isSuperAdmin;
 
   // Badge = the real number of items waiting in the Pending Approvals queue, not
   // the unread-notification count. Reuses the same query keys as the Pending
@@ -94,6 +99,7 @@ export const Sidebar: React.FC = () => {
     <aside className="sidebar">
       {/* Logo Section */}
       <div className="logo-container">
+        <img src="/assets/logo.png" alt="Bachatt Logo" className="logo-img" />
         <span className="logo-text">HERMES</span>
       </div>
 
@@ -172,6 +178,16 @@ export const Sidebar: React.FC = () => {
           >
             <History size={20} />
             <span>Audit Log</span>
+          </NavLink>
+        )}
+
+        {showSettings && (
+          <NavLink
+            to="/hermes/settings"
+            className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+          >
+            <SettingsIcon size={20} />
+            <span>Settings</span>
           </NavLink>
         )}
       </nav>

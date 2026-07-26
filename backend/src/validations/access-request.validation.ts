@@ -41,6 +41,15 @@ export const reviewRequestSchema = z.object({
     .optional(),
 });
 
+// Withdraw one's own still-open request. The reason is optional — a user pulling their
+// own request back owes no justification; it only exists so the audit row can say why.
+export const withdrawRequestSchema = z.object({
+  reason: z
+    .string()
+    .max(250, 'Reason must not exceed 250 characters')
+    .optional(),
+});
+
 // Bulk submit (Groups page): one duration shared across all selected groups, each
 // with its own justification (custom or general) and optional level. Level
 // requiredness is enforced per-item in the workflow service (DB-state dependent).

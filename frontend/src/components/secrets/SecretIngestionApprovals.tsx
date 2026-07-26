@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Icons from 'lucide-react';
 import SectionHeader from '../common/SectionHeader';
 import { ValuePreview } from '../common/ValuePreview';
+import CopyButton from '../common/CopyButton';
 import { queryKeys } from '../../lib/queryKeys';
 import { envBg, envOf, formatTargetPath, INFRA_STATE_META } from '../../lib/infraTargetFormat';
 import { useToast } from '../../contexts/ToastContext';
@@ -249,7 +250,7 @@ export const SecretIngestionApprovals: React.FC = () => {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 0 7px', flexWrap: 'wrap' }}>
                       <RequestChip n={r.requestNumber} />
                       <Icons.KeyRound size={17} style={{ color: 'var(--primary)', flexShrink: 0 }} />
-                      <code style={{ fontSize: 17, fontWeight: 700, color: 'var(--text-main)', wordBreak: 'break-all' }}>{r.secretName}</code>
+                      <code title={r.secretName} style={{ fontSize: 17, fontWeight: 700, color: 'var(--text-main)', wordBreak: 'break-all' }}>{r.secretName}</code>
                       {multiInstance && <InstanceBadge label={instanceLabel(r.platform)} />}
                     </div>
                     <div style={{ fontSize: 13, color: 'var(--text-muted)', display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -311,7 +312,7 @@ export const SecretIngestionApprovals: React.FC = () => {
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 0 7px', flexWrap: 'wrap' }}>
                     <RequestChip n={r.requestNumber} />
                     <Icons.KeyRound size={17} style={{ color: 'var(--primary)', flexShrink: 0 }} />
-                    <code style={{ fontSize: 17, fontWeight: 700, color: 'var(--text-main)', wordBreak: 'break-all' }}>{r.secretName}</code>
+                    <code title={r.secretName} style={{ fontSize: 17, fontWeight: 700, color: 'var(--text-main)', wordBreak: 'break-all' }}>{r.secretName}</code>
                     {multiInstance && <InstanceBadge label={instanceLabel(r.platform)} />}
                   </div>
                   <div style={{ fontSize: 13, color: 'var(--text-muted)', display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -472,16 +473,36 @@ export const SecretIngestionApprovals: React.FC = () => {
                               {kind}
                             </span>
                           </td>
-                          <td>
-                            <code style={{ fontWeight: 600, fontSize: 12 }}>{entry.key}</code>
+                          <td style={{ wordBreak: 'break-all', width: '25%' }}>
+                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, maxWidth: '100%' }}>
+                              <code style={{ fontWeight: 600, fontSize: 12, wordBreak: 'break-all' }}>{entry.key}</code>
+                              <CopyButton value={entry.key} title="Copy key name" size={12} />
+                            </div>
+                            {/* Azure only — the env var this key lands in. Shown because the
+                                reviewer is approving the manifest edit as much as the value, and
+                                `mappings[].key` is what the pod actually reads. */}
+                            {entry.envVar && (
+                              <div
+                                style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'monospace', marginTop: 2 }}
+                                title="Environment variable this key is exposed as in the deployment manifest"
+                              >
+                                → {entry.envVar}
+                              </div>
+                            )}
                           </td>
-                          <td style={{ fontFamily: 'monospace', fontSize: 12, maxWidth: 340 }}>
+                          <td style={{ fontFamily: 'monospace', fontSize: 12, width: '45%', maxWidth: 460 }}>
+                            {/* Always offer the full-value viewer here, whatever the length: an
+                                approver is signing off on the exact value, and this column clips
+                                (harder still on an UPDATE, where before → after splits it in two).
+                                Labelled rather than icon-only so the affordance is unmissable. */}
                             <ValuePreview
                               value={entry.value}
                               previousValue={kind === 'UPDATE' ? entry.previousValue : undefined}
                               viewerTitle={entry.key}
                               emptyLabel="(Redacted)"
                               showTypeChip={false}
+                              alwaysShowViewer
+                              viewerLabel="View"
                             />
                           </td>
                           <td style={{ textAlign: 'right' }}>

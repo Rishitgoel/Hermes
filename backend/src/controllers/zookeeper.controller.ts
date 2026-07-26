@@ -6,6 +6,7 @@ import { AuthorizationError, NotFoundError } from '../utils/errors';
 import {
   submitZkChangeSchema,
   reviewZkChangeSchema,
+  withdrawZkChangeSchema,
 } from '../validations/zookeeper.validation';
 
 /**
@@ -112,6 +113,36 @@ export class ZookeeperController extends BaseController {
       this.sendResponse(rows, 'Change requests retrieved');
     } catch (error) {
       this.handleError(error, 'Failed to list change requests');
+    }
+  }
+
+  // POST /api/zookeeper/requests/:id/withdraw
+  // Requester-only: the service 404s a request the caller didn't file. No reviewer check
+  // here on purpose — an admin ending someone else's request is a rejection, which has
+  // its own path.
+  async withdrawRequest(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    try {
+      const validated = this.validateWithZod(
+        withdrawZkChangeSchema,
+        this.req.body ?? {},
+      );
+      if (!validated.success) {return;}
+      const userId = this.getUserId();
+      if (!userId) {return;}
+      const id = this.req.params.id as string;
+
+      const updated = await zookeeperConfigService.withdrawChangeRequest(
+        id,
+        { id: userId, username: this.user!.username },
+        validated.data.reason,
+      );
+      this.sendResponse(updated, 'Change request withdrawn');
+    } catch (error) {
+      this.handleError(error, 'Failed to withdraw change request');
     }
   }
 

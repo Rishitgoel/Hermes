@@ -168,6 +168,14 @@ export interface PlatformAdapter {
    */
   readonly label?: string;
 
+  /**
+   * Optional: which backing store this instance talks to, when a `family` spans more than one
+   * (Secret Ingestion is 'aws' for Secrets Manager, 'azure' for Key Vault). Surfaced on
+   * `GET /api/platforms` so the UI can adapt per-provider — Azure manifests need an env-var name
+   * alongside each key, AWS ones don't. Omit for a family with a single backing store.
+   */
+  readonly provider?: string;
+
   /** Add an existing user to a group on the platform. */
   provision(ctx: ProvisionContext): Promise<ProvisionResult>;
   /** Remove a user from a group on the platform. */

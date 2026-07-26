@@ -680,7 +680,7 @@ export const PendingApprovals: React.FC = () => {
                           type="button"
                           className="btn btn-outline btn-sm"
                           style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
-                          disabled={retryMutation.isPending && retryMutation.variables === req.id}
+                          disabled={retryMutation.isPending || dismissMutation.isPending}
                           onClick={() => retryMutation.mutate(req.id)}
                         >
                           {retryMutation.isPending && retryMutation.variables === req.id ? (
@@ -694,7 +694,7 @@ export const PendingApprovals: React.FC = () => {
                           type="button"
                           className="btn btn-outline btn-danger-outline btn-sm"
                           style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
-                          disabled={dismissMutation.isPending && dismissMutation.variables === req.id}
+                          disabled={retryMutation.isPending || dismissMutation.isPending}
                           onClick={() => dismissMutation.mutate(req.id)}
                         >
                           {dismissMutation.isPending && dismissMutation.variables === req.id ? (

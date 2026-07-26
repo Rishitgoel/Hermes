@@ -182,10 +182,8 @@ export class SecretDriftService {
   ): Promise<SecretDrift | null> {
     const svc = getSecretsManagerService(platform);
     const { exists, keys: awsKeys } = await svc.listSecretKeys(secretName);
-    const manifests: DriftManifest[] = await getInfraRepoSyncService(platform).resolveDrift(
-      secretName,
-      awsKeys,
-    );
+    const infra = getInfraRepoSyncService(platform);
+    const manifests: DriftManifest[] = await infra.resolveDrift(secretName, awsKeys);
 
     const registeredUnion = new Set<string>();
     for (const m of manifests) {
@@ -194,7 +192,13 @@ export class SecretDriftService {
       }
     }
 
-    const missingInManifest = [...new Set(manifests.flatMap((m) => m.missingKeys))].sort();
+    // "In the store but not in this manifest" is only drift when the manifest is SUPPOSED to list
+    // every key — see InfraRepoSyncService.consumersEnumerateAllKeys. On a shared Key Vault each
+    // service maps its own subset by design, so this half of the report is left empty (which also
+    // makes the drift unfixable, so no PR can ever fan a key out across unrelated services).
+    const missingInManifest = infra.consumersEnumerateAllKeys
+      ? [...new Set(manifests.flatMap((m) => m.missingKeys))].sort()
+      : [];
     const awsSet = new Set(awsKeys);
     const missingInAws = [...registeredUnion].filter((k) => !awsSet.has(k)).sort();
     const unmatchedManifests = manifests.filter((m) => m.unmatched).map((m) => m.path);
@@ -223,7 +227,9 @@ export class SecretDriftService {
         env: m.env,
         format: m.format,
         registeredKeys: m.registeredKeys,
-        missingKeys: m.missingKeys,
+        // Zeroed for the same reason as `missingInManifest` above — a per-manifest list would
+        // render "keys missing here" chips for keys that manifest is right not to have.
+        missingKeys: infra.consumersEnumerateAllKeys ? m.missingKeys : [],
         unmatched: m.unmatched,
       })),
       fixable: missingInManifest.length > 0,
@@ -423,6 +429,16 @@ export class SecretDriftService {
         `The "${key}" Secret Ingestion instance has no infra-deployment repo configured, so there is nothing to reconcile.`,
       );
     }
+    // A store whose consumers each map their own subset (Azure Key Vault) has no auto-fixable
+    // drift by construction — Hermes cannot know which service should own a new vault key, and
+    // registering it everywhere would mount unrelated credentials into unrelated pods. The UI
+    // never offers Solve there (fixable is always false), so this only guards a direct API call.
+    if (!getInfraRepoSyncService(key).consumersEnumerateAllKeys) {
+      throw new ValidationError(
+        `Manifests on the "${key}" instance each register their own subset of the vault, so Hermes cannot tell which service a key belongs to. Add it to that service's manifest through a normal Secret Ingestion request instead.`,
+      );
+    }
+
     const owner = await this.resolveOwnerGroup(key, user, secretName);
 
     const drift = await this.driftForSecret(key, secretName, owner);

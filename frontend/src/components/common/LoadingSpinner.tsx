@@ -67,7 +67,7 @@ export const LoadingSpinner: React.FC<LoadingSpinnerProps> = ({
               letterSpacing: '0.15em',
               textTransform: 'uppercase'
             }}>
-              Access Management
+              Bachatt Access Portal
             </p>
           </div>
 

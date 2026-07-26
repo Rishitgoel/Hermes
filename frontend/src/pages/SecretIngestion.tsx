@@ -1,8 +1,10 @@
 import React, { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import * as Icons from 'lucide-react';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import SectionHeader from '../components/common/SectionHeader';
+import CopyButton from '../components/common/CopyButton';
 import { SearchableSelect } from '../components/common/SearchableSelect';
 import { useToast } from '../contexts/ToastContext';
 import { queryKeys } from '../lib/queryKeys';
@@ -12,14 +14,42 @@ import {
   listSecretKeys,
   listIngestionRequests,
   submitIngestionRequestsBulk,
+  withdrawIngestionRequest,
   previewInfraTargets,
   listSecretsInstances,
+  deriveEnvVar,
   type SecretIngestionRequest,
   type InfraTargetSelection,
 } from '../services/api/secretsApi';
+import ReasonModal from '../components/common/ReasonModal';
+import { precheckSecretKey } from '../lib/secretKeyPrecheck';
 
 /** Stable empty-set reference for the "no keys excluded for this path yet" default. */
 const EMPTY_KEY_SET: ReadonlySet<string> = new Set();
+
+/** Micro-steps the gimmick "AI" precheck cycles through while it "scans" a key name.
+ *  Module-level so the effect that plays them has a stable reference. */
+const AI_SCAN_STEPS = [
+  'Analyzing key semantics…',
+  'Matching against secret taxonomy…',
+  'Scoring configuration likelihood…',
+];
+
+/** Sarcastic one-liners shown on the FAIL verdict — one per distinct blocked key the user
+ *  types (not a timed rotation), so retyping a new offending key surfaces a fresh line.
+ *  Module-level so the picking effect has a stable reference. */
+const AI_SARCASM_LINES = [
+  'AI ne bol diya — ye secret nahi, sirf drama hai.',
+  'Itni mehnat se galat jagah daal rahe ho, respect hai.',
+  'Ten out of ten for creativity, zero out of ten for secrecy.',
+  'Even the AI is embarrassed for you right now. This one is config not secret.',
+  'This key belongs in a YAML file, not a vault.',
+  'Rejected — with love, but mostly with judgment.',
+  'This seems to be config, not secret. Common sense has taken a big toll today.',
+  'Aap chronology samajhiye: URL config hai, secret nahi.',
+  'Moye moye… tera key reject ho gaya.',
+  'Sir Jee, this is a Secrets Manager, not a ConfigMap.',
+];
 /** Stable empty (never-mutated) Set default for a secret with no excluded target paths yet. */
 const EMPTY_PATH_SET: Set<string> = new Set();
 
@@ -31,11 +61,15 @@ const STATUS_BADGE: Record<SecretIngestionRequest['status'], string> = {
   PARTIALLY_APPLIED: 'badge-warning',
   APPLY_FAILED: 'badge-danger',
   REJECTED: 'badge-danger',
+  // Neutral — the requester ended this themselves, it was never rejected.
+  WITHDRAWN: 'badge-revoked',
 };
 
 interface DraftEntry {
   key: string;
   value: string;
+  /** Azure only: the env var this key lands in (`secretsStore.mappings[].key`). */
+  envVar?: string;
 }
 
 /** What a SecretCartGroup reports up to the page: the deployment targets it will submit for its
@@ -63,7 +97,129 @@ const MaskedValue: React.FC<{ value: string; maxLen?: number }> = ({ value, maxL
       >
         {show ? <Icons.EyeOff size={13} /> : <Icons.Eye size={13} />}
       </button>
+      <CopyButton value={value} title="Copy secret value" size={13} />
     </span>
+  );
+};
+
+/**
+ * Gimmick "AI verification" panel for the Add Key-Value form. Rendered ONLY when the
+ * typed key name trips the non-secret precheck (url / uri / autoStartup / …): it plays
+ * a brief scan animation, then shows a hard FAIL verdict explaining the key is config,
+ * not a secret, plus a sarcastic one-liner that advances one step per distinct offending
+ * key typed (see AI_SARCASM_LINES). A clean (secret-shaped) key renders nothing — the
+ * check is invisible unless there's something to block, exactly as requested.
+ *
+ * `sarcasmIndex` is computed by the parent, not this component: this component mounts and
+ * unmounts every time `blocked` flips (which happens mid-keystroke — e.g. typing "test"
+ * letter by letter passes through non-blocked prefixes before re-tripping the check), so
+ * any counter kept in local state/ref here would reset to 0 on every remount and the same
+ * first line would show forever. The parent stays mounted for the whole page session, so
+ * that's where the running count has to live.
+ */
+const AiKeyPrecheck: React.FC<{ matched: string; keyName: string; sarcasmIndex: number }> = ({
+  matched,
+  keyName,
+  sarcasmIndex,
+}) => {
+  const [phase, setPhase] = useState<'scanning' | 'failed'>('scanning');
+  const [step, setStep] = useState(0);
+
+  // Replay the scan each time the offending key text changes (e.g. edited url → uri).
+  React.useEffect(() => {
+    setPhase('scanning');
+    setStep(0);
+    const stepTimers = AI_SCAN_STEPS.map((_, i) => setTimeout(() => setStep(i), i * 280));
+    const done = setTimeout(() => setPhase('failed'), 950);
+    return () => {
+      stepTimers.forEach(clearTimeout);
+      clearTimeout(done);
+    };
+  }, [keyName]);
+
+  if (phase === 'scanning') {
+    return (
+      <div
+        style={{
+          display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 6,
+          border: '1px solid rgba(99, 102, 241, 0.35)', background: 'rgba(99, 102, 241, 0.07)',
+        }}
+      >
+        <Icons.Sparkles size={15} style={{ color: '#6366f1', flexShrink: 0 }} />
+        <Icons.Loader size={13} style={{ color: '#6366f1', flexShrink: 0, animation: 'spin 1s linear infinite' }} />
+        <span style={{ fontSize: 12, color: 'var(--text-main)', fontWeight: 500 }}>
+          AI verifying key name — {AI_SCAN_STEPS[step]}
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      role="alert"
+      style={{
+        display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 6,
+        border: '1px solid #dc2626', background: 'rgba(220, 38, 38, 0.06)',
+      }}
+    >
+      <Icons.Ban size={15} style={{ color: '#dc2626', flexShrink: 0, marginTop: 1 }} />
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
+        <span style={{ fontSize: 12.5, fontWeight: 700, color: '#dc2626', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <Icons.Sparkles size={12} /> AI verification failed
+        </span>
+        <span style={{ fontSize: 12, color: 'var(--text-main)', lineHeight: 1.45 }}>
+          <code style={{ fontSize: 11.5 }}>{keyName}</code> contains <code style={{ fontSize: 11.5 }}>{matched}</code> — this looks like
+          <strong> configuration, not a secret</strong>, so it can't be ingested here. Put endpoint URLs,
+          connection URIs and <code style={{ fontSize: 11.5 }}>autoStartup</code> flags in Properties Config / a ConfigMap instead.
+        </span>
+        <span style={{ fontSize: 11.5, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+          {AI_SARCASM_LINES[sarcasmIndex]}
+        </span>
+      </div>
+    </div>
+  );
+};
+
+/** Copies a key name to the clipboard AND fills it into the "Add Key-Value Entry" form
+ *  (via onUse) in one click — used in the Existing Keys list so updating an existing
+ *  key's value doesn't require retyping its name. */
+const CopyAndUseKeyButton: React.FC<{ value: string; onUse: (value: string) => void }> = ({ value, onUse }) => {
+  const [copied, setCopied] = useState(false);
+
+  const handleClick = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onUse(value);
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      /* clipboard blocked — no-op */
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      title={copied ? 'Copied & filled in!' : 'Copy & use this key'}
+      style={{
+        background: 'none',
+        border: 'none',
+        cursor: 'pointer',
+        color: copied ? '#16a34a' : 'var(--text-muted)',
+        padding: '2px 4px',
+        borderRadius: 4,
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        lineHeight: 1,
+        flexShrink: 0,
+        transition: 'all 0.15s ease',
+      }}
+    >
+      {copied ? <Icons.Check size={12} /> : <Icons.Copy size={12} />}
+    </button>
   );
 };
 
@@ -88,6 +244,8 @@ const InfraPrCell: React.FC<{ request: SecretIngestionRequest }> = ({ request })
 interface SecretCartGroupProps {
   secretName: string;
   platform: string;
+  /** Azure (Key Vault) instance: entries carry an env-var name, and no target file is preselected. */
+  isAzure: boolean;
   entries: DraftEntry[];
   onRemoveEntry: (key: string) => void;
   onDiscard: () => void;
@@ -113,6 +271,7 @@ interface SecretCartGroupProps {
 const SecretCartGroup: React.FC<SecretCartGroupProps> = ({
   secretName,
   platform,
+  isAzure,
   entries,
   onRemoveEntry,
   onDiscard,
@@ -163,6 +322,25 @@ const SecretCartGroup: React.FC<SecretCartGroupProps> = ({
     const fromScan = [...new Set(newTargets.flatMap((t) => t.keysToAdd))];
     return fromScan.length > 0 ? fromScan : draftKeys;
   }, [newTargets, draftKeys]);
+
+  // Azure: ONE vault (bachatt-prod-kv) backs several services, so the auto-scan finds every
+  // manifest that consumes it — orbit, saathi-be and tolgee all match — not just the service this
+  // key belongs to. Leaving them ticked by default would append the key to all of them, mounting a
+  // secret into unrelated workloads. Start every discovered file UNticked so the requester has to
+  // consciously pick the one service. (AWS is unaffected: there a secret's consumers ARE the
+  // services that should get the key, so ticked-by-default is correct.)
+  const autoExcludedRef = React.useRef<Set<string>>(new Set());
+  React.useEffect(() => {
+    if (!isAzure) return;
+    for (const t of newTargets) {
+      if (autoExcludedRef.current.has(t.path)) continue;
+      autoExcludedRef.current.add(t.path);
+      if (!excludedTargetPaths.has(t.path)) onToggleTarget(t.path);
+    }
+    // excludedTargetPaths/onToggleTarget deliberately omitted — this must run once per newly
+    // DISCOVERED path, not on every user tick (which would immediately undo their choice).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAzure, newTargets]);
 
   // The final file selection this secret will submit: auto-detected files kept, plus any added
   // by hand (de-duped by path). Empty ⇒ let the backend auto-resolve at PR time.
@@ -222,7 +400,8 @@ const SecretCartGroup: React.FC<SecretCartGroupProps> = ({
       <div className="bulk-request-header">
         <div className="bulk-request-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <Icons.ListChecks size={18} style={{ color: 'var(--primary)' }} />
-          <code>{secretName}</code>
+          <code title={secretName} style={{ wordBreak: 'break-all' }}>{secretName}</code>
+          <CopyButton value={secretName} title="Copy secret name" size={13} />
           <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>· {entries.length} {entries.length === 1 ? 'entry' : 'entries'}</span>
         </div>
         <button type="button" className="btn btn-outline btn-sm" onClick={onDiscard}>
@@ -244,6 +423,16 @@ const SecretCartGroup: React.FC<SecretCartGroupProps> = ({
                 {kind}
               </span>
               <code style={{ fontSize: 12, color: 'var(--text-main)', fontWeight: 600 }}>{d.key}</code>
+              <CopyButton value={d.key} title="Copy key name" size={12} />
+              {isAzure && (
+                <span
+                  className="badge badge-sm"
+                  title={`Exposed to the pod as the environment variable ${d.envVar || deriveEnvVar(d.key)}`}
+                  style={{ fontSize: 9, fontFamily: 'monospace', fontWeight: 700 }}
+                >
+                  → {d.envVar || deriveEnvVar(d.key)}
+                </span>
+              )}
               {overwrites && (
                 <span className="badge badge-danger badge-sm" style={{ fontSize: 9, textTransform: 'uppercase' }}>
                   Overwrites existing key
@@ -298,13 +487,35 @@ const SecretCartGroup: React.FC<SecretCartGroupProps> = ({
 
         <div style={{ padding: '12px 14px' }}>
           <p style={{ margin: '0 0 12px', fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-            <strong>New</strong> key names need a manifest entry to reach the pods (the PR); existing keys just update in AWS. Untick a file, or a key chip, to exclude it.
+            {isAzure ? (
+              <>
+                <strong>New</strong> key names need a manifest entry to reach the pods (the PR); existing keys just update in Key Vault.
+                One vault backs every Azure service, so <strong>tick only the service that needs this key</strong>.
+              </>
+            ) : (
+              <>
+                <strong>New</strong> key names need a manifest entry to reach the pods (the PR); existing keys just update in AWS. Untick a file, or a key chip, to exclude it.
+              </>
+            )}
           </p>
+
+          {/* Azure starts every file unticked (see autoExcludedRef) — so an untouched picker means
+              the key lands in Key Vault but no pod ever sees it. Warn, but never block: an
+              update-only request legitimately selects no file. */}
+          {isAzure && !infraLoading && newTargets.length > 0 && selectedInfraTargets.length === 0 && (
+            <div style={{ fontSize: 12, color: '#b45309', display: 'flex', alignItems: 'flex-start', gap: 8, padding: '9px 11px', border: '1px solid #f59e0b', background: 'rgba(245, 158, 11, 0.08)', borderRadius: 6, marginBottom: 10 }}>
+              <Icons.AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+              <span>
+                No target file selected — the value will be written to Key Vault, but <strong>no pod will see it</strong>.
+                Tick the service that needs it, unless you are only updating an existing key's value.
+              </span>
+            </div>
+          )}
 
           {infraLoading ? null : previewTargets.length === 0 && manualTargets.length === 0 ? (
             <div style={{ fontSize: 12, color: 'var(--text-muted)', display: 'flex', alignItems: 'flex-start', gap: 8, padding: '9px 11px', border: '1px dashed var(--border)', borderRadius: 6 }}>
               <Icons.Info size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-              <span>No manifest in <code>infra-deployment</code> references this secret — keys will be written to AWS only. If a service should consume it, add its file below.</span>
+              <span>No manifest in <code>infra-deployment</code> references this {isAzure ? 'vault' : 'secret'} — keys will be written to {isAzure ? 'Key Vault' : 'AWS'} only. If a service should consume it, add its file below.</span>
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
@@ -462,7 +673,7 @@ const SecretCartGroup: React.FC<SecretCartGroupProps> = ({
               {newTargets.length === 0 && manualTargets.length === 0 && unmatchedTargets.length === 0 && (
                 <div style={{ fontSize: 12, color: 'var(--text-muted)', display: 'flex', alignItems: 'flex-start', gap: 8, padding: '6px 2px' }}>
                   <Icons.Info size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-                  <span>Every key here already exists in the manifest{upToDateTargets.length > 1 ? 's' : ''} — nothing to change there. Values update in AWS on approval; <strong>no PR needed</strong>.</span>
+                  <span>Every key here already exists in the manifest{upToDateTargets.length > 1 ? 's' : ''} — nothing to change there. Values update in {isAzure ? 'Key Vault' : 'AWS'} on approval; <strong>no PR needed</strong>.</span>
                 </div>
               )}
             </div>
@@ -498,12 +709,56 @@ export const SecretIngestion: React.FC = () => {
   const queryClient = useQueryClient();
   const toast = useToast();
 
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlPlatform = searchParams.get('platform');
+  const urlSecret = searchParams.get('secret');
+
   // The selected Secret Ingestion instance (AWS account) — prod ("secrets") by default; the
   // chooser below switches to "secrets-sandbox" when configured. Every query/mutation is scoped
   // to it, so the whole page reflects one account at a time.
-  const [selectedPlatform, setSelectedPlatform] = useState<string>('secrets');
+  const [selectedPlatform, setSelectedPlatform] = useState<string>(() => urlPlatform || 'secrets');
 
-  const [selectedSecret, setSelectedSecret] = useState<string>('');
+  const [selectedSecret, setSelectedSecret] = useState<string>(() => urlSecret || '');
+
+  // The request the withdraw confirmation is open for (null = closed).
+  const [withdrawing, setWithdrawing] = useState<SecretIngestionRequest | null>(null);
+
+  // Sync state from URL params
+  React.useEffect(() => {
+    if (urlPlatform && urlPlatform !== selectedPlatform) {
+      setSelectedPlatform(urlPlatform);
+    }
+  }, [urlPlatform, selectedPlatform]);
+
+  React.useEffect(() => {
+    if (urlSecret !== null && urlSecret !== selectedSecret) {
+      setSelectedSecret(urlSecret);
+    }
+  }, [urlSecret, selectedSecret]);
+
+  const handleSecretChange = (secretName: string) => {
+    setSelectedSecret(secretName);
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (secretName) {
+        next.set('secret', secretName);
+      } else {
+        next.delete('secret');
+      }
+      return next;
+    }, { replace: true });
+  };
+
+  const handlePlatformChange = (platformKey: string) => {
+    setSelectedPlatform(platformKey);
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('platform', platformKey);
+      next.delete('secret'); // Switch platform clears selected secret
+      return next;
+    }, { replace: true });
+  };
+
   // In-memory only — these hold real, unsubmitted secret values, so they are deliberately NOT
   // persisted to localStorage (would sit there in plaintext indefinitely, unscoped by user). The
   // whole cart (values + per-secret deployment selections) is lost on refresh/navigation by design.
@@ -511,6 +766,8 @@ export const SecretIngestion: React.FC = () => {
 
   const [newKey, setNewKey] = useState('');
   const [newValue, setNewValue] = useState('');
+  // Azure only: the env var the new key is exposed as. Blank ⇒ derived from the key name on submit.
+  const [newEnvVar, setNewEnvVar] = useState('');
   // One justification for the whole cart checkout (applied to every fanned-out request).
   const [batchJustification, setBatchJustification] = useState('');
   const [keySearch, setKeySearch] = useState('');
@@ -538,6 +795,36 @@ export const SecretIngestion: React.FC = () => {
     queryFn: listSecretsInstances,
   });
 
+  // Azure (Key Vault) instance? Drives the env-var field, the default-unticked target picker, and
+  // the vault-vs-secret wording. Read off the instance's `provider` rather than matching the key
+  // string, so a second Azure instance needs no frontend change.
+  const isAzureInstance = React.useMemo(
+    () => instances.find((i) => i.key === selectedPlatform)?.provider === 'azure',
+    [instances, selectedPlatform],
+  );
+
+  // Provider-aware copy. On Azure the backing store is a Key Vault, not AWS Secrets Manager, and
+  // the "secret" IS the vault — so AWS wording isn't merely imprecise, it describes the wrong
+  // thing (Hermes can create a secret inside a vault, never a vault).
+  const copy = React.useMemo(
+    () =>
+      isAzureInstance
+        ? {
+            storeName: 'Azure Key Vault',
+            targetLabel: 'Target Key Vault',
+            emptyScope: "You don't have access to any Key Vault yet.",
+            missingTarget:
+              'This is not a Key Vault this instance can write to — pick the vault from the list above.',
+          }
+        : {
+            storeName: 'AWS Secrets Manager',
+            targetLabel: 'Target AWS Secret',
+            emptyScope: "You don't have access to any AWS secrets yet.",
+            missingTarget: 'Secret does not exist in AWS yet. Ingestion will create it.',
+          },
+    [isAzureInstance],
+  );
+
   // Keep the selection valid once instances load (e.g. sandbox-only deployments have no "secrets").
   React.useEffect(() => {
     if (instances.length === 0) return;
@@ -549,7 +836,11 @@ export const SecretIngestion: React.FC = () => {
   // Switching instance = a different AWS account: drop the selected secret, prefix filter, and the
   // entire cart (values + per-secret selections belong to the previous account and must not carry over).
   React.useEffect(() => {
-    setSelectedSecret('');
+    const urlPlatformParam = searchParams.get('platform');
+    const urlSecretParam = searchParams.get('secret');
+    if (selectedPlatform !== urlPlatformParam || !urlSecretParam) {
+      setSelectedSecret('');
+    }
     setSecretPrefix('');
     setDrafts({});
     setExcludedTargetsBySecret({});
@@ -565,10 +856,19 @@ export const SecretIngestion: React.FC = () => {
     queryFn: () => getSecretScope(selectedPlatform),
   });
 
-  const { data: existingKeysData, isLoading: keysLoading } = useQuery({
+  const {
+    data: existingKeysData,
+    isLoading: keysLoading,
+    isError: keysErrored,
+    error: keysError,
+  } = useQuery({
     queryKey: queryKeys.secretKeys(selectedPlatform, selectedSecret),
     queryFn: () => listSecretKeys(selectedSecret, selectedPlatform),
     enabled: !!selectedSecret,
+    // A permission/connectivity failure (e.g. Azure denying data-plane access to one vault while
+    // ARM discovery still lists it) must never be silently retried into looking like "doesn't
+    // exist" — surface it once, distinctly, rather than looping on a request that can't succeed.
+    retry: false,
   });
 
   const { data: myRequests = [] } = useQuery({
@@ -599,9 +899,11 @@ export const SecretIngestion: React.FC = () => {
 
   // Keep the selection inside the (possibly prefix-filtered) option set.
   React.useEffect(() => {
+    if (scopeLoading) return;
     if (prefixFilteredOptions.some((o) => o.secretName === selectedSecret)) return;
+    if (secretOptions.some((o) => o.secretName === selectedSecret)) return;
     setSelectedSecret(prefixFilteredOptions[0]?.secretName ?? '');
-  }, [prefixFilteredOptions, selectedSecret]);
+  }, [prefixFilteredOptions, selectedSecret, scopeLoading, secretOptions]);
 
   // Reset key search when user switches secrets
   React.useEffect(() => {
@@ -677,11 +979,46 @@ export const SecretIngestion: React.FC = () => {
       return next;
     });
 
+  // Non-secret precheck for the currently typed key — drives the gimmick AI panel and
+  // gates the add button/form so a config-shaped key (url/uri/autoStartup/…) never enters the cart.
+  // Keys already in the focused secret are exempt: they're value updates, not new config being
+  // introduced, and blocking them would strand every legacy `*_url`/`*_uri` key (the Existing Keys
+  // list's copy-and-use button fills exactly those names into this form).
+  const keyPrecheck = useMemo(
+    () => precheckSecretKey(newKey, existingKeysData?.keys),
+    [newKey, existingKeysData?.keys],
+  );
+
+  // Which AI_SARCASM_LINES entry the fail panel shows — tracked here, not inside
+  // AiKeyPrecheck, because that component mounts/unmounts every time `blocked` flips (which
+  // happens mid-keystroke), so a counter kept there resets to 0 on every remount and the
+  // first line would show forever. This page component stays mounted for the whole session,
+  // so the running count survives.
+  //
+  // Advances exactly once per appearance of the panel — i.e. on each false → true edge of
+  // `blocked`, not per keystroke. Editing an already-blocked key (url → uri, or typing more
+  // characters onto a key that already trips the check) keeps the same line; the next line
+  // comes when the key goes clean and trips the check again.
+  const [sarcasmIndex, setSarcasmIndex] = useState(0);
+  const sarcasmTryRef = React.useRef(0);
+  React.useEffect(() => {
+    if (!keyPrecheck.blocked) return;
+    setSarcasmIndex(sarcasmTryRef.current % AI_SARCASM_LINES.length);
+    sarcasmTryRef.current += 1;
+  }, [keyPrecheck.blocked]);
+
   const handleAddDraft = (e: React.FormEvent) => {
     e.preventDefault();
     const keyTrimmed = newKey.trim();
     if (!keyTrimmed) {
       toast.error('Key name cannot be empty');
+      return;
+    }
+    // Same rule the AI panel shows: block config-shaped keys before they reach the cart — new
+    // ones only; an existing key is an update and always allowed through.
+    const precheck = precheckSecretKey(keyTrimmed, existingKeysData?.keys);
+    if (precheck.blocked) {
+      toast.error(`AI precheck blocked "${keyTrimmed}": contains "${precheck.matched}" — that's configuration, not a secret.`);
       return;
     }
     // Broadcast to every checked secret when any are ticked; otherwise stage into the single
@@ -707,7 +1044,12 @@ export const SecretIngestion: React.FC = () => {
       return;
     }
 
-    const newEntry: DraftEntry = { key: keyTrimmed, value: newValue };
+    const newEntry: DraftEntry = {
+      key: keyTrimmed,
+      value: newValue,
+      // Blank ⇒ leave undefined so the backend derives it; only a deliberate override is stored.
+      ...(isAzureInstance && newEnvVar.trim() ? { envVar: newEnvVar.trim() } : {}),
+    };
     setDrafts((prev) => {
       const next = { ...prev };
       for (const s of toAdd) next[s] = [...(prev[s] || []), newEntry];
@@ -722,6 +1064,7 @@ export const SecretIngestion: React.FC = () => {
     }
     setNewKey('');
     setNewValue('');
+    setNewEnvVar('');
   };
 
   const handleRemoveDraft = (secret: string, keyToRemove: string) => {
@@ -768,7 +1111,13 @@ export const SecretIngestion: React.FC = () => {
         secrets: cartSecrets.map((s) => ({
           secretName: s,
           justification: batchJustification.trim() || undefined,
-          entries: (drafts[s] || []).map((d) => ({ key: d.key, value: d.value })),
+          // envVar is Azure-only and optional — carried through so a requester override reaches the
+          // manifest editor; omitted entirely when unset, leaving AWS payloads byte-identical.
+          entries: (drafts[s] || []).map((d) => ({
+            key: d.key,
+            value: d.value,
+            ...(d.envVar ? { envVar: d.envVar } : {}),
+          })),
           infraTargets: resolvedBySecret[s]?.infraTargets,
         })),
       }),
@@ -798,6 +1147,16 @@ export const SecretIngestion: React.FC = () => {
     onError: (err: any) => toast.error(err?.message || 'Failed to submit requests.'),
   });
 
+  const withdrawMutation = useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) => withdrawIngestionRequest(id, reason || undefined),
+    onSuccess: () => {
+      toast.success('Request withdrawn. Its deployment PR is being closed.');
+      setWithdrawing(null);
+      queryClient.invalidateQueries({ queryKey: queryKeys.secretIngestionRequests('mine', selectedPlatform) });
+    },
+    onError: (err: any) => toast.error(err?.message || 'Failed to withdraw request.'),
+  });
+
   // Instance chooser (prod vs sandbox) — only shown when more than one instance is configured.
   const platformChooser = instances.length > 1 && (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
@@ -809,7 +1168,7 @@ export const SecretIngestion: React.FC = () => {
             <button
               key={inst.key}
               type="button"
-              onClick={() => setSelectedPlatform(inst.key)}
+              onClick={() => handlePlatformChange(inst.key)}
               style={{
                 padding: '7px 16px',
                 fontSize: 13,
@@ -847,7 +1206,7 @@ export const SecretIngestion: React.FC = () => {
         <SectionHeader
           title="Secret Ingestion"
           icon={<Icons.KeyRound size={18} />}
-          meta="Propose secret key-value pairs to merge into AWS Secrets Manager"
+          meta={`Propose secret key-value pairs to merge into ${copy.storeName}`}
         />
         {platformChooser}
         <LoadingSpinner />
@@ -860,7 +1219,7 @@ export const SecretIngestion: React.FC = () => {
       <SectionHeader
         title="Secret Ingestion"
         icon={<Icons.KeyRound size={18} />}
-        meta="Propose secret key-value pairs to merge into AWS Secrets Manager"
+        meta={`Propose secret key-value pairs to merge into ${copy.storeName}`}
         actions={cartBadge || undefined}
       />
 
@@ -869,7 +1228,7 @@ export const SecretIngestion: React.FC = () => {
       {secretOptions.length === 0 ? (
         <div className="empty-state">
           <Icons.Key size={40} className="empty-state-icon" />
-          <p className="empty-state-desc">You don't have access to any AWS secrets yet.</p>
+          <p className="empty-state-desc">{copy.emptyScope}</p>
         </div>
       ) : (
         <div className="table-container" style={{ padding: '20px' }}>
@@ -878,7 +1237,7 @@ export const SecretIngestion: React.FC = () => {
                 chosen secrets fills the space on the right. */}
             <div style={{ display: 'grid', gridTemplateColumns: checkedSecrets.size > 0 ? '1fr 1fr' : '1fr', gap: 24, alignItems: 'start' }}>
             <div className="form-group" style={{ marginBottom: 0 }}>
-              <label className="form-label" style={{ fontWeight: 600 }}>Target AWS Secret</label>
+              <label className="form-label" style={{ fontWeight: 600 }}>{copy.targetLabel}</label>
               {/* Stage 1 — prefix pre-filter: narrows to secrets whose name starts with the text. */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', backgroundColor: 'var(--bg-card)', maxWidth: 400, marginBottom: 8 }}>
                 <Icons.Filter size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
@@ -913,7 +1272,7 @@ export const SecretIngestion: React.FC = () => {
                   groupName: opt.groupName,
                 }))}
                 value={selectedSecret}
-                onChange={(val) => setSelectedSecret(val)}
+                onChange={(val) => handleSecretChange(val)}
                 style={{ maxWidth: 400 }}
                 selectedValues={checkedSecrets}
                 onToggleValue={toggleChecked}
@@ -951,7 +1310,7 @@ export const SecretIngestion: React.FC = () => {
                         key={s}
                         style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 8px', background: 'rgba(37, 99, 235, 0.08)', border: '1px solid rgba(37, 99, 235, 0.35)', borderRadius: 999, fontSize: 12 }}
                       >
-                        <code style={{ fontSize: 11.5, color: 'var(--text-main)' }}>{s}</code>
+                        <code title={s} style={{ fontSize: 11.5, color: 'var(--text-main)', wordBreak: 'break-all' }}>{s}</code>
                         {staged && (
                           <span className="badge badge-sm" style={{ fontSize: 8, background: '#16a34a', color: '#fff' }} title="Already has staged entries in the cart">
                             in cart
@@ -983,9 +1342,19 @@ export const SecretIngestion: React.FC = () => {
                   </h4>
                   {keysLoading ? (
                     <LoadingSpinner />
+                  ) : keysErrored ? (
+                    // A real backend/provider error (e.g. Azure denying data-plane access to this
+                    // vault even though ARM discovery lists it) — distinct from "doesn't exist" so
+                    // an access-policy problem never gets misread as a naming problem.
+                    <div style={{ padding: 12, borderRadius: 6, border: '1px dashed #dc2626', color: '#dc2626', fontSize: 13, display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                      <Icons.AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+                      <span>
+                        Could not check {isAzureInstance ? 'this vault' : 'this secret'}: {(keysError as any)?.message || 'request failed'}
+                      </span>
+                    </div>
                   ) : !existingKeysData?.exists ? (
                     <div style={{ padding: 12, borderRadius: 6, border: '1px dashed var(--border)', color: 'var(--text-muted)', fontSize: 13 }}>
-                      Secret does not exist in AWS yet. Ingestion will create it.
+                      {copy.missingTarget}
                     </div>
                   ) : existingKeysData.keyValueFormat === false ? (
                     <div style={{ padding: 12, borderRadius: 6, border: '1px dashed #dc2626', color: '#dc2626', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1043,7 +1412,12 @@ export const SecretIngestion: React.FC = () => {
                               <tbody>
                                 {filteredKeys.map((k) => (
                                   <tr key={k}>
-                                    <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{k}</td>
+                                    <td style={{ fontFamily: 'monospace', fontSize: 12 }}>
+                                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                                        <span style={{ wordBreak: 'break-all' }}>{k}</span>
+                                        <CopyAndUseKeyButton value={k} onUse={setNewKey} />
+                                      </div>
+                                    </td>
                                     <td style={{ color: 'var(--text-light)', fontSize: 12 }}>••••••••</td>
                                   </tr>
                                 ))}
@@ -1064,16 +1438,47 @@ export const SecretIngestion: React.FC = () => {
                   </h4>
                   <form onSubmit={handleAddDraft} style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: 16, border: '1px solid var(--border)', borderRadius: 6 }}>
                     <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label className="form-label" style={{ fontSize: 12 }}>Key Name</label>
+                      <label className="form-label" style={{ fontSize: 12 }}>
+                        {isAzureInstance ? 'Key Vault Secret Name' : 'Key Name'}
+                      </label>
                       <input
                         type="text"
                         className="form-input"
-                        placeholder="e.g. STRIPE_API_KEY"
+                        placeholder={isAzureInstance ? 'e.g. orbit-kfin-username' : 'e.g. STRIPE_API_KEY'}
                         style={{ fontFamily: 'monospace', fontSize: 12 }}
                         value={newKey}
                         onChange={(e) => setNewKey(e.target.value)}
                       />
                     </div>
+                    {keyPrecheck.blocked && keyPrecheck.matched && (
+                      <AiKeyPrecheck matched={keyPrecheck.matched} keyName={newKey.trim()} sarcasmIndex={sarcasmIndex} />
+                    )}
+                    {isAzureInstance && (
+                      <div className="form-group" style={{ marginBottom: 0 }}>
+                        <label className="form-label" style={{ fontSize: 12 }}>
+                          Environment Variable{' '}
+                          <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>
+                            (optional) · how the pod sees it
+                          </span>
+                        </label>
+                        <input
+                          type="text"
+                          className="form-input"
+                          placeholder={
+                            newKey.trim()
+                              ? `optional — defaults to ${deriveEnvVar(newKey)}`
+                              : 'optional — e.g. KFIN_USERNAME'
+                          }
+                          style={{ fontFamily: 'monospace', fontSize: 12 }}
+                          value={newEnvVar}
+                          onChange={(e) => setNewEnvVar(e.target.value)}
+                        />
+                        <p style={{ margin: '4px 0 0', fontSize: 11, color: 'var(--text-muted)' }}>
+                          Not required — leave blank and Hermes derives <code>{newKey.trim() ? deriveEnvVar(newKey) : 'the name'}</code> from
+                          the key. Only set this when the service expects a different name.
+                        </p>
+                      </div>
+                    )}
                     <div className="form-group" style={{ marginBottom: 0 }}>
                       <label className="form-label" style={{ fontSize: 12 }}>Secret Value</label>
                       <textarea
@@ -1085,16 +1490,27 @@ export const SecretIngestion: React.FC = () => {
                         onChange={(e) => setNewValue(e.target.value)}
                       />
                     </div>
-                    <button type="submit" className="btn btn-outline btn-sm" style={{ alignSelf: 'flex-end', marginTop: 4 }}>
-                      {checkedSecrets.size > 0
-                        ? `Add to ${checkedSecrets.size} secret${checkedSecrets.size > 1 ? 's' : ''}`
-                        : 'Add to cart'}
+                    <button
+                      type="submit"
+                      className="btn btn-outline btn-sm"
+                      disabled={keyPrecheck.blocked}
+                      style={{
+                        alignSelf: 'flex-end',
+                        marginTop: 4,
+                        ...(keyPrecheck.blocked ? { opacity: 0.5, cursor: 'not-allowed' } : {}),
+                      }}
+                    >
+                      {keyPrecheck.blocked
+                        ? 'Blocked by AI check'
+                        : checkedSecrets.size > 0
+                          ? `Add to ${checkedSecrets.size} secret${checkedSecrets.size > 1 ? 's' : ''}`
+                          : 'Add to cart'}
                     </button>
                   </form>
                   {cartSecrets.length > 0 && (
                     <p style={{ marginTop: 10, fontSize: 12, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
                       <Icons.Info size={13} style={{ flexShrink: 0 }} />
-                      Stage entries for as many secrets as you like — switch the Target AWS Secret above to add another. Review and submit them all together below.
+                      Stage entries for as many secrets as you like — switch the {isAzureInstance ? 'target vault' : 'Target AWS Secret'} above to add another. Review and submit them all together below.
                     </p>
                   )}
                 </div>
@@ -1118,6 +1534,7 @@ export const SecretIngestion: React.FC = () => {
               key={s}
               secretName={s}
               platform={selectedPlatform}
+              isAzure={isAzureInstance}
               entries={drafts[s] || []}
               onRemoveEntry={(key) => handleRemoveDraft(s, key)}
               onDiscard={() => handleDiscardSecret(s)}
@@ -1185,6 +1602,7 @@ export const SecretIngestion: React.FC = () => {
                   <th style={{ width: 140 }}>Status</th>
                   <th style={{ width: 160 }}>Deployment PR</th>
                   <th style={{ width: 180 }}>Submitted</th>
+                  <th style={{ width: 110 }}></th>
                 </tr>
               </thead>
               <tbody>
@@ -1200,7 +1618,7 @@ export const SecretIngestion: React.FC = () => {
                     <React.Fragment key={r.id}>
                       {isBatchStart && batchSize > 1 && (
                         <tr>
-                          <td colSpan={6} style={{ background: 'var(--bg-card)', padding: '6px 12px', borderTop: '2px solid var(--border)' }}>
+                          <td colSpan={7} style={{ background: 'var(--bg-card)', padding: '6px 12px', borderTop: '2px solid var(--border)' }}>
                             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: 'var(--text-muted)' }}>
                               <Icons.ShoppingCart size={13} style={{ color: 'var(--primary)' }} />
                               Batch of {batchSize} · submitted {new Date(r.createdAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
@@ -1212,7 +1630,7 @@ export const SecretIngestion: React.FC = () => {
                         <td style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 13, color: 'var(--primary)' }}>
                           {r.requestNumber !== undefined ? `#${r.requestNumber}` : '—'}
                         </td>
-                        <td style={{ fontWeight: 600, fontFamily: 'monospace', fontSize: 13 }}>{r.secretName}</td>
+                        <td title={r.secretName} style={{ fontWeight: 600, fontFamily: 'monospace', fontSize: 13, wordBreak: 'break-all' }}>{r.secretName}</td>
                         <td>
                           <details>
                             <summary style={{ cursor: 'pointer', color: 'var(--text-muted)', fontSize: 13 }}>
@@ -1274,6 +1692,22 @@ export const SecretIngestion: React.FC = () => {
                             minute: '2-digit',
                           })}
                         </td>
+                        <td style={{ textAlign: 'right' }}>
+                          {/* PENDING only — by APPLY_FAILED some keys may already be live in the
+                              secret store, so recovering that request belongs to a reviewer.
+                              Withdrawing one member of a batch leaves the others alone: each
+                              request in a cart checkout is independently reviewed and applied. */}
+                          {r.status === 'PENDING' && (
+                            <button
+                              type="button"
+                              className="btn btn-outline btn-sm"
+                              onClick={() => setWithdrawing(r)}
+                              disabled={withdrawMutation.isPending}
+                            >
+                              Withdraw
+                            </button>
+                          )}
+                        </td>
                       </tr>
                     </React.Fragment>
                   );
@@ -1283,6 +1717,24 @@ export const SecretIngestion: React.FC = () => {
           </div>
         )}
       </div>
+
+      <ReasonModal
+        isOpen={!!withdrawing}
+        title="Withdraw ingestion request"
+        message={
+          <>
+            Withdraw request {withdrawing?.requestNumber !== undefined ? `#${withdrawing.requestNumber}` : ''} for{' '}
+            <strong>{withdrawing?.secretName}</strong>? Nothing was written to the secret store, the staged
+            values are discarded, and its deployment PR is closed. You'll need to re-enter the values if you
+            submit again.
+          </>
+        }
+        placeholder="Why are you withdrawing this? (optional)"
+        confirmLabel="Withdraw request"
+        loading={withdrawMutation.isPending}
+        onConfirm={(reason) => withdrawing && withdrawMutation.mutate({ id: withdrawing.id, reason })}
+        onClose={() => setWithdrawing(null)}
+      />
     </div>
   );
 };

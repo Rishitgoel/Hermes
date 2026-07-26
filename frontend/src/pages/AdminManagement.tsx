@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Icons from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
@@ -18,7 +19,6 @@ import ConfirmModal from '../components/admin/ConfirmModal';
 import AssignAdminModal, { type AssignTarget } from '../components/admin/AssignAdminModal';
 import UserAccessModal from '../components/admin/UserAccessModal';
 import RedashResyncModal from '../components/admin/RedashResyncModal';
-import MergeSettingsModal from '../components/admin/MergeSettingsModal';
 
 import {
   listManageablePlatforms,
@@ -30,12 +30,15 @@ import {
   type ManageableGroup,
   type PlatformAdminRow,
   type ZookeeperMigrationReport,
+  type AdminUser,
 } from '../services/api/admin';
 
 export const AdminManagement: React.FC = () => {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const toast = useToast();
+  const location = useLocation();
+  const navigate = useNavigate();
 
   const superAdmin = user?.adminScopes?.superAdmin ?? user?.roles.includes('hermes_super_admin') ?? false;
 
@@ -44,8 +47,21 @@ export const AdminManagement: React.FC = () => {
   const [assignTarget, setAssignTarget] = useState<AssignTarget | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [showUserAccess, setShowUserAccess] = useState(false);
+  const [userAccessTarget, setUserAccessTarget] = useState<AdminUser | null>(null);
   const [showResync, setShowResync] = useState(false);
-  const [showMergeSettings, setShowMergeSettings] = useState(false);
+
+  // The command palette's people search jumps here with a user pre-selected
+  // (navigate(..., { state: { openUserAccess } })) — open the modal straight to
+  // their record instead of dropping the admin back at an empty user picker.
+  useEffect(() => {
+    const target = (location.state as { openUserAccess?: AdminUser } | null)?.openUserAccess;
+    if (target) {
+      setUserAccessTarget(target);
+      setShowUserAccess(true);
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state]);
 
   const [removePA, setRemovePA] = useState<PlatformAdminRow | null>(null);
   const [search, setSearch] = useState('');
@@ -174,6 +190,27 @@ export const AdminManagement: React.FC = () => {
 
   return (
     <div>
+      {/* Apollo logins are platform-agnostic — creating the Keycloak account that
+          lets someone sign in at all is upstream of every platform tab below — so
+          they live on the Settings page. Left as a pointer for muscle memory. */}
+      {superAdmin && (
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'flex-end',
+            marginBottom: '12px',
+          }}
+        >
+          <button
+            type="button"
+            className="btn btn-outline btn-sm"
+            onClick={() => navigate('/hermes/settings?tab=onboarding')}
+          >
+            <Icons.UserPlus size={15} /> Onboard a new user
+          </button>
+        </div>
+      )}
+
       {/* Platform selector */}
       <PlatformTabs
         platforms={platforms}
@@ -262,7 +299,11 @@ export const AdminManagement: React.FC = () => {
                 <Icons.UserMinus size={15} /> Revoke access
               </button>
               {isSecretsFamily && (
-                <button type="button" className="btn btn-outline btn-sm" onClick={() => setShowMergeSettings(true)}>
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  onClick={() => navigate('/hermes/settings?tab=platform')}
+                >
                   <Icons.Settings size={15} /> PR Merge Settings
                 </button>
               )}
@@ -478,10 +519,15 @@ export const AdminManagement: React.FC = () => {
       )}
 
       {/* Cross-platform user access: check/revoke everything a user holds */}
-      {showUserAccess && <UserAccessModal onClose={() => setShowUserAccess(false)} />}
-
-      {/* PR Merge Settings toggle for Secrets platform */}
-      {showMergeSettings && <MergeSettingsModal onClose={() => setShowMergeSettings(false)} />}
+      {showUserAccess && (
+        <UserAccessModal
+          initialUser={userAccessTarget}
+          onClose={() => {
+            setShowUserAccess(false);
+            setUserAccessTarget(null);
+          }}
+        />
+      )}
 
       {/* Redash full resync: two-way reconciliation against live Redash membership */}
       {showResync && activePlatform && (

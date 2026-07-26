@@ -1,9 +1,8 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import Keycloak from 'keycloak-js';
-import apiClient from '../services/apiClient';
+import keycloak from '@/services/keycloak';
+import hermesApiClient from '../services/apiClient';
 import { DEFAULT_PLATFORM } from '../lib/platforms';
 
-// Mirror of UserCreationStatus enum in the backend.
 export type UserCreationStatus =
   | 'DRAFT'
   | 'PENDING'
@@ -14,7 +13,6 @@ export type UserCreationStatus =
 
 export interface UserCreationInfo {
   id: string;
-  /** Which platform this account request targets ("redash", "aws", …). */
   platform: string;
   status: UserCreationStatus;
   justification: string | null;
@@ -22,22 +20,17 @@ export interface UserCreationInfo {
   approvedAt: string | null;
   inviteSentAt: string | null;
   inviteError: string | null;
-  /** One-time setup URL — present while AWAITING_SETUP (Redash), null otherwise. */
   inviteLink: string | null;
   completedAt: string | null;
-  /** Platform user id as a string (Redash int-as-string, AWS Identity Store GUID). */
   externalUserId: string | null;
   rejectionReason: string | null;
   reviewerName: string | null;
   reviewedAt: string | null;
 }
 
-/** Resolved admin scopes for the current user (computed server-side in /auth/me). */
 export interface AdminScopes {
   superAdmin: boolean;
-  /** Platform keys the user can administer (all registered, if super admin). */
   platforms: string[];
-  /** Group slugs the user can administer directly (empty for super admin). */
   groups: string[];
 }
 
@@ -74,25 +67,8 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 // Setup simulation flags — opt-in only. A missing/typo'd env var must NOT silently
 // enable simulation (which would read the localStorage mock token as the bearer).
-// VITE_ALLOW_SIMULATION_IN_PROD is a deliberate, narrow override for demo
-// deployments with no real Keycloak yet — mirrors the backend's
-// ALLOW_SIMULATION_IN_PROD gate (see backend/src/config/config.ts). The
-// deployment MUST sit behind its own outer login (e.g. reverse-proxy Basic
-// Auth) whenever this is on, since the app itself has no real auth.
 const useSimulation =
-  import.meta.env.VITE_KEYCLOAK_SIMULATION === 'true' &&
-  (import.meta.env.MODE !== 'production' || import.meta.env.VITE_ALLOW_SIMULATION_IN_PROD === 'true');
-
-// Keycloak client singleton (for live mode)
-let keycloakInstance: Keycloak | null = null;
-if (!useSimulation) {
-  keycloakInstance = new Keycloak({
-    url: import.meta.env.VITE_KEYCLOAK_URL || 'https://keycloak.example.com',
-    realm: import.meta.env.VITE_KEYCLOAK_REALM || 'master',
-    clientId: import.meta.env.VITE_KEYCLOAK_CLIENT_ID || 'hermes-prod',
-  });
-  (window as any).keycloak = keycloakInstance; // Make available to apiClient
-}
+  import.meta.env.VITE_KEYCLOAK_SIMULATION === 'true' && import.meta.env.MODE !== 'production';
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<UserSession | null>(null);
@@ -103,7 +79,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // initial load and after Resend Invite / Sync Now on the account-status panel.
   const fetchMe = useCallback(async (fallback?: UserSession) => {
     try {
-      const res: any = await apiClient.get('/auth/me');
+      const res: any = await hermesApiClient.get('/auth/me');
       setUser(res.data as UserSession);
       setIsAuthenticated(true);
     } catch (err) {
@@ -127,7 +103,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Simulation mode — pick a mock role, push it into localStorage as the bearer
       // token, then ask the backend who we are (this also lazily auto-creates the
       // user-creation DRAFT row server-side).
-      const mockRole = localStorage.getItem('hermes_mock_token') as SimRole || 'user';
+      const mockRole = (localStorage.getItem('hermes_mock_token') as SimRole) || 'user';
       localStorage.setItem('hermes_mock_token', mockRole);
 
       let fallbackUser: UserSession;
@@ -163,38 +139,36 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       fetchMe(fallbackUser).finally(() => setIsLoading(false));
     } else {
-      // Live Keycloak mode
-      if (!keycloakInstance) return;
-
-      keycloakInstance
-        .init({
-          onLoad: 'login-required',
-          checkLoginIframe: false,
-        })
+      // Live Keycloak mode. Hermes runs standalone: nothing else on the page
+      // initialises Keycloak, so this provider has to. (When this file is
+      // vendored into admin-panel the host app has already called init() and
+      // this block is replaced by a plain fetchMe() — do not carry that version
+      // back here, or no token is ever acquired and every request 401s.)
+      keycloak
+        .init({ onLoad: 'login-required', checkLoginIframe: false })
         .then((authenticated) => {
-          if (authenticated) {
-            // Refresh the access token whenever Keycloak signals expiry.
-            keycloakInstance!.onTokenExpired = () => {
-              keycloakInstance!.updateToken(30).catch(() => keycloakInstance!.login());
-            };
-
-            tokenRefreshIntervalId = window.setInterval(() => {
-              keycloakInstance!.updateToken(70).catch(() => keycloakInstance!.login());
-            }, 60_000);
-
-            const roles = keycloakInstance?.realmAccess?.roles || [];
-            const fallback: UserSession = {
-              id: keycloakInstance?.subject || '',
-              username: keycloakInstance?.tokenParsed?.preferred_username || '',
-              email: keycloakInstance?.tokenParsed?.email || '',
-              roles,
-            };
-
-            fetchMe(fallback).finally(() => setIsLoading(false));
-          } else {
+          if (!authenticated) {
             setIsAuthenticated(false);
             setIsLoading(false);
+            return;
           }
+
+          // Refresh the access token whenever Keycloak signals expiry, and on a
+          // timer as a backstop.
+          keycloak.onTokenExpired = () => {
+            keycloak.updateToken(30).catch(() => keycloak.login());
+          };
+          tokenRefreshIntervalId = window.setInterval(() => {
+            keycloak.updateToken(70).catch(() => keycloak.login());
+          }, 60_000);
+
+          const fallback: UserSession = {
+            id: keycloak.subject || '',
+            username: keycloak.tokenParsed?.preferred_username || '',
+            email: keycloak.tokenParsed?.email || '',
+            roles: keycloak.realmAccess?.roles || [],
+          };
+          fetchMe(fallback).finally(() => setIsLoading(false));
         })
         .catch((err) => {
           console.error('Keycloak initialization failed:', err);
@@ -215,7 +189,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (useSimulation) {
       setIsAuthenticated(true);
     } else {
-      keycloakInstance?.login();
+      keycloak.login();
     }
   };
 
@@ -226,7 +200,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setIsAuthenticated(false);
       window.location.reload();
     } else {
-      keycloakInstance?.logout({ redirectUri: window.location.origin });
+      keycloak.logout({ redirectUri: window.location.origin });
     }
   };
 

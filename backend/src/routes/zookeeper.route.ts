@@ -57,6 +57,17 @@ router.get(
   },
 );
 
+// Requester withdraws their own PENDING request (ownership enforced in the service).
+router.post(
+  '/requests/:id/withdraw',
+  authenticateToken,
+  (req: Request, res: Response, next: NextFunction) => {
+    new ZookeeperController(req, res, next)
+      .withdrawRequest(req, res, next)
+      .catch(next);
+  },
+);
+
 router.put(
   '/requests/:id/review',
   authenticateToken,

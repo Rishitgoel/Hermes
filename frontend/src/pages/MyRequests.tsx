@@ -1,13 +1,15 @@
-import React from 'react';
-import { useQuery } from '@tanstack/react-query';
+import React, { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import apiClient from '../services/apiClient';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import StatusBadge from '../components/common/StatusBadge';
 import ExpiryBadge from '../components/common/ExpiryBadge';
+import ReasonModal from '../components/common/ReasonModal';
 import { FileText } from 'lucide-react';
 import { queryKeys } from '../lib/queryKeys';
 import AccountStatusPanel from '../components/user-creation/AccountStatusPanel';
 import SectionHeader from '../components/common/SectionHeader';
+import { useToast } from '../contexts/ToastContext';
 
 interface RequestData {
   id: string;
@@ -31,10 +33,37 @@ interface RequestData {
   } | null;
 }
 
+/**
+ * Statuses a requester can still pull back. Mirrors the server's rule exactly (see
+ * accessWorkflowService.withdrawRequest): both are pre-provisioning, and both are what the
+ * one-open-request-per-group index blocks on — so withdrawing is also how a user unblocks
+ * themselves to request that group again.
+ */
+const WITHDRAWABLE = ['PENDING', 'WAITING_FOR_SETUP'];
+
 export const MyRequests: React.FC = () => {
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const [withdrawing, setWithdrawing] = useState<RequestData | null>(null);
+
   const { data: requests = [], isLoading } = useQuery<RequestData[]>({
     queryKey: queryKeys.myRequests(),
     queryFn: () => apiClient.get('/api/access-requests/my').then((r) => r.data),
+  });
+
+  const withdrawMutation = useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      apiClient.post(`/api/access-requests/${id}/withdraw`, reason ? { reason } : {}),
+    onSuccess: () => {
+      toast.success('Request withdrawn. You can request this group again whenever you need it.');
+      setWithdrawing(null);
+      queryClient.invalidateQueries({ queryKey: queryKeys.myRequests() });
+      // The group's request button keys off whether an open request exists, so both the
+      // list and any open detail page need refreshing too.
+      queryClient.invalidateQueries({ queryKey: queryKeys.groups() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.myAccess() });
+    },
+    onError: (err: any) => toast.error(err?.message || 'Failed to withdraw request.'),
   });
 
   const formatDate = (isoString: string) => {
@@ -72,6 +101,7 @@ export const MyRequests: React.FC = () => {
                 <th>Submitted</th>
                 <th>Status</th>
                 <th>Reviewer Notes</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -115,8 +145,29 @@ export const MyRequests: React.FC = () => {
                         </div>
                         {req.reviewNote && <div style={{ fontStyle: 'italic' }}>"{req.reviewNote}"</div>}
                       </div>
+                    ) : req.status === 'WITHDRAWN' ? (
+                      // A withdrawal has no reviewer — the note is the requester's own reason,
+                      // so label it as such instead of falling through to the "—" placeholder.
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: '11px', color: 'var(--text-muted)' }}>
+                          Withdrawn by you
+                        </div>
+                        {req.reviewNote && <div style={{ fontStyle: 'italic' }}>"{req.reviewNote}"</div>}
+                      </div>
                     ) : (
                       <span style={{ color: 'var(--text-light)', fontStyle: 'italic' }}>—</span>
+                    )}
+                  </td>
+                  <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    {WITHDRAWABLE.includes(req.status) && (
+                      <button
+                        type="button"
+                        className="btn btn-outline btn-sm"
+                        onClick={() => setWithdrawing(req)}
+                        disabled={withdrawMutation.isPending}
+                      >
+                        Withdraw
+                      </button>
                     )}
                   </td>
                 </tr>
@@ -125,6 +176,22 @@ export const MyRequests: React.FC = () => {
           </table>
         </div>
       )}
+
+      <ReasonModal
+        isOpen={!!withdrawing}
+        title="Withdraw request"
+        message={
+          <>
+            Withdraw your request for <strong>{withdrawing?.group.name}</strong>? It will be removed
+            from the approval queue and you can submit a new request for this group at any time.
+          </>
+        }
+        placeholder="Why are you withdrawing this? (optional)"
+        confirmLabel="Withdraw request"
+        loading={withdrawMutation.isPending}
+        onConfirm={(reason) => withdrawing && withdrawMutation.mutate({ id: withdrawing.id, reason })}
+        onClose={() => setWithdrawing(null)}
+      />
     </div>
   );
 };

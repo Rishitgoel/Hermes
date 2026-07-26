@@ -52,7 +52,14 @@ export interface ZkChange {
   error?: string | null;
 }
 
-export type ZkChangeStatus = 'PENDING' | 'APPLYING' | 'APPLIED' | 'PARTIALLY_APPLIED' | 'APPLY_FAILED' | 'REJECTED';
+export type ZkChangeStatus =
+  | 'PENDING'
+  | 'APPLYING'
+  | 'APPLIED'
+  | 'PARTIALLY_APPLIED'
+  | 'APPLY_FAILED'
+  | 'REJECTED'
+  | 'WITHDRAWN';
 
 export interface ZkChangeRequest {
   id: string;
@@ -91,6 +98,15 @@ export const submitZkChangeRequest = (payload: {
 
 export const listZkChangeRequests = (scope: 'mine' | 'review'): Promise<ZkChangeRequest[]> =>
   apiClient.get('/api/zookeeper/requests', { params: { scope } }).then((r) => r.data);
+
+/** Requester pulls back their own PENDING request. Rejected by the server in any other status. */
+export const withdrawZkChangeRequest = (
+  id: string,
+  reason?: string,
+): Promise<ZkChangeRequest> =>
+  apiClient
+    .post(`/api/zookeeper/requests/${id}/withdraw`, reason ? { reason } : {})
+    .then((r) => r.data);
 
 export const reviewZkChangeRequest = (
   id: string,

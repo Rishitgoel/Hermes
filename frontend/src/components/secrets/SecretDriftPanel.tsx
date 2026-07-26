@@ -69,7 +69,7 @@ const DriftFailureNotice: React.FC<{ failed: DriftFailure[] }> = ({
         >
           {failed.map((f) => (
             <div key={f.secretName} style={{ fontSize: 12 }}>
-              <code>{f.secretName}</code>
+              <code title={f.secretName} style={{ wordBreak: 'break-all' }}>{f.secretName}</code>
               <span style={{ color: "var(--text-muted)" }}> — {f.error}</span>
             </div>
           ))}
@@ -168,6 +168,7 @@ const DriftCard: React.FC<{
               style={{ color: "var(--primary)", flexShrink: 0 }}
             />
             <code
+              title={drift.secretName}
               style={{
                 fontSize: 16,
                 fontWeight: 700,

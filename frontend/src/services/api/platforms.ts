@@ -19,6 +19,11 @@ export interface LivePlatform {
   launchUrl: string | null;
   family: string;
   label: string | null;
+  /**
+   * Which backing store this instance uses when its `family` spans more than one — Secret
+   * Ingestion is "aws" (Secrets Manager) or "azure" (Key Vault). null for single-store families.
+   */
+  provider?: string | null;
 }
 
 /**
@@ -36,7 +41,7 @@ export async function fetchPlatforms(): Promise<LivePlatform[]> {
     return data.platforms;
   }
   // Back-compat: older backend only returned `live` (keys). Synthesize minimal rows.
-  const synthesized = (data?.live ?? []).map((key) => ({ key, displayName: key, launchUrl: null, family: key, label: null }));
+  const synthesized = (data?.live ?? []).map((key) => ({ key, displayName: key, launchUrl: null, family: key, label: null, provider: null }));
   registerLivePlatforms(synthesized);
   return synthesized;
 }

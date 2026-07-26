@@ -1,6 +1,12 @@
-import axios, { AxiosResponse } from 'axios';
+import axios, { type AxiosResponse } from 'axios';
+import keycloak from '@/services/keycloak';
 
-const baseUrl = import.meta.env.VITE_BASE_URL_BACKEND || 'http://localhost:8001';
+const baseUrl =
+  import.meta.env.VITE_HERMES_BASE_URL ||
+  import.meta.env.VITE_BASE_URL_BACKEND ||
+  // Hermes' own backend port. (The admin-panel copy of this file defaults to
+  // 8000, which is that app's port — wrong for this repo.)
+  'http://localhost:8001';
 
 export class ApiClientError extends Error {
   statusCode: number;
@@ -16,137 +22,104 @@ export class ApiClientError extends Error {
   }
 }
 
-const apiClient = axios.create({
+const hermesApiClient = axios.create({
   baseURL: baseUrl,
   timeout: 20000,
   headers: { 'Content-Type': 'application/json' },
 });
 
-// Request Interceptor: Inject token (live Keycloak token or mock simulation token)
-apiClient.interceptors.request.use(
+hermesApiClient.interceptors.request.use(
   async (config) => {
-    const kc = (window as any).keycloak;
-
-    // In live mode, refresh the token if it's about to expire (<30s left).
-    // updateToken is a no-op if the token is still fresh.
-    if (kc && typeof kc.updateToken === 'function') {
-      try {
-        await kc.updateToken(30);
-      } catch {
-        // refresh failed — fall through; the 401 retry below will redirect to login
-      }
+    // Prefix all hermes API paths with /hermes (backend is mounted there)
+    if (config.url && !config.url.startsWith('/hermes')) {
+      config.url = '/hermes' + config.url;
     }
 
-    let token = kc?.token;
-
-    // Fallback to localStorage mock token in simulation mode ONLY. Opt-in: the
-    // env var must be explicitly 'true', and we must not be in a production
-    // build UNLESS VITE_ALLOW_SIMULATION_IN_PROD is also explicitly set — see
-    // the matching gate in AuthContext.tsx.
-    const useSimulation =
-      import.meta.env.VITE_KEYCLOAK_SIMULATION === 'true' &&
-      (import.meta.env.MODE !== 'production' || import.meta.env.VITE_ALLOW_SIMULATION_IN_PROD === 'true');
-    if (!token && useSimulation) {
-      token = localStorage.getItem('hermes_mock_token');
+    // Refresh token if expiring soon, then attach to request
+    try {
+      await keycloak.updateToken(30);
+    } catch {
+      // ignore — 401 interceptor below will redirect to login
     }
 
+    const token = keycloak.token;
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
 
     return config;
   },
-  (error) => Promise.reject(error)
+  (error) => Promise.reject(error),
 );
 
-// Response Interceptor: Unwrap { success: true, data: T } structure
-apiClient.interceptors.response.use(
+hermesApiClient.interceptors.response.use(
   (response: AxiosResponse) => {
     const resData = response.data;
-    
+
     if (resData && typeof resData === 'object' && 'success' in resData) {
       if (resData.success) {
+        // Preserve the envelope's metadata (e.g. pagination `total`) alongside the
+        // unwrapped data — paginated callers read it via `res.metadata.total`.
+        // Set it on `response` before the spread so it survives as an own property.
         (response as unknown as { metadata?: unknown }).metadata = resData.metadata;
         return { ...response, data: resData.data };
       } else {
-        // If success: false is returned inside a 200 OK
         return Promise.reject(
           new ApiClientError(
             resData.error || 'Request failed',
             response.status,
             resData.metadata?.errorCode || 'API_ERROR',
-            resData.metadata?.context
-          )
+            resData.metadata?.context,
+          ),
         );
       }
     }
     return response;
   },
   async (error) => {
-    // If the success interceptor already produced an ApiClientError (e.g. 200 OK
-    // with `success: false`), pass it through untouched. Otherwise we'd wrap it
-    // again and lose the original statusCode/errorCode.
-    if (error instanceof ApiClientError) {
-      return Promise.reject(error);
-    }
+    if (error instanceof ApiClientError) return Promise.reject(error);
 
     if (error.response) {
       const status = error.response.status;
       const resData = error.response.data;
-      const originalRequest = error.config as
-        | (typeof error.config & { _retriedAfterRefresh?: boolean })
-        | undefined;
+      const originalRequest = error.config as typeof error.config & {
+        _retriedAfterRefresh?: boolean;
+      };
 
-      // 401 → try a one-shot token refresh, then retry the original request.
-      // Avoids stale-token loops where the access token has expired but the
-      // refresh token is still valid.
       if (status === 401 && originalRequest && !originalRequest._retriedAfterRefresh) {
-        const kc = (window as any).keycloak;
-        if (kc && typeof kc.updateToken === 'function') {
-          try {
-            const refreshed = await kc.updateToken(-1); // force refresh
-            if (refreshed) {
-              originalRequest._retriedAfterRefresh = true;
-              return apiClient(originalRequest);
-            }
-          } catch {
-            // Refresh token itself is dead (or refresh endpoint unreachable).
-            // Kick back to the SSO login redirect so the user isn't stuck staring
-            // at a generic "Authentication required" toast.
-            if (typeof kc.login === 'function') {
-              kc.login();
-              // Tab is being redirected; resolve with a never-settling promise so
-              // downstream `.then`s don't fire on a broken session.
-              return new Promise(() => {});
-            }
+        try {
+          const refreshed = await keycloak.updateToken(-1);
+          if (refreshed) {
+            originalRequest._retriedAfterRefresh = true;
+            return hermesApiClient(originalRequest);
           }
+        } catch {
+          keycloak.login();
+          return new Promise(() => {});
         }
       }
 
-      // Extract error details from backend custom BaseError shape
       if (resData && typeof resData === 'object' && 'error' in resData) {
         return Promise.reject(
           new ApiClientError(
             resData.error,
             status,
             resData.metadata?.errorCode || 'SERVER_ERROR',
-            resData.metadata?.context
-          )
+            resData.metadata?.context,
+          ),
         );
       }
 
       return Promise.reject(
-        new ApiClientError(
-          error.message || 'Server error',
-          status,
-          'HTTP_ERROR'
-        )
+        new ApiClientError(error.message || 'Server error', status, 'HTTP_ERROR'),
       );
     }
 
-    return Promise.reject(new ApiClientError(error.message || 'Network error', 0, 'NETWORK_ERROR'));
-  }
+    return Promise.reject(
+      new ApiClientError(error.message || 'Network error', 0, 'NETWORK_ERROR'),
+    );
+  },
 );
 
-export default apiClient;
-export { apiClient };
+export default hermesApiClient;
+export { hermesApiClient as apiClient };

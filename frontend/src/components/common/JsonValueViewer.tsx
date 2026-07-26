@@ -142,15 +142,21 @@ export const JsonValueViewer: React.FC<{
 );
 
 /**
- * A small "expand" icon button that opens the JSON viewer for its value(s). Drop it next to any
+ * A small "expand" button that opens the JSON viewer for its value(s). Drop it next to any
  * inline value preview so a value too big to read in a row can be opened in full.
+ *
+ * Icon-only by default (dense trees/tables). Pass `label` where the affordance needs to be
+ * obvious rather than compact — e.g. the Secret Ingestion review queue, where an approver has
+ * to read the whole value before deciding and a bare 13px icon is easy to miss.
  */
 export const JsonViewerButton: React.FC<{
   title: React.ReactNode;
   sections: ViewerSection[];
   /** icon size in px */
   size?: number;
-}> = ({ title, sections, size = 13 }) => {
+  /** Optional visible text — renders as a bordered chip button instead of a bare icon. */
+  label?: React.ReactNode;
+}> = ({ title, sections, size = 13, label }) => {
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -163,16 +169,19 @@ export const JsonViewerButton: React.FC<{
         title="View full value"
         style={{
           background: 'none',
-          border: 'none',
           cursor: 'pointer',
           color: 'var(--text-muted)',
-          padding: 0,
           lineHeight: 1,
           display: 'inline-flex',
+          alignItems: 'center',
           flexShrink: 0,
+          ...(label
+            ? { gap: 4, border: '1px solid var(--border)', borderRadius: 4, padding: '2px 7px', fontSize: 11, fontWeight: 600 }
+            : { border: 'none', padding: 0 }),
         }}
       >
         <Icons.Maximize2 size={size} />
+        {label}
       </button>
       <JsonValueViewer isOpen={open} onClose={() => setOpen(false)} title={title} sections={sections} />
     </>

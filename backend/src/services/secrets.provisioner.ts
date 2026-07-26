@@ -9,7 +9,7 @@ import {
   ReconcileMembersResult,
 } from './provisioner.interface';
 import {
-  SecretsManagerService,
+  SecretStore,
   getSecretsManagerService,
 } from './secrets-manager.service';
 import prisma from '../config/prisma';
@@ -25,7 +25,7 @@ import * as templates from '../utils/email-templates';
  * `secrets` instance; `secrets-sandbox` is a second AWS account) — see
  * {@link createSecretsProvisioner} and provisioning.registry.ts. `platform` is that instance's
  * unique registry key; every cache row and DB lookup is tagged with it, and the injected
- * {@link SecretsManagerService} points at that instance's AWS account, so prod and sandbox never
+ * {@link SecretStore} points at that instance's own account/vault, so instances never
  * share state. Both instances carry `family: 'secrets'` so the UI collapses them into one
  * Secret Ingestion surface with a prod/sandbox chooser.
  */
@@ -34,19 +34,23 @@ export class SecretsProvisioner implements PlatformAdapter {
   readonly displayName: string;
   readonly family: string;
   readonly label?: string;
-  private readonly service: SecretsManagerService;
+  /** 'aws' (Secrets Manager) or 'azure' (Key Vault) — surfaced to the UI via GET /api/platforms. */
+  readonly provider?: string;
+  private readonly service: SecretStore;
 
   constructor(opts: {
     platform: string;
     displayName: string;
     family: string;
     label?: string;
-    service: SecretsManagerService;
+    provider?: string;
+    service: SecretStore;
   }) {
     this.platform = opts.platform;
     this.displayName = opts.displayName;
     this.family = opts.family;
     this.label = opts.label;
+    this.provider = opts.provider;
     this.service = opts.service;
   }
 
@@ -333,19 +337,21 @@ export class SecretsProvisioner implements PlatformAdapter {
 
 /**
  * Build a {@link SecretsProvisioner} for one registered Secret Ingestion instance.
- * Resolves the instance's own {@link SecretsManagerService} (own AWS account/credentials).
+ * Resolves the instance's own {@link SecretStore} (own AWS account or Azure vault + credentials).
  */
 export function createSecretsProvisioner(instance: {
   key: string;
   family: string;
   label: string;
   displayName: string;
+  provider?: string;
 }): SecretsProvisioner {
   return new SecretsProvisioner({
     platform: instance.key,
     displayName: instance.displayName,
     family: instance.family,
     label: instance.label,
+    provider: instance.provider,
     service: getSecretsManagerService(instance.key),
   });
 }

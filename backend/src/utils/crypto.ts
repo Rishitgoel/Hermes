@@ -5,10 +5,25 @@ import logger from './logger';
 const ALGORITHM = 'aes-256-gcm';
 const ENCRYPTION_PREFIX = 'enc:aes256gcm:';
 
+/**
+ * What decrypt() yields when a value can't be recovered (wrong/rotated DB_ENCRYPTION_KEY, a
+ * corrupt or truncated column). It exists so a read path can still render a row instead of
+ * failing the whole listing — it is NOT a value. Anything that writes a decrypted value
+ * somewhere real must reject it first via isDecryptionFailure().
+ */
+export const DECRYPTION_FAILED = '⚠️ Decryption Failed';
+
+/** True if `value` is decrypt()'s failure placeholder rather than a recovered secret. */
+export function isDecryptionFailure(
+  value: string | null | undefined,
+): boolean {
+  return value === DECRYPTION_FAILED;
+}
+
 let encryptionKeyBuffer: Buffer | null = null;
 
 function getKeyBuffer(): Buffer {
-  if (encryptionKeyBuffer) return encryptionKeyBuffer;
+  if (encryptionKeyBuffer) {return encryptionKeyBuffer;}
   const key = config.database.encryptionKey;
   // Use SHA-256 to ensure we always have exactly 32 bytes
   encryptionKeyBuffer = crypto.createHash('sha256').update(key).digest();
@@ -16,7 +31,7 @@ function getKeyBuffer(): Buffer {
 }
 
 export function encrypt(text: string | null | undefined): string | null | undefined {
-  if (text === null || text === undefined) return text;
+  if (text === null || text === undefined) {return text;}
   
   try {
     const key = getKeyBuffer();
@@ -37,7 +52,7 @@ export function encrypt(text: string | null | undefined): string | null | undefi
 }
 
 export function decrypt(text: string | null | undefined): string | null | undefined {
-  if (text === null || text === undefined) return text;
+  if (text === null || text === undefined) {return text;}
   if (!text.startsWith(ENCRYPTION_PREFIX)) {
     // Return as-is for backward compatibility with unencrypted values/seed data
     return text;
@@ -63,6 +78,6 @@ export function decrypt(text: string | null | undefined): string | null | undefi
     return decrypted;
   } catch (err: any) {
     logger.error({ error: err.message }, 'Failed to decrypt database value');
-    return '⚠️ Decryption Failed';
+    return DECRYPTION_FAILED;
   }
 }
