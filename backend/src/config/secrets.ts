@@ -6,7 +6,11 @@ import config from './config';
 import logger from '../utils/logger';
 
 let client: SecretsManagerClient | null = null;
-const isDev = config.isDev || config.isSimulation;
+const isDev =
+  config.isDev ||
+  config.isSimulation ||
+  process.env.KEYCLOAK_SIMULATION === 'true' ||
+  process.env.ALLOW_SIMULATION_IN_PROD === 'true';
 
 if (!isDev) {
   // Use the AWS SDK's default credential provider chain — do NOT pass explicit

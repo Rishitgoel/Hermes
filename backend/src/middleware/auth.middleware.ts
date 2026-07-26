@@ -23,7 +23,7 @@ declare module 'express-serve-static-core' {
 // any other client in the same Keycloak realm would be accepted here. Fail fast at
 // boot rather than silently accepting cross-client tokens. (This module is imported
 // after loadSecrets, so config.keycloak.audience reflects any injected secrets.)
-if (config.isProd && !config.keycloak.audience) {
+if (config.isProd && !config.isSimulation && !config.keycloak.audience) {
   throw new Error('KEYCLOAK_AUDIENCE is required in production (JWT audience validation).');
 }
 
