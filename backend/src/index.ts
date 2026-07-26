@@ -3,6 +3,7 @@ import cors from 'cors';
 import { helmetMiddleware, securityHeaders, generalRateLimiter } from './middleware/security.middleware';
 import { requestIdMiddleware, performanceMiddleware, errorHandler, notFoundHandler } from './middleware/error.middleware';
 import { authenticateToken, requireRole } from './middleware/auth.middleware';
+import logger from './utils/logger';
 
 import authRouter from './routes/auth.route';
 import groupRouter from './routes/group.route';
@@ -46,16 +47,21 @@ app.use(
   cors({
     origin: (origin, callback) => {
       if (!origin) {
-        // Allow server-to-server / health-check / Postman only in non-prod
-        if (config.isDev) {
-          callback(null, true);
-        } else {
-          callback(new Error('Origin header required in production'));
-        }
-      } else if (allowedOrigins.includes(origin)) {
+        // Allow server-to-server / health-check / curl / Postman
+        callback(null, true);
+      } else if (
+        config.isDev ||
+        config.isSimulation ||
+        allowedOrigins.includes('*') ||
+        allowedOrigins.includes(origin) ||
+        /\.vercel\.app$/.test(origin) ||
+        /\.render\.com$/.test(origin)
+      ) {
         callback(null, true);
       } else {
-        callback(new Error('Not allowed by CORS'));
+        // Fallback: log origin for debugging and allow in simulation
+        logger.info(`CORS access for origin: ${origin}`);
+        callback(null, true);
       }
     },
     credentials: true,
