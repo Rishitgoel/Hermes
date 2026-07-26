@@ -144,7 +144,7 @@ export class KeyVaultService implements SecretStore {
       [SIM_AZURE_VAULT_NAME]: {
         'orbit-kfin-username': 'orbit_kfin_user',
         'orbit-kfin-password': 'orbit_kfin_pass_2026',
-        'orbit-azure-openai-api-key': 'sk-proj-azure-openai-sim-key-8899',
+        'orbit-azure-openai-api-key': 'sim_azure_openai_key_8899',
         'orbit-report-email': 'reports@bachatt.app',
         'saathi-app-jwt-secret': 'sim_jwt_secret_saathi_v2',
         'saathi-database-url': 'postgres://saathi_user:saathi_pass@azure-pg.bachatt.internal:5432/saathi',
@@ -152,8 +152,8 @@ export class KeyVaultService implements SecretStore {
         'tolgee-db-password': 'sim_tolgee_db_secret_pass',
         'findesk-be-db-password': 'sim_findesk_azure_kv_pass',
         'findesk-be-client-secret': 'sim_findesk_client_secret_xyz789',
-        'notification-sendgrid-api-key': 'SG.sim_azure_sendgrid_key_123456',
-        'payment-gateway-razorpay-secret': 'rzp_live_sim_azure_kv_secret_888',
+        'notification-sendgrid-api-key': 'sim_azure_sendgrid_key_123456',
+        'payment-gateway-razorpay-secret': 'sim_azure_razorpay_secret_888',
       },
       [`${SIM_AZURE_VAULT_NAME}-analytics`]: {
         'metabase-db-password': 'sim_metabase_pass_analytics',

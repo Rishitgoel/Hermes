@@ -41,6 +41,60 @@ const sim = {
   nodes: new Map<string, SimNode>(), // path → node
 };
 
+function seedSimNodes() {
+  const seed: Record<string, string | null> = {
+    // Level 1 (Depth 1)
+    '/apps': null,
+    '/infrastructure': null,
+    '/configs': null,
+    '/hermes': null,
+
+    // Level 2 (Depth 2)
+    '/apps/payment-service': null,
+    '/apps/user-service': null,
+    '/infrastructure/kafka': null,
+    '/infrastructure/redis': null,
+    '/configs/global': null,
+    '/configs/region-us-east': null,
+    '/hermes/credit-card': JSON.stringify({ access: 'restricted', compliance: 'PCI-DSS', audit_level: 'FULL' }, null, 2),
+    '/hermes/infra-automation': JSON.stringify({ mode: 'semi-automated', approvals_required: 2 }, null, 2),
+    '/hermes/analytics-pipeline': JSON.stringify({ spark_master: 'spark://spark-master.prod.internal:7077' }, null, 2),
+
+    // Level 3 (Depth 3)
+    '/apps/payment-service/config': null,
+    '/apps/payment-service/feature-flags': null,
+    '/apps/user-service/config': null,
+    '/apps/user-service/rate-limits': null,
+    '/infrastructure/kafka/brokers': null,
+    '/infrastructure/kafka/topics': null,
+    '/configs/global/telemetry': null,
+
+    // Level 4 (Depth 4)
+    '/apps/payment-service/config/db.json': JSON.stringify({ host: 'db.prod.internal', port: 5432, db_name: 'payments', max_connections: 100 }, null, 2),
+    '/apps/payment-service/config/cache.json': JSON.stringify({ redis_host: 'cache.prod.internal', redis_port: 6379, ttl_seconds: 3600 }, null, 2),
+    '/apps/payment-service/feature-flags/enable_v2_checkout': 'true',
+    '/apps/payment-service/feature-flags/retry_limit': '5',
+    '/apps/user-service/config/app.yaml': 'server:\n  port: 8080\n  env: production\n  rate_limit: 1000\n',
+    '/apps/user-service/rate-limits/tier_1': '1000/min',
+    '/apps/user-service/rate-limits/tier_2': '5000/min',
+    '/infrastructure/kafka/brokers/0': JSON.stringify({ host: 'kafka-1.prod.internal', port: 9092, rack: 'us-east-1a' }, null, 2),
+    '/infrastructure/kafka/brokers/1': JSON.stringify({ host: 'kafka-2.prod.internal', port: 9092, rack: 'us-east-1b' }, null, 2),
+    '/infrastructure/kafka/topics/user-events': JSON.stringify({ partitions: 12, replication: 3 }, null, 2),
+    '/infrastructure/kafka/topics/audit-logs': JSON.stringify({ partitions: 24, replication: 3 }, null, 2),
+    '/infrastructure/redis/sentinel-master': 'master-01.prod.internal:26379',
+    '/configs/global/log_level': 'INFO',
+    '/configs/global/maintenance_mode': 'false',
+    '/configs/global/telemetry/sample_rate': '0.1',
+    '/configs/region-us-east/cluster_status': 'HEALTHY',
+  };
+
+  for (const [path, content] of Object.entries(seed)) {
+    sim.nodes.set(path, content !== null ? { data: Buffer.from(content, 'utf-8') } : {});
+  }
+}
+
+seedSimNodes();
+
 /** A microtask yield so the sim's read-modify-write has a real async gap (makes the
  *  per-path lock meaningful: two unlocked concurrent RMWs would clobber here). */
 function tick(): Promise<void> {

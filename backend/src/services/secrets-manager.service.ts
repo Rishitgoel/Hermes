@@ -160,6 +160,40 @@ export class SecretsManagerService implements SecretStore {
     if (this.sim.seeded) {return;}
     this.sim.seeded = true;
     if (this.instance.key === 'secrets-sandbox') {
+      this.sim.secrets.set('sandbox/database', {
+        name: 'sandbox/database',
+        keys: ['DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_NAME'],
+        values: {
+          DB_HOST: 'sandbox-pg.internal',
+          DB_USER: 'sandbox_user',
+          DB_PASSWORD: 'sbx_secure_pass_9900',
+          DB_NAME: 'sandbox_db',
+        },
+      });
+      this.sim.secrets.set('sandbox/redis', {
+        name: 'sandbox/redis',
+        keys: ['REDIS_URL', 'REDIS_PASSWORD'],
+        values: {
+          REDIS_URL: 'redis://127.0.0.1:6379',
+          REDIS_PASSWORD: 'sbx_redis_secret_pass',
+        },
+      });
+      this.sim.secrets.set('sandbox/feature-flags', {
+        name: 'sandbox/feature-flags',
+        keys: ['LAUNCHDARKLY_SDK_KEY', 'ENABLE_EXPERIMENTAL_UI'],
+        values: {
+          LAUNCHDARKLY_SDK_KEY: 'sdk-sandbox-key-000111222',
+          ENABLE_EXPERIMENTAL_UI: 'true',
+        },
+      });
+      this.sim.secrets.set('sandbox/common/api-keys', {
+        name: 'sandbox/common/api-keys',
+        keys: ['MOCK_PAYMENT_KEY', 'TEST_SMS_TOKEN'],
+        values: {
+          MOCK_PAYMENT_KEY: 'mock_pay_test_key_123',
+          TEST_SMS_TOKEN: 'test_sms_token_456',
+        },
+      });
       this.sim.secrets.set('sandbox/service-a', {
         name: 'sandbox/service-a',
         keys: ['SANDBOX_API_KEY'],
@@ -172,19 +206,75 @@ export class SecretsManagerService implements SecretStore {
       });
       return;
     }
+
+    // Prod AWS Account (`secrets`)
+    this.sim.secrets.set('prod/database', {
+      name: 'prod/database',
+      keys: ['DB_HOST', 'DB_PORT', 'DB_USER', 'DB_PASSWORD', 'DB_NAME'],
+      values: {
+        DB_HOST: 'db.prod.internal',
+        DB_PORT: '5432',
+        DB_USER: 'prod_hermes_user',
+        DB_PASSWORD: 'prod_secure_db_pass_2026!#',
+        DB_NAME: 'hermes_production',
+      },
+    });
+    this.sim.secrets.set('prod/redis', {
+      name: 'prod/redis',
+      keys: ['REDIS_URL', 'REDIS_AUTH_TOKEN'],
+      values: {
+        REDIS_URL: 'redis://cache.prod.internal:6379',
+        REDIS_AUTH_TOKEN: 'red_token_prod_9988776655',
+      },
+    });
+    this.sim.secrets.set('staging/database', {
+      name: 'staging/database',
+      keys: ['DB_HOST', 'DB_USER', 'DB_PASSWORD'],
+      values: {
+        DB_HOST: 'db.staging.internal',
+        DB_USER: 'stg_user',
+        DB_PASSWORD: 'stg_db_pass_1234',
+      },
+    });
+    this.sim.secrets.set('staging/redis', {
+      name: 'staging/redis',
+      keys: ['REDIS_URL'],
+      values: {
+        REDIS_URL: 'redis://cache.staging.internal:6379',
+      },
+    });
+    this.sim.secrets.set('analytics/mixpanel', {
+      name: 'analytics/mixpanel',
+      keys: ['MIXPANEL_TOKEN', 'MIXPANEL_API_SECRET'],
+      values: {
+        MIXPANEL_TOKEN: 'mp_tok_prod_445566',
+        MIXPANEL_API_SECRET: 'mp_sec_prod_778899',
+      },
+    });
+    this.sim.secrets.set('common/api-keys', {
+      name: 'common/api-keys',
+      keys: ['SENDGRID_API_KEY', 'TWILIO_AUTH_TOKEN', 'OPENAI_API_KEY'],
+      values: {
+        SENDGRID_API_KEY: 'sim_sendgrid_key_112233445566778899',
+        TWILIO_AUTH_TOKEN: 'tw_tok_prod_aabbccdd',
+        OPENAI_API_KEY: 'sim_openai_key_abc123xyz',
+      },
+    });
     this.sim.secrets.set('payment/gateway', {
       name: 'payment/gateway',
-      keys: ['STRIPE_API_KEY', 'BRAINTREE_MERCHANT_ID'],
+      keys: ['STRIPE_API_KEY', 'BRAINTREE_MERCHANT_ID', 'RAZORPAY_SECRET_KEY'],
       values: {
-        STRIPE_API_KEY: 'sk_test_123456',
-        BRAINTREE_MERCHANT_ID: 'merchant_abc123',
+        STRIPE_API_KEY: 'sim_stripe_key_51M0000000000000000000000',
+        BRAINTREE_MERCHANT_ID: 'merchant_prod_889900',
+        RAZORPAY_SECRET_KEY: 'sim_razorpay_sec_1122334455',
       },
     });
     this.sim.secrets.set('payment/webhook', {
       name: 'payment/webhook',
-      keys: ['WEBHOOK_SECRET_KEY'],
+      keys: ['WEBHOOK_SECRET_KEY', 'SIGNING_SECRET'],
       values: {
-        WEBHOOK_SECRET_KEY: 'whsec_xyz789',
+        WEBHOOK_SECRET_KEY: 'sim_webhook_prod_xyz789_abcdef',
+        SIGNING_SECRET: 'sig_sec_9900112233',
       },
     });
   }
