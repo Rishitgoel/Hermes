@@ -179,8 +179,12 @@ export const config = {
 
   // ── Simulation Mode (Fixes #1 — SINGLE definition) ──
   get isSimulation() {
-    // Simulation is ON when explicitly set to 'true' AND not in production
-    return process.env.KEYCLOAK_SIMULATION === 'true' && !this.isProd;
+    // Simulation is ON when explicitly set to 'true' (or ALLOW_SIMULATION_IN_PROD=true)
+    return (
+      process.env.KEYCLOAK_SIMULATION === 'true' ||
+      process.env.ALLOW_SIMULATION_IN_PROD === 'true' ||
+      (process.env.KEYCLOAK_SIMULATION !== 'false' && !this.isProd)
+    );
   },
 
   // Read lazily via getters (NOT captured once at import). loadSecrets() injects
@@ -342,7 +346,7 @@ export const config = {
     },
 
     get region() {
-      return process.env.AWS_REGION;
+      return process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || 'ap-south-1';
     },
     get accessKeyId() {
       return process.env.AWS_ACCESS_KEY_ID;
