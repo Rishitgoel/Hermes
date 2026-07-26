@@ -2,8 +2,12 @@ import { PrismaClient } from '../../generated/hermes';
 import config from './config';
 import logger from '../utils/logger';
 
-if (!process.env.DATABASE_URL_CRM) {
-  logger.warn('DATABASE_URL_CRM is not set — hermes database will be unavailable');
+if (!process.env.DATABASE_URL_HERMES && process.env.DATABASE_URL) {
+  process.env.DATABASE_URL_HERMES = process.env.DATABASE_URL;
+}
+
+if (!process.env.DATABASE_URL_HERMES) {
+  logger.warn('DATABASE_URL_HERMES is not set — hermes database will be unavailable');
 }
 
 const prisma = new PrismaClient({
