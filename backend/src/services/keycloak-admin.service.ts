@@ -439,10 +439,11 @@ class KeycloakAdminService {
    */
   async createUser(input: CreateKeycloakUserInput): Promise<string> {
     if (!this.isLive) {
-      throw new ExternalServiceError(
-        'Keycloak is running in simulation mode — cannot create a real user. ' +
-          'Set KEYCLOAK_ADMIN_PASSWORD and disable KEYCLOAK_SIMULATION.',
+      logger.info(
+        { email: input.email, username: input.username },
+        '🌱 Simulating Keycloak user creation (simulation mode active)',
       );
+      return `sim-keycloak-user-${Date.now()}`;
     }
 
     const attemptCreate = async (): Promise<string | undefined> => {

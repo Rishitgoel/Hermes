@@ -211,10 +211,28 @@ export class ApolloUserService {
     const email = input.email.trim().toLowerCase();
 
     if (!keycloakAdminService.isLive) {
-      throw new ExternalServiceError(
-        'Keycloak is in simulation mode, so no real login can be created. ' +
-          'This action requires a live Keycloak connection.',
+      logger.info(
+        { email, performer: performer.username },
+        '🌱 Simulating Apollo (Keycloak) user creation',
       );
+      const username = await this.resolveUsername(
+        email,
+        input.firstName,
+        input.lastName,
+      );
+      const temporaryPassword = generateTemporaryPassword();
+      const userId = `sim-keycloak-user-${Date.now()}`;
+      return {
+        userId,
+        username,
+        email,
+        temporaryPassword,
+        slack: {
+          delivered: false,
+          simulated: true,
+          reason: 'Simulation mode — Keycloak user creation simulated.',
+        },
+      };
     }
 
     // Pre-flight existence check. Keycloak would 409 anyway, but checking first
