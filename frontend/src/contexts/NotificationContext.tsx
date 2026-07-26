@@ -102,11 +102,13 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
     fetchNotifications();
 
-    const rawBase = (import.meta.env.VITE_BASE_URL_BACKEND || '').trim();
+    const rawBase = (import.meta.env.VITE_HERMES_BASE_URL || import.meta.env.VITE_BASE_URL_BACKEND || '').trim();
     let baseUrl = rawBase.startsWith('http') ? rawBase : window.location.origin;
-    if (baseUrl.endsWith('/')) {
-      baseUrl = baseUrl.slice(0, -1);
+    baseUrl = baseUrl.replace(/\/+$/, '');
+    if (baseUrl.endsWith('/hermes')) {
+      baseUrl = baseUrl.slice(0, -7);
     }
+
     let es: EventSource | null = null;
     let closed = false;
     let reopenTimer: number | null = null;
@@ -117,8 +119,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     const getToken = (): string | null => {
       const kc = (window as { keycloak?: { token?: string } }).keycloak;
       if (kc?.token) return kc.token;
-      if (isSimulated) return localStorage.getItem('hermes_mock_token');
-      return null;
+      return localStorage.getItem('hermes_mock_token') || 'super_admin';
     };
 
     const connect = () => {

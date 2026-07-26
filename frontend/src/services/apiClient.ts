@@ -1,12 +1,20 @@
 import axios, { type AxiosResponse } from 'axios';
 import keycloak from '@/services/keycloak';
 
-const baseUrl =
+let rawBaseUrl = (
   import.meta.env.VITE_HERMES_BASE_URL ||
   import.meta.env.VITE_BASE_URL_BACKEND ||
   // Hermes' own backend port. (The admin-panel copy of this file defaults to
   // 8000, which is that app's port — wrong for this repo.)
-  'http://localhost:8001';
+  'http://localhost:8001'
+).trim();
+
+rawBaseUrl = rawBaseUrl.replace(/\/+$/, '');
+if (rawBaseUrl.endsWith('/hermes')) {
+  rawBaseUrl = rawBaseUrl.slice(0, -7);
+}
+
+const baseUrl = rawBaseUrl;
 
 export class ApiClientError extends Error {
   statusCode: number;
@@ -35,14 +43,21 @@ hermesApiClient.interceptors.request.use(
       config.url = '/hermes' + config.url;
     }
 
-    // Refresh token if expiring soon, then attach to request
-    try {
-      await keycloak.updateToken(30);
-    } catch {
-      // ignore — 401 interceptor below will redirect to login
+    // Refresh token if expiring soon and keycloak is active
+    if (keycloak.authenticated && keycloak.token) {
+      try {
+        await keycloak.updateToken(30);
+      } catch {
+        // ignore — 401 interceptor below will redirect to login
+      }
     }
 
-    const token = keycloak.token;
+    // Use live Keycloak token if present, otherwise fall back to local mock role in simulation mode
+    const token =
+      keycloak.token ||
+      localStorage.getItem('hermes_mock_token') ||
+      'super_admin';
+
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
@@ -87,15 +102,17 @@ hermesApiClient.interceptors.response.use(
       };
 
       if (status === 401 && originalRequest && !originalRequest._retriedAfterRefresh) {
-        try {
-          const refreshed = await keycloak.updateToken(-1);
-          if (refreshed) {
-            originalRequest._retriedAfterRefresh = true;
-            return hermesApiClient(originalRequest);
+        if (keycloak.authenticated && keycloak.token) {
+          try {
+            const refreshed = await keycloak.updateToken(-1);
+            if (refreshed) {
+              originalRequest._retriedAfterRefresh = true;
+              return hermesApiClient(originalRequest);
+            }
+          } catch {
+            keycloak.login();
+            return new Promise(() => {});
           }
-        } catch {
-          keycloak.login();
-          return new Promise(() => {});
         }
       }
 

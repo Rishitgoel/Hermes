@@ -65,6 +65,7 @@ app.use(
       }
     },
     credentials: true,
+    optionsSuccessStatus: 200,
   }),
 );
 
