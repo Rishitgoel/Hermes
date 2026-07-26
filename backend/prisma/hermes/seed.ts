@@ -294,10 +294,6 @@ async function main() {
         action: 'SECRET_INGESTION_REQUEST_CREATED',
         performerId: 'regular-user-uuid-3333',
         performerName: 'Rishit_Goel',
-        performerEmail: 'rishit.goel@bachatt.app',
-        platform: 'secrets-azure',
-        targetType: 'azure-keyvault',
-        targetName: 'bachatt-sim-kv',
         details: {
           keys: ['orbit-azure-openai-api-key', 'saathi-azure-storage-key'],
           vault: 'bachatt-sim-kv',
@@ -310,10 +306,6 @@ async function main() {
         action: 'SECRET_INGESTION_APPROVED',
         performerId: 'platform-admin-uuid-4444',
         performerName: 'Neha_Sharma',
-        performerEmail: 'neha.sharma@bachatt.app',
-        platform: 'secrets-azure',
-        targetType: 'azure-keyvault',
-        targetName: 'bachatt-sim-kv-analytics',
         details: {
           keys: ['metabase-db-password', 'metabase-encryption-key'],
           vault: 'bachatt-sim-kv-analytics',

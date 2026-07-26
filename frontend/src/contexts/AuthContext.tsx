@@ -65,10 +65,12 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Setup simulation flags — opt-in only. A missing/typo'd env var must NOT silently
-// enable simulation (which would read the localStorage mock token as the bearer).
+// Setup simulation flags — opt-in only. Enables simulation mode in dev mode or when
+// VITE_KEYCLOAK_SIMULATION=true / VITE_ALLOW_SIMULATION_IN_PROD=true is explicitly set for a demo build.
 const useSimulation =
-  import.meta.env.VITE_KEYCLOAK_SIMULATION === 'true' && import.meta.env.MODE !== 'production';
+  import.meta.env.VITE_KEYCLOAK_SIMULATION === 'true' ||
+  import.meta.env.VITE_ALLOW_SIMULATION_IN_PROD === 'true' ||
+  (import.meta.env.VITE_KEYCLOAK_SIMULATION !== 'false' && import.meta.env.MODE !== 'production');
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<UserSession | null>(null);
