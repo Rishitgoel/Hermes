@@ -178,12 +178,24 @@ export const AdminManagement: React.FC = () => {
   const isSecretsFamily = activePlatform ? isSecretsPlatform(activePlatform) : false;
 
 
+  const { isSimulated, switchSimulatedRole } = useAuth();
+
   if (platforms.length === 0) {
     return (
       <div className="empty-state">
         <Icons.ShieldOff size={44} className="empty-state-icon" />
         <h3 className="empty-state-title">No platforms to manage</h3>
         <p className="empty-state-desc">You don't currently administer any platforms.</p>
+        {isSimulated && (
+          <button
+            type="button"
+            className="btn btn-primary"
+            style={{ marginTop: '16px', display: 'inline-flex', alignItems: 'center', gap: '8px' }}
+            onClick={() => switchSimulatedRole('super_admin')}
+          >
+            <Icons.Shield size={16} /> Switch to Super Admin Mode (Demo)
+          </button>
+        )}
       </div>
     );
   }

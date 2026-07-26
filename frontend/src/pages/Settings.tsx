@@ -39,6 +39,8 @@ export const Settings: React.FC = () => {
     setSearchParams(next === 'notifications' ? {} : { tab: next }, { replace: true });
   };
 
+  const { isSimulated, switchSimulatedRole } = useAuth();
+
   if (!superAdmin) {
     return (
       <div className="empty-state">
@@ -50,6 +52,16 @@ export const Settings: React.FC = () => {
           These settings change how Hermes behaves for everyone, so they are limited to super
           admins.
         </div>
+        {isSimulated && (
+          <button
+            type="button"
+            className="btn btn-primary"
+            style={{ marginTop: '16px', display: 'inline-flex', alignItems: 'center', gap: '8px' }}
+            onClick={() => switchSimulatedRole('super_admin')}
+          >
+            <Icons.Shield size={16} /> Switch to Super Admin Mode (Demo)
+          </button>
+        )}
       </div>
     );
   }

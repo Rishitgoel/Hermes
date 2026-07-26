@@ -105,7 +105,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Simulation mode — pick a mock role, push it into localStorage as the bearer
       // token, then ask the backend who we are (this also lazily auto-creates the
       // user-creation DRAFT row server-side).
-      const mockRole = (localStorage.getItem('hermes_mock_token') as SimRole) || 'user';
+      const mockRole = (localStorage.getItem('hermes_mock_token') as SimRole) || 'super_admin';
       localStorage.setItem('hermes_mock_token', mockRole);
 
       let fallbackUser: UserSession;

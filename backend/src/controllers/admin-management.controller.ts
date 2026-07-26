@@ -139,11 +139,6 @@ export class AdminManagementController extends BaseController {
         return;
       }
       const platforms = await getManageablePlatforms(this.user!);
-      // Gate like the sibling lookups (/users, /groups, /group-admins): a non-admin
-      // with no manageable platforms gets 403, not a 200 with an empty array.
-      if (platforms.length === 0) {
-        throw new AuthorizationError('You do not administer any platforms');
-      }
       this.sendResponse(
         platforms,
         'Manageable platforms retrieved successfully',
