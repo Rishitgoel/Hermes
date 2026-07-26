@@ -341,12 +341,20 @@ export const Groups: React.FC = () => {
 
         {/* Platform Grid */}
         <div className="cards-grid">
-          {PLATFORMS.filter((platform) => liveByFamily.has(platform.id)).map((platform) => {
-            const instances = liveByFamily.get(platform.id) ?? [];
-            const isActive = instances.length > 0;
+          {PLATFORMS.map((platform) => {
+            const instances =
+              liveByFamily.get(platform.id) ??
+              (platform.id === 'azure'
+                ? livePlatformsList.filter((p) => p.key.includes('azure') || p.key === 'secrets-azure')
+                : livePlatformsList.filter((p) => p.family === platform.id || p.key === platform.id));
+            const isActive =
+              instances.length > 0 || ['redash', 'aws', 'zookeeper', 'secrets', 'azure'].includes(platform.id);
             // Count groups across every instance in this family, so a
             // multi-instance card (Redash Prod + QA) reflects both together.
             const instanceKeys = new Set(instances.map((i) => i.key));
+            if (platform.id === 'azure' && instanceKeys.size === 0) {
+              instanceKeys.add('secrets-azure');
+            }
             const platformGroups = groups.filter((g) => instanceKeys.has(g.platform));
             const groupCount = platformGroups.length;
             const memberCount = platformGroups.reduce((acc, curr) => acc + curr.memberCount, 0);
@@ -355,7 +363,14 @@ export const Groups: React.FC = () => {
               <div
                 key={platform.id}
                 className="group-card"
-                onClick={() => handleSelectPlatform(platform)}
+                onClick={() => {
+                  if (platform.id === 'azure' && instances.length === 0) {
+                    setSearchParams({ platform: 'secrets-azure' });
+                    setInfoMessage(null);
+                  } else {
+                    handleSelectPlatform(platform);
+                  }
+                }}
                 style={{
                   '--card-accent-color': platform.color,
                   cursor: 'pointer',
@@ -379,9 +394,7 @@ export const Groups: React.FC = () => {
                       </span>
                     </div>
                   </div>
-                  <p className="group-card-desc">
-                    {platform.description}
-                  </p>
+                  <p className="group-card-description">{platform.description}</p>
                 </div>
 
                 <div className="group-card-footer">
@@ -391,7 +404,7 @@ export const Groups: React.FC = () => {
                         <Icons.Layers size={14} /> {groupCount} groups • <Icons.Users size={14} /> {memberCount} memberships
                       </span>
                       <span className="badge badge-approved badge-sm">
-                        Active
+                        {instances.length > 1 ? `${instances.length} Active` : 'Active'}
                       </span>
                     </>
                   ) : (
