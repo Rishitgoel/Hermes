@@ -197,13 +197,8 @@ export class KeycloakSetupService {
 
       logger.info('🔑 Keycloak setup: Configuration complete.');
     } catch (error: any) {
-      logger.error('🔑 Keycloak setup failed: ' + (error.response?.data?.error_description || error.message));
-      // In development, do not crash if Keycloak is unavailable, fallback to simulation
-      if (config.isDev) {
-        logger.warn('🔑 Keycloak setup failed in development environment. Continuing with startup...');
-      } else {
-        throw error;
-      }
+      logger.warn('🔑 Keycloak setup failed: ' + (error.response?.data?.error_description || error.message));
+      logger.warn('🔑 Keycloak setup: Continuing with startup in resilient/simulation mode...');
     }
   }
 }

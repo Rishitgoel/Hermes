@@ -101,7 +101,7 @@ async function bootstrap() {
     process.on('SIGINT', shutdown);
 
   } catch (error: any) {
-    logger.fatal('❌ Failed to bootstrap Hermes Application:', error.message);
+    logger.fatal({ err: error }, `❌ Failed to bootstrap Hermes Application: ${error?.message || error}`);
     process.exit(1);
   }
 }
