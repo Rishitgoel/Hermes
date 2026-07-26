@@ -59,7 +59,7 @@ function azureSecretsInstance(opts: {
 
   const vault = env('VAULT_NAME') || '';
   const subscriptionId = env('SUBSCRIPTION_ID') || '';
-  const simExplicit = env('SIMULATION') === 'true';
+  const simExplicit = env('SIMULATION') === 'true' || env('SIMULATION') !== 'false';
   // Either mode counts as configured: a vault pin (one vault, no ARM) or a subscription id
   // (discover every vault, like the AWS store lists every secret in the account).
   const enabled = !!vault || !!subscriptionId || simExplicit;
@@ -282,7 +282,7 @@ export const config = {
         label: 'QA',
         displayName: 'Redash (QA)',
         get baseUrl() {
-          return process.env.REDASH_QA_BASE_URL || '';
+          return process.env.REDASH_QA_BASE_URL || (config.isSimulation ? 'http://localhost:5501' : '');
         },
         get apiKey() {
           return process.env.REDASH_QA_API_KEY || 'dummy-key-for-development';
@@ -480,7 +480,7 @@ export const config = {
   get secretsInstances() {
     const sandboxRegion = process.env.SECRETS_SANDBOX_REGION || '';
     const sandboxProfile = process.env.SECRETS_SANDBOX_PROFILE || '';
-    const sandboxSimExplicit = process.env.SECRETS_SANDBOX_SIMULATION === 'true';
+    const sandboxSimExplicit = process.env.SECRETS_SANDBOX_SIMULATION === 'true' || process.env.SECRETS_SANDBOX_SIMULATION !== 'false';
     const sandboxEnabled = !!sandboxRegion || sandboxSimExplicit || !!sandboxProfile;
     const sandboxIsSimulation = sandboxSimExplicit || !sandboxRegion;
     // Guard against the sandbox silently sharing prod's AWS credentials: with no

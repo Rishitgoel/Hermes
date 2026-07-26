@@ -1,67 +1,157 @@
+import 'dotenv/config';
 import { PrismaClient } from '@prisma/client';
 import config from '../../src/config/config';
 
 const prisma = new PrismaClient();
 
 const initialGroups = [
+  // ── Redash Prod ──
   {
     name: 'Growth',
     slug: 'growth',
+    platform: 'redash',
     description: 'Access to growth analytics dashboards and user acquisition metrics.',
     icon: 'TrendingUp',
-    color: '#6B46C1', // Purple
-    externalGroupId: '101', // Mock Redash Group ID
+    color: '#E0402C',
+    externalGroupId: '101',
     tables: ['growth_analytics', 'conversion_funnels', 'acquisition_channels', 'attribution_models'],
   },
   {
     name: 'Retention',
     slug: 'retention',
+    platform: 'redash',
     description: 'Access to customer retention metrics and churn analysis datasets.',
     icon: 'RefreshCw',
-    color: '#6B46C1', // Purple
-    externalGroupId: '102', // Mock Redash Group ID
+    color: '#E0402C',
+    externalGroupId: '102',
     tables: ['churn_predictions', 'user_engagement_logs', 'lifecycle_events', 'reactivation_campaigns'],
   },
   {
     name: 'Lending',
     slug: 'lending',
+    platform: 'redash',
     description: 'Access to consumer lending databases and loan risk profiles.',
     icon: 'DollarSign',
-    color: '#6B46C1', // Purple
-    externalGroupId: '103', // Mock Redash Group ID
+    color: '#E0402C',
+    externalGroupId: '103',
     tables: ['loan_applications', 'underwriting_rules', 'risk_profiles', 'emi_schedules', 'disbursals'],
-  },
-  {
-    name: 'Customer Support',
-    slug: 'customer-support',
-    description: 'Access to customer experience databases, ticket data, and agent metrics.',
-    icon: 'HeartHandshake',
-    color: '#6B46C1', // Purple
-    externalGroupId: '105', // Mock Redash Group ID
-    tables: ['support_tickets', 'agent_performance', 'customer_feedback', 'escalation_logs'],
   },
   {
     name: 'Credit Card',
     slug: 'credit-card',
+    platform: 'redash',
     description: 'Access to credit card transactions ledger and billing databases.',
     icon: 'CreditCard',
-    color: '#6B46C1', // Purple
-    externalGroupId: '104', // Mock Redash Group ID
+    color: '#E0402C',
+    externalGroupId: '104',
     tables: ['card_transactions', 'credit_limits', 'rewards_ledger', 'billing_statements'],
   },
   {
-    name: 'Marketing',
-    slug: 'marketing',
-    description: 'Access to marketing campaign performance, ad spend, and promotion metrics.',
-    icon: 'Megaphone',
-    color: '#6B46C1', // Purple
-    externalGroupId: '106', // Mock Redash Group ID
-    tables: ['ad_spend', 'campaign_metrics', 'email_deliverability', 'promo_codes'],
+    name: 'Customer Support',
+    slug: 'customer-support',
+    platform: 'redash',
+    description: 'Access to customer experience databases, ticket data, and agent metrics.',
+    icon: 'HeartHandshake',
+    color: '#E0402C',
+    externalGroupId: '105',
+    tables: ['support_tickets', 'agent_performance', 'customer_feedback', 'escalation_logs'],
+  },
+
+  // ── Redash QA ──
+  {
+    name: 'QA Staging Analytics',
+    slug: 'qa-staging-analytics',
+    platform: 'redash-qa',
+    description: 'Access to QA test datasets, synthetic user logs, and benchmark queries.',
+    icon: 'Database',
+    color: '#E0402C',
+    externalGroupId: '201',
+    tables: ['test_user_events', 'sandbox_transactions', 'load_test_results'],
+  },
+
+  // ── AWS IAM Identity Center ──
+  {
+    name: 'AWS Infrastructure Admin',
+    slug: 'aws-infra-admin',
+    platform: 'aws',
+    description: 'Cloud infrastructure SSO group providing IAM Identity Center admin rights.',
+    icon: 'Cloud',
+    color: '#FF9900',
+    externalGroupId: 'aws-grp-001',
+    tables: ['aws_account_roles', 'iam_policy_sets', 'security_groups'],
+  },
+  {
+    name: 'AWS Data Engineering',
+    slug: 'aws-data-engineering',
+    platform: 'aws',
+    description: 'AWS SSO access to EKS, S3 Data Lake, EMR clusters, and Redshift spectrum.',
+    icon: 'Layers',
+    color: '#FF9900',
+    externalGroupId: 'aws-grp-002',
+    tables: ['s3_lakehouse', 'redshift_warehouse', 'emr_logs'],
+  },
+
+  // ── Apache ZooKeeper ──
+  {
+    name: 'ZK Credit Card Node',
+    slug: 'zk-credit-card-node',
+    platform: 'zookeeper',
+    description: 'Distributed znode coordination path for Credit Card service config and ACLs.',
+    icon: 'Network',
+    color: '#326CE5',
+    externalGroupId: '/hermes/credit-card#cdrw\n/hermes/payments#r',
+    tables: ['znode_paths', 'acl_permissions'],
+  },
+  {
+    name: 'ZK Core Gateway',
+    slug: 'zk-core-gateway',
+    platform: 'zookeeper',
+    description: 'ZooKeeper path access for API Gateway dynamic feature flags and rate limit nodes.',
+    icon: 'Radio',
+    color: '#326CE5',
+    externalGroupId: '/hermes/core-gateway#cdrw',
+    tables: ['feature_flags', 'rate_limit_rules'],
+  },
+
+  // ── Secret Ingestion (AWS Secrets Manager - Prod) ──
+  {
+    name: 'Production Secrets Ingestion',
+    slug: 'prod-secrets-ingestion',
+    platform: 'secrets',
+    description: 'Stage and review key-value secrets destined for AWS Secrets Manager (Prod & QA).',
+    icon: 'KeyRound',
+    color: '#DD344C',
+    externalGroupId: '*',
+    tables: ['secrets_manager_keys', 'infra_deployment_prs'],
+  },
+
+  // ── Secret Ingestion Sandbox (AWS Secrets Manager - Sandbox) ──
+  {
+    name: 'Sandbox Microservice Secrets',
+    slug: 'sandbox-secrets-ingestion',
+    platform: 'secrets-sandbox',
+    description: 'Ingest secret key-value pairs into AWS Secrets Manager Sandbox environment.',
+    icon: 'KeyRound',
+    color: '#DD344C',
+    externalGroupId: 'sandbox-*',
+    tables: ['sandbox_secret_keys'],
+  },
+
+  // ── Secret Ingestion Azure (Azure Key Vault) ──
+  {
+    name: 'Azure Key Vault Secrets',
+    slug: 'azure-kv-secrets',
+    platform: 'secrets-azure',
+    description: 'Ingest and stage flat key-value pairs in Azure Key Vault instances.',
+    icon: 'Server',
+    color: '#0078D4',
+    externalGroupId: 'bachatt-sim-kv\nbachatt-sim-kv-analytics',
+    tables: ['azure_keyvault_secrets'],
   },
 ];
 
 async function main() {
-  console.log('Seeding initial Hermes groups...');
+  console.log('Seeding initial Hermes groups across all platforms...');
 
   for (const group of initialGroups) {
     const upserted = await prisma.group.upsert({
@@ -73,18 +163,14 @@ async function main() {
         color: group.color,
         externalGroupId: group.externalGroupId,
         tables: group.tables,
+        platform: group.platform,
       },
-      // platform is required (no schema default). All seeded groups are Redash.
-      create: { ...group, platform: 'redash' },
+      create: { ...group },
     });
-    console.log(`Upserted group: ${upserted.name} (${upserted.slug})`);
+    console.log(`Upserted group: ${upserted.name} (${upserted.slug}) [${upserted.platform}]`);
   }
 
-  // Example permission-levels (subgroups) for Credit Card, demonstrating the
-  // feature. Each level is backed by its own Redash group id (see the mock groups
-  // in redash.service.ts syncGroups). The other five groups stay level-less and are
-  // requested directly, so both modes coexist. Levels are real config (not sim
-  // drift), so they seed in live mode too.
+  // ── Seed Permission Levels for Credit Card (Redash) ──
   const creditCard = await prisma.group.findUnique({ where: { slug: 'credit-card' } });
   if (creditCard) {
     const creditCardLevels = [
@@ -99,66 +185,67 @@ async function main() {
         create: { groupId: creditCard.id, ...lvl },
       });
     }
-    console.log('Seeded Credit Card levels: Intern, Junior Dev, Senior Dev');
+    console.log('Seeded Credit Card permission levels');
   }
 
-  // Sim-only fixtures below: fake admin/member rows that mirror the simulation
-  // identities (group-admin-uuid-2222, platform-admin-uuid-4444). They reference
-  // non-existent Keycloak users, so seeding them into a LIVE database just creates
-  // drift the reconciliation job removes on its next run. Only plant them in
-  // simulation mode; in live mode, assign admins through the Admin Management UI.
+  // ── Seed Permission Levels for AWS Data Engineering ──
+  const awsDataEng = await prisma.group.findUnique({ where: { slug: 'aws-data-engineering' } });
+  if (awsDataEng) {
+    const awsLevels = [
+      { name: 'Analyst', slug: 'analyst', permission: 'read-only', externalGroupId: 'aws-lvl-001', rank: 0, description: 'S3 Data Lake Read-Only analytics access.' },
+      { name: 'Engineer', slug: 'engineer', permission: 'write', externalGroupId: 'aws-lvl-002', rank: 1, description: 'Read/Write access to EKS and Redshift warehouse.' },
+    ];
+    for (const lvl of awsLevels) {
+      await prisma.groupLevel.upsert({
+        where: { groupId_slug: { groupId: awsDataEng.id, slug: lvl.slug } },
+        update: { name: lvl.name, permission: lvl.permission, externalGroupId: lvl.externalGroupId, rank: lvl.rank, description: lvl.description },
+        create: { groupId: awsDataEng.id, ...lvl },
+      });
+    }
+    console.log('Seeded AWS Data Engineering permission levels');
+  }
+
   if (!config.isSimulation) {
-    console.log('Skipping sim admin/access fixtures (live mode) — assign admins via the Admin Management UI.');
+    console.log('Skipping sim admin/access/request fixtures in live mode.');
     console.log('Seeding completed successfully!');
     return;
   }
 
-  console.log('Seeding default group admin for Growth...');
-  const growthGroup = await prisma.group.findUnique({
-    where: { slug: 'growth' },
-  });
+  // ── Seed Group Admins ──
+  console.log('Seeding group admins...');
+  const growthGroup = await prisma.group.findUnique({ where: { slug: 'growth' } });
   if (growthGroup) {
     await prisma.groupAdmin.upsert({
-      where: {
-        groupId_userId: {
-          groupId: growthGroup.id,
-          userId: 'group-admin-uuid-2222',
-        },
-      },
-      update: {
-        userName: 'Yogesh_Verma',
-        userEmail: 'yogesh.verma@bachatt.app',
-        assignedBy: 'system',
-      },
-      create: {
-        groupId: growthGroup.id,
-        userId: 'group-admin-uuid-2222',
-        userName: 'Yogesh_Verma',
-        userEmail: 'yogesh.verma@bachatt.app',
-        assignedBy: 'system',
-      },
+      where: { groupId_userId: { groupId: growthGroup.id, userId: 'group-admin-uuid-2222' } },
+      update: { userName: 'Yogesh_Verma', userEmail: 'yogesh.verma@bachatt.app', assignedBy: 'system' },
+      create: { groupId: growthGroup.id, userId: 'group-admin-uuid-2222', userName: 'Yogesh_Verma', userEmail: 'yogesh.verma@bachatt.app', assignedBy: 'system' },
     });
-    console.log('Seeded Growth admin: Yogesh Verma');
+  }
 
-    // No composite unique key exists in Prisma anymore — uniqueness for active
-    // grants is enforced by a partial DB index. So we find-or-create manually.
-    const existingAccess = await prisma.userAccess.findFirst({
-      where: {
-        userId: 'group-admin-uuid-2222',
-        groupId: growthGroup.id,
-        isActive: true,
-      },
+  // ── Seed Platform Admins ──
+  console.log('Seeding platform admins...');
+  const platformAdmins = [
+    { userId: 'platform-admin-uuid-4444', platform: 'redash', userName: 'Neha_Sharma', userEmail: 'neha.sharma@bachatt.app' },
+    { userId: 'platform-admin-uuid-4444', platform: 'aws', userName: 'Neha_Sharma', userEmail: 'neha.sharma@bachatt.app' },
+    { userId: 'platform-admin-uuid-4444', platform: 'zookeeper', userName: 'Neha_Sharma', userEmail: 'neha.sharma@bachatt.app' },
+    { userId: 'platform-admin-uuid-4444', platform: 'secrets', userName: 'Neha_Sharma', userEmail: 'neha.sharma@bachatt.app' },
+    { userId: 'platform-admin-uuid-4444', platform: 'secrets-azure', userName: 'Neha_Sharma', userEmail: 'neha.sharma@bachatt.app' },
+  ];
+  for (const pa of platformAdmins) {
+    await prisma.platformAdmin.upsert({
+      where: { userId_platform: { userId: pa.userId, platform: pa.platform } },
+      update: { userName: pa.userName, userEmail: pa.userEmail, assignedBy: 'system' },
+      create: { ...pa, assignedBy: 'system' },
     });
-    if (existingAccess) {
-      await prisma.userAccess.update({
-        where: { id: existingAccess.id },
-        data: {
-          userName: 'Yogesh_Verma',
-          userEmail: 'yogesh.verma@bachatt.app',
-          grantedBy: 'system',
-        },
-      });
-    } else {
+  }
+
+  // ── Seed Active User Access Grants ──
+  console.log('Seeding active UserAccess grants...');
+  if (growthGroup) {
+    const existingAccess = await prisma.userAccess.findFirst({
+      where: { userId: 'group-admin-uuid-2222', groupId: growthGroup.id, isActive: true },
+    });
+    if (!existingAccess) {
       await prisma.userAccess.create({
         data: {
           userId: 'group-admin-uuid-2222',
@@ -170,59 +257,150 @@ async function main() {
         },
       });
     }
-    console.log('Seeded active UserAccess for Growth admin: Yogesh Verma');
   }
 
-  // Seed Redash and Azure Key Vault platform admins (mirrors simulation identities)
-  console.log('Seeding default platform admin for Redash...');
-  await prisma.platformAdmin.upsert({
-    where: {
-      userId_platform: {
-        userId: 'platform-admin-uuid-4444',
-        platform: 'redash',
-      },
-    },
-    update: {
-      userName: 'Neha_Sharma',
-      userEmail: 'neha.sharma@bachatt.app',
-      assignedBy: 'system',
-    },
-    create: {
-      userId: 'platform-admin-uuid-4444',
-      platform: 'redash',
-      userName: 'Neha_Sharma',
-      userEmail: 'neha.sharma@bachatt.app',
-      assignedBy: 'system',
-    },
+  const zkGroup = await prisma.group.findUnique({ where: { slug: 'zk-credit-card-node' } });
+  if (zkGroup) {
+    const existingZkAccess = await prisma.userAccess.findFirst({
+      where: { userId: 'super-admin-uuid-1111', groupId: zkGroup.id, isActive: true },
+    });
+    if (!existingZkAccess) {
+      await prisma.userAccess.create({
+        data: {
+          userId: 'super-admin-uuid-1111',
+          groupId: zkGroup.id,
+          userName: 'Mayank_Aggarwal',
+          userEmail: 'mayank.aggarwal@bachatt.app',
+          isActive: true,
+          grantedBy: 'system',
+        },
+      });
+    }
+  }
+
+  // ── Seed Access Requests ──
+  console.log('Seeding access requests...');
+  const pendingReq = await prisma.accessRequest.findFirst({
+    where: { requesterId: 'regular-user-uuid-3333', status: 'PENDING' },
   });
-  console.log('Seeded Redash platform admin: Neha Sharma');
-
-  console.log('Seeding default platform admin for Azure Key Vault (secrets-azure)...');
-  await prisma.platformAdmin.upsert({
-    where: {
-      userId_platform: {
-        userId: 'platform-admin-uuid-4444',
-        platform: 'secrets-azure',
+  if (!pendingReq && awsDataEng) {
+    await prisma.accessRequest.create({
+      data: {
+        groupId: awsDataEng.id,
+        requesterId: 'regular-user-uuid-3333',
+        requesterName: 'Rishit_Goel',
+        requesterEmail: 'rishit.goel@bachatt.app',
+        status: 'PENDING',
+        justification: 'Need AWS SSO access for S3 Data Lake analysis in Q3 campaign review.',
+        duration: 'ONE_MONTH',
       },
-    },
-    update: {
-      userName: 'Neha_Sharma',
-      userEmail: 'neha.sharma@bachatt.app',
-      assignedBy: 'system',
-    },
-    create: {
-      userId: 'platform-admin-uuid-4444',
-      platform: 'secrets-azure',
-      userName: 'Neha_Sharma',
-      userEmail: 'neha.sharma@bachatt.app',
-      assignedBy: 'system',
-    },
+    });
+    console.log('Seeded PENDING access request for AWS Data Engineering');
+  }
+
+  const approvedReq = await prisma.accessRequest.findFirst({
+    where: { requesterId: 'group-admin-uuid-2222', status: 'APPROVED' },
   });
-  console.log('Seeded Azure Key Vault platform admin: Neha Sharma');
+  if (!approvedReq && growthGroup) {
+    await prisma.accessRequest.create({
+      data: {
+        groupId: growthGroup.id,
+        requesterId: 'group-admin-uuid-2222',
+        requesterName: 'Yogesh_Verma',
+        requesterEmail: 'yogesh.verma@bachatt.app',
+        reviewerId: 'super-admin-uuid-1111',
+        reviewerName: 'Mayank_Aggarwal',
+        status: 'APPROVED',
+        justification: 'Growth Analytics dashboard oversight and user acquisition tracking.',
+        duration: 'PERMANENT',
+        reviewedAt: new Date(Date.now() - 86400000 * 5),
+      },
+    });
+    console.log('Seeded APPROVED access request for Growth');
+  }
 
-  // Seed sample Secret Ingestion Requests for Azure Key Vault
-  console.log('Seeding sample Azure Key Vault Secret Ingestion requests...');
+  // ── Seed User Onboarding Creation Requests ──
+  console.log('Seeding UserCreationRequest rows...');
+  const platformsToCreate = ['redash', 'aws', 'zookeeper', 'secrets'];
+  for (const plat of platformsToCreate) {
+    const existing = await prisma.userCreationRequest.findFirst({
+      where: { userId: 'super-admin-uuid-1111', platform: plat },
+    });
+    if (!existing) {
+      await prisma.userCreationRequest.create({
+        data: {
+          userId: 'super-admin-uuid-1111',
+          userName: 'Mayank_Aggarwal',
+          userEmail: 'mayank.aggarwal@bachatt.app',
+          platform: plat,
+          status: 'COMPLETED',
+          justification: 'Super Admin onboarding completed.',
+          completedAt: new Date(),
+        },
+      });
+    }
+  }
 
+  // ── Seed Secret Ingestion Requests (AWS Secrets Manager - Prod) ──
+  console.log('Seeding AWS Secrets Manager Ingestion requests...');
+  const pendingSecretsReq = await prisma.secretIngestionRequest.findFirst({
+    where: { platform: 'secrets', status: 'PENDING' },
+  });
+  if (!pendingSecretsReq) {
+    await prisma.secretIngestionRequest.create({
+      data: {
+        platform: 'secrets',
+        secretName: 'investments-prod-db',
+        requesterId: 'regular-user-uuid-3333',
+        requesterName: 'Rishit_Goel',
+        requesterEmail: 'rishit.goel@bachatt.app',
+        status: 'PENDING',
+        justification: 'Rotate Postgres database credentials and Redis auth token for Investments microservice.',
+        entries: [
+          { key: 'INVESTMENTS_DB_PASSWORD', value: 'pg_inv_prod_pass_2026_x9', envVar: 'DB_PASSWORD' },
+          { key: 'INVESTMENTS_REDIS_AUTH', value: 'redis_auth_token_9918273645', envVar: 'REDIS_AUTH' },
+        ],
+        infraTargets: [
+          { path: 'deploy/investments/prod/values-prod.yaml', manifestRef: 'investments-prod-db', format: 'helm-values', env: 'prod' },
+        ],
+        infraSyncState: 'OPEN',
+        infraPrNumber: 204,
+        infraPrUrl: 'https://github.com/bachatt-app/infra-deployment/pull/204',
+      },
+    });
+    console.log('Seeded PENDING AWS Secrets Manager request (#204)');
+  }
+
+  // ── Seed Secret Ingestion Requests (AWS Secrets Manager - Sandbox) ──
+  const pendingSandboxReq = await prisma.secretIngestionRequest.findFirst({
+    where: { platform: 'secrets-sandbox', status: 'PENDING' },
+  });
+  if (!pendingSandboxReq) {
+    await prisma.secretIngestionRequest.create({
+      data: {
+        platform: 'secrets-sandbox',
+        secretName: 'sandbox-ai-service',
+        requesterId: 'regular-user-uuid-3333',
+        requesterName: 'Rishit_Goel',
+        requesterEmail: 'rishit.goel@bachatt.app',
+        status: 'PENDING',
+        justification: 'Provision OpenAI sandbox API keys for testing LLM response caching.',
+        entries: [
+          { key: 'OPENAI_SANDBOX_KEY', value: 'sk-sandbox-mock-key-9988776655', envVar: 'OPENAI_API_KEY' },
+        ],
+        infraTargets: [
+          { path: 'sandbox/ai-service/values-sandbox.yaml', manifestRef: 'sandbox-ai-service', format: 'helm-values', env: 'sandbox' },
+        ],
+        infraSyncState: 'OPEN',
+        infraPrNumber: 45,
+        infraPrUrl: 'https://github.com/bachatt-app/infra-deployment-sandbox/pull/45',
+      },
+    });
+    console.log('Seeded PENDING AWS Secrets Manager Sandbox request (#45)');
+  }
+
+  // ── Seed Secret Ingestion Requests (Azure Key Vault) ──
+  console.log('Seeding Azure Key Vault Secret Ingestion requests...');
   const pendingAzureReq = await prisma.secretIngestionRequest.findFirst({
     where: { platform: 'secrets-azure', status: 'PENDING' },
   });
@@ -284,39 +462,41 @@ async function main() {
     console.log('Seeded APPLIED Azure Key Vault ingestion request (#108)');
   }
 
-  // Seed matching audit logs for Azure Key Vault events
-  const existingAudit = await prisma.auditEntry.findFirst({
-    where: { action: 'SECRET_INGESTION_REQUEST_CREATED' },
-  });
-  if (!existingAudit) {
-    await prisma.auditEntry.create({
-      data: {
-        action: 'SECRET_INGESTION_REQUEST_CREATED',
-        performerId: 'regular-user-uuid-3333',
-        performerName: 'Rishit_Goel',
-        details: {
-          keys: ['orbit-azure-openai-api-key', 'saathi-azure-storage-key'],
-          vault: 'bachatt-sim-kv',
-          justification: 'Rotate Azure OpenAI API key and update Saathi blob storage connection string.',
-        },
-      },
-    });
-    await prisma.auditEntry.create({
-      data: {
-        action: 'SECRET_INGESTION_APPROVED',
-        performerId: 'platform-admin-uuid-4444',
-        performerName: 'Neha_Sharma',
-        details: {
-          keys: ['metabase-db-password', 'metabase-encryption-key'],
-          vault: 'bachatt-sim-kv-analytics',
-          prNumber: 108,
-        },
-      },
-    });
-    console.log('Seeded Azure Key Vault audit log entries');
-  }
+  // ── Seed Audit Log Entries ──
+  console.log('Seeding Audit Log entries...');
+  const auditEntries = [
+    {
+      action: 'GROUP_CREATED',
+      performerId: 'super-admin-uuid-1111',
+      performerName: 'Mayank_Aggarwal',
+      details: { groupName: 'AWS Data Engineering', platform: 'aws' },
+    },
+    {
+      action: 'ACCESS_REQUEST_APPROVED',
+      performerId: 'super-admin-uuid-1111',
+      performerName: 'Mayank_Aggarwal',
+      details: { requesterName: 'Yogesh_Verma', groupName: 'Growth', duration: 'PERMANENT' },
+    },
+    {
+      action: 'SECRET_INGESTION_REQUEST_CREATED',
+      performerId: 'regular-user-uuid-3333',
+      performerName: 'Rishit_Goel',
+      details: { keys: ['INVESTMENTS_DB_PASSWORD', 'INVESTMENTS_REDIS_AUTH'], vault: 'investments-prod-db' },
+    },
+    {
+      action: 'SECRET_INGESTION_APPROVED',
+      performerId: 'platform-admin-uuid-4444',
+      performerName: 'Neha_Sharma',
+      details: { keys: ['metabase-db-password', 'metabase-encryption-key'], vault: 'bachatt-sim-kv-analytics', prNumber: 108 },
+    },
+  ];
 
-  console.log('Seeding completed successfully!');
+  for (const entry of auditEntries) {
+    await prisma.auditEntry.create({ data: entry });
+  }
+  console.log('Seeded Audit Log entries');
+
+  console.log('All Hermes seed data created successfully!');
 }
 
 main()
