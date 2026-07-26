@@ -12,7 +12,7 @@ interface RateLimitConfig {
 
 class SecurityService {
   createRateLimiter(rateLimitConfig: RateLimitConfig) {
-    if (!config.rateLimiting.enabled) {
+    if (!config.rateLimiting.enabled || config.isSimulation) {
       return (req: Request, res: Response, next: NextFunction) => {
         next();
       };
@@ -24,10 +24,6 @@ class SecurityService {
       message: rateLimitConfig.message || 'Too many requests, please try again later.',
       standardHeaders: true,
       legacyHeaders: false,
-      // No custom keyGenerator: express-rate-limit defaults to req.ip, which honours
-      // the app's `trust proxy` setting (see index.ts). Parsing X-Forwarded-For
-      // ourselves let any client spoof the header and rotate their rate-limit key to
-      // bypass the limit entirely.
       handler: (req, res) => {
         logger.warn(
           {
@@ -54,7 +50,7 @@ class SecurityService {
   getGeneralRateLimiter() {
     return this.createRateLimiter({
       windowMs: 15 * 60 * 1000,
-      max: config.isDev ? 1000 : 100,
+      max: (config.isDev || config.isSimulation) ? 5000 : 1000,
     });
   }
 
